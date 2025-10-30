@@ -183,7 +183,7 @@ class Customer(db.Model):
     
     # Contact preferences
     contact_made = db.Column(CONTACT_MADE_ENUM, default='Unknown')
-    preferred_contact_method = db.Column(PREFERRED_CONTACT_ENUM)
+    preferred_contact_method = db.Column(PREFERRED_CONTACT_ENUM, nullable=True)
     marketing_opt_in = db.Column(db.Boolean, default=False)
     
     # Sales information
@@ -207,6 +207,9 @@ class Customer(db.Model):
     proposals = db.relationship('Proposal', back_populates='customer', lazy=True, cascade='all, delete-orphan')
     form_data = db.relationship('CustomerFormData', back_populates='customer', lazy=True, cascade='all, delete-orphan')
     form_submissions = db.relationship('FormSubmission', back_populates='customer', lazy=True)
+    
+    # ADDED: Explicitly define backref for Assignment with passive_deletes
+    assignments = db.relationship('Assignment', backref='customer_rel', lazy=True, passive_deletes='all')
 
     def update_stage_from_opportunity(self):
         """Update customer stage based on their primary opportunity's stage"""
@@ -315,6 +318,9 @@ class Opportunity(db.Model):
     notes_list = db.relationship('OpportunityNote', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
     invoices = db.relationship('Invoice', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
     payments = db.relationship('Payment', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
+    
+    # ADDED: Explicitly define backref for Assignment with passive_deletes
+    assignments = db.relationship('Assignment', backref='opportunity_rel', lazy=True, passive_deletes='all')
 
     def __repr__(self):
         return f'<Opportunity {self.opportunity_reference or self.id}: {self.opportunity_name}>'
@@ -653,8 +659,8 @@ class Assignment(db.Model):
     
     staff_id = db.Column(db.Integer, db.ForeignKey('team_members.id'), nullable=False)
     
-    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id', ondelete='CASCADE')) # MODIFIED: Added ondelete='CASCADE'
+    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id', ondelete='CASCADE')) # MODIFIED: Added ondelete='CASCADE'
     
     start_time = db.Column(db.Time)
     end_time = db.Column(db.Time)
@@ -669,9 +675,15 @@ class Assignment(db.Model):
     updated_by = db.Column(db.String(200))
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    staff = db.relationship('TeamMember', backref='assignments')
-    opportunity = db.relationship('Opportunity', backref='assignments')
-    customer = db.relationship('Customer', backref='assignments')
+    # REMOVED the simple backref:
+    # staff = db.relationship('TeamMember', backref='assignments')
+    # opportunity = db.relationship('Opportunity', backref='assignments')
+    # customer = db.relationship('Customer', backref='assignments')
+    
+    # REPLACED by explicit backrefs in Customer and Opportunity models to prevent lazy loading issues.
+    staff = db.relationship('TeamMember', backref='assignments') 
+    opportunity = db.relationship('Opportunity', backref='opportunity_assignments', viewonly=True)
+    customer = db.relationship('Customer', backref='customer_assignments', viewonly=True)
     
     def __repr__(self):
         return f'<Assignment {self.id}: {self.title} on {self.date}>'

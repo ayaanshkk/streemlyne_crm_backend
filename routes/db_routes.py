@@ -21,6 +21,11 @@ def handle_customers():
     if request.method == 'POST':
         data = request.json
         
+        # Convert empty string to None for enum field
+        preferred_contact = data.get('preferred_contact_method')
+        if preferred_contact == '':
+            preferred_contact = None
+        
         customer = Customer(
             name=data.get('name', ''),
             company_name=data.get('company_name'),
@@ -31,7 +36,7 @@ def handle_customers():
             industry=data.get('industry'),
             company_size=data.get('company_size'),
             contact_made=data.get('contact_made', 'Unknown'),
-            preferred_contact_method=data.get('preferred_contact_method'),
+            preferred_contact_method=preferred_contact,  # Use the converted value
             marketing_opt_in=data.get('marketing_opt_in', False),
             stage=data.get('stage', 'Prospect'),
             salesperson=data.get('salesperson'),
@@ -146,7 +151,13 @@ def handle_single_customer(customer_id):
         customer.industry = data.get('industry', customer.industry)
         customer.company_size = data.get('company_size', customer.company_size)
         customer.contact_made = data.get('contact_made', customer.contact_made)
-        customer.preferred_contact_method = data.get('preferred_contact_method', customer.preferred_contact_method)
+        
+        # Handle preferred_contact_method - convert empty string to None
+        preferred_contact = data.get('preferred_contact_method', customer.preferred_contact_method)
+        if preferred_contact == '':
+            preferred_contact = None
+        customer.preferred_contact_method = preferred_contact
+        
         customer.marketing_opt_in = data.get('marketing_opt_in', customer.marketing_opt_in)
         customer.stage = data.get('stage', customer.stage)
         customer.salesperson = data.get('salesperson', customer.salesperson)

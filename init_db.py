@@ -1,9 +1,17 @@
 # File: /backend/init_db.py
-from config import app, db
-from models import Customer, Job, CustomerFormData
+
+# Assuming your main Flask app instance is in 'app.py'
+from app import app 
+from database import db 
+from models import Customer, Opportunity, CustomerFormData # Corrected 'Job' to 'Opportunity'
 
 def init_database():
     """Initialize the database with all tables"""
+    
+    # Check if the database has been initialized with the app yet
+    if not app.extensions.get('sqlalchemy'):
+        db.init_app(app)
+
     with app.app_context():
         try:
             # Create all tables
@@ -25,6 +33,7 @@ def init_database():
                 
         except Exception as e:
             print(f"Error initializing database: {e}")
+            # Ensure rollback is called on the session
             db.session.rollback()
 
 if __name__ == "__main__":
