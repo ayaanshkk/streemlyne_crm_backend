@@ -718,3 +718,4 @@ class Assignment(db.Model):
             'opportunity_reference': self.opportunity.opportunity_reference if self.opportunity else None,
             'customer_name': self.customer.name if self.customer else None,
         }
+    

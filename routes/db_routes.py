@@ -53,8 +53,12 @@ def handle_customers():
             'message': 'Customer created successfully'
         }), 201
     
-    # GET all customers
-    customers = Customer.query.order_by(Customer.created_at.desc()).all()
+    # GET all customers or filter by name
+    name_query = request.args.get('name', type=str)
+    if name_query:
+        customers = Customer.query.filter(Customer.name.ilike(f"%{name_query}%")).all()
+    else:
+        customers = Customer.query.order_by(Customer.created_at.desc()).all()
     return jsonify([
         {
             'id': c.id,
