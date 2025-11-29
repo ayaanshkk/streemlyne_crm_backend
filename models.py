@@ -2,9 +2,10 @@
 # Universal sales pipeline and customer relationship management
 # Suitable for any B2B business (SaaS, consulting, services, manufacturing, etc.)
 
+import json
 import uuid
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from database import db  # Import SQLAlchemy instance
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -34,6 +35,7 @@ PAYMENT_METHOD_ENUM = db.Enum('Bank Transfer', 'Cash', 'Card', 'Check', 'Other',
 AUDIT_ACTION_ENUM = db.Enum('create', 'update', 'delete', name='audit_action_enum')
 
 ASSIGNMENT_TYPE_ENUM = db.Enum('meeting', 'call', 'task', 'delivery', 'note', name='assignment_type_enum')
+
 
 # ----------------------------------
 # Auth & Security
@@ -718,3 +720,79 @@ class Assignment(db.Model):
             'opportunity_reference': self.opportunity.opportunity_reference if self.opportunity else None,
             'customer_name': self.customer.name if self.customer else None,
         }
+    
+
+
+
+#--------------
+# JOB 
+#--------------
+
+def generate_job_reference():
+    return "JOB-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+
+class Job(db.Model):
+    __tablename__ = "jobs"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_reference = db.Column(db.String(50), unique=True, nullable=False, default=generate_job_reference)
+
+    # Core job info
+    title = db.Column(db.String(255), nullable=False, default="New Job")
+    job_type = db.Column(db.String(100), default="General")
+    description = db.Column(db.Text)           # long description
+    requirements = db.Column(db.Text)          # what needs to be done
+    tags = db.Column(db.String(255))           # comma-separated tags
+
+    # pipeline / status
+    stage = db.Column(db.String(50), default="Prospect")
+    priority = db.Column(db.String(20), default="Medium")
+
+    # Linked customer
+    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+    customer = db.relationship("Customer", backref="jobs")
+
+    # Dates
+    start_date = db.Column(db.Date)            # optional
+    due_date = db.Column(db.Date)
+    completion_date = db.Column(db.Date)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Financials
+    estimated_value = db.Column(db.Numeric(10,2))
+    agreed_value = db.Column(db.Numeric(10,2))
+    deposit_amount = db.Column(db.Numeric(10,2))
+    deposit_due_date = db.Column(db.Date)
+
+    # Location & contacts
+    location = db.Column(db.String(255))
+    primary_contact = db.Column(db.String(255))  # name of main contact
+
+    # Team / Assignment
+    account_manager = db.Column(db.String(100))
+    team_members_json = db.Column(db.Text)   # JSON list of team members; keep text for sqlite compatibility
+
+    # Links
+    quote_id = db.Column(db.String(36))
+
+    # Notes
+    notes = db.Column(db.Text)
+
+    def __repr__(self):
+        return f"<Job {self.job_reference}: {self.title}>"
+
+    # convenience property to read/write team members
+    @property
+    def team_members(self):
+        try:
+            return json.loads(self.team_members_json) if self.team_members_json else []
+        except Exception:
+            return []
+
+    @team_members.setter
+    def team_members(self, value):
+        try:
+            self.team_members_json = json.dumps(value or [])
+        except Exception:
+            self.team_members_json = "[]"

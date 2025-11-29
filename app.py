@@ -7,6 +7,9 @@ import os
 from database import db, init_db
 
 
+
+
+
 def create_app():
     app = Flask(__name__)
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
@@ -35,13 +38,13 @@ def create_app():
     migrate = Migrate(app, db)
     
     # Import and register blueprints (after app is created)
-    # from routes.job_routes import job_bp
+    from routes.job_routes import job_bp
     from routes.core_routes import core_bp
     from routes.db_routes import db_bp
     from routes.auth_routes import auth_bp
     from routes.form_routes import form_bp
     
-    # app.register_blueprint(job_bp)
+    app.register_blueprint(job_bp)
     app.register_blueprint(core_bp)
     app.register_blueprint(db_bp)
     app.register_blueprint(auth_bp)

@@ -50,11 +50,35 @@ def handle_customers():
         
         return jsonify({
             'id': customer.id,
+            'name': customer.name,
+            'company_name': customer.company_name,
+            'address': customer.address,
+            'postcode': customer.postcode,
+            'phone': customer.phone,
+            'email': customer.email,
+            'industry': customer.industry,
+            'company_size': customer.company_size,
+            'contact_made': customer.contact_made,
+            'preferred_contact_method': customer.preferred_contact_method,
+            'marketing_opt_in': customer.marketing_opt_in,
+            'stage': customer.stage,
+            'salesperson': customer.salesperson,
+            'notes': customer.notes,
+            'status': customer.status,
+            'created_at': customer.created_at.isoformat() if customer.created_at else None,
+            'updated_at': customer.updated_at.isoformat() if customer.updated_at else None,
+            'created_by': customer.created_by,
+            'updated_by': customer.updated_by,
             'message': 'Customer created successfully'
         }), 201
+
     
-    # GET all customers
-    customers = Customer.query.order_by(Customer.created_at.desc()).all()
+    # GET all customers or filter by name
+    name_query = request.args.get('name', type=str)
+    if name_query:
+        customers = Customer.query.filter(Customer.name.ilike(f"%{name_query}%")).all()
+    else:
+        customers = Customer.query.order_by(Customer.created_at.desc()).all()
     return jsonify([
         {
             'id': c.id,
