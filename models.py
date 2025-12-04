@@ -753,7 +753,7 @@ class Job(db.Model):
     customer = db.relationship("Customer", backref="jobs")
 
     # Dates
-    start_date = db.Column(db.Date)            # optional
+    start_date = db.Column(db.Date, default=lambda: datetime.utcnow().date())
     due_date = db.Column(db.Date)
     completion_date = db.Column(db.Date)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -770,7 +770,7 @@ class Job(db.Model):
     primary_contact = db.Column(db.String(255))  # name of main contact
 
     # Team / Assignment
-    account_manager = db.Column(db.String(100))
+   # account_manager = db.Column(db.String(100))
     team_members_json = db.Column(db.Text)   # JSON list of team members; keep text for sqlite compatibility
 
     # Links

@@ -48,9 +48,28 @@ def create_job():
     if not customer:
         return jsonify({"error": "Invalid customer_id"}), 400
 
+    # --- Dates ---
     due_date = parse_iso_date_safe(data.get("due_date"))
-    start_date = parse_iso_date_safe(data.get("start_date"))
     completion_date = parse_iso_date_safe(data.get("completion_date"))
+    deposit_due_date = parse_iso_date_safe(data.get("deposit_due_date"))
+
+    start_date = parse_iso_date_safe(data.get("start_date"))
+    if not start_date:
+        start_date = datetime.utcnow().date()
+
+
+    # --- Financials: sanitize ---
+    estimated_value = data.get("estimated_value")
+    agreed_value = data.get("agreed_value")
+    deposit_amount = data.get("deposit_amount")
+
+    # if NLP accidentally extracts numbers, ignore unless explicitly set
+    if "estimated_value" not in data:
+        estimated_value = None
+    if "agreed_value" not in data:
+        agreed_value = None
+    if "deposit_amount" not in data:
+        deposit_amount = None
 
     job = Job(
         job_reference = data.get("job_reference") or generate_job_reference(),
@@ -59,27 +78,31 @@ def create_job():
         stage = data.get("stage") or "Prospect",
         priority = data.get("priority") or "Medium",
         customer_id = customer_id,
-        due_date = due_date,
+
+        # dates
         start_date = start_date,
+        due_date = due_date,
         completion_date = completion_date,
-        estimated_value = data.get("estimated_value"),
-        agreed_value = data.get("agreed_value"),
-        deposit_amount = data.get("deposit_amount"),
-        deposit_due_date = parse_iso_date_safe(data.get("deposit_due_date")),
+        deposit_due_date = deposit_due_date,
+
+        # financials
+        estimated_value = estimated_value,
+        agreed_value = agreed_value,
+        deposit_amount = deposit_amount,
+
+        # other fields
         location = data.get("location"),
         primary_contact = data.get("primary_contact"),
-        account_manager = data.get("account_manager"),
         notes = data.get("notes"),
         tags = data.get("tags"),
         description = data.get("description"),
         requirements = data.get("requirements")
     )
 
-    # accept team_members either as list or comma-separated string
+    # team members
     team_members = data.get("team_members") or data.get("team_member")
     if team_members:
         if isinstance(team_members, str):
-            # split by comma or " and "
             parts = [p.strip() for p in (team_members.replace(" and ", ",").split(",")) if p.strip()]
             job.team_members = parts
         elif isinstance(team_members, list):
@@ -95,6 +118,8 @@ def create_job():
         "stage": job.stage,
         "priority": job.priority,
         "customer_id": job.customer_id,
+        "customer_name": job.customer.name if job.customer else None,
+        "start_date": job.start_date.isoformat() if job.start_date else None,
         "due_date": job.due_date.isoformat() if job.due_date else None,
         "team_members": job.team_members,
         "message": "Job created successfully"
@@ -129,7 +154,7 @@ def get_single_job(job_id):
         "deposit_due_date": job.deposit_due_date.isoformat() if job.deposit_due_date else None,
         "location": job.location,
         "primary_contact": job.primary_contact,
-        "account_manager": job.account_manager,
+      #  "account_manager": job.account_manager,
         "team_members": job.team_members,
         "notes": job.notes,
         "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -151,9 +176,9 @@ def get_jobs():
     # NEW FILTERS (from frontend params)
     stage = request.args.get("stage", type=str)
     priority = request.args.get("priority", type=str)
-    account_manager = request.args.get("account_manager", type=str)
+   # account_manager = request.args.get("account_manager", type=str)
     team_member = request.args.get("team_member", type=str)   # treated as substring match against team_members JSON list
-    team = request.args.get("team", type=str)
+   # team = request.args.get("team", type=str)
     from_date = request.args.get("from_date", type=str)
     to_date = request.args.get("to_date", type=str)
 
@@ -171,15 +196,15 @@ def get_jobs():
     if priority:
         query = query.filter(Job.priority.ilike(f"%{priority}%"))
 
-    # account manager
-    if account_manager:
-        query = query.filter(Job.account_manager.ilike(f"%{account_manager}%"))
+    # # account manager
+    # if account_manager:
+    #     query = query.filter(Job.account_manager.ilike(f"%{account_manager}%"))
 
-    # team filter - stored as text on job, if you have Job.team column use that; otherwise ignore if not present
-    if team:
-        # if Job has 'team' attribute, use it; otherwise ignore
-        if hasattr(Job, "team"):
-            query = query.filter(Job.team.ilike(f"%{team}%"))
+    # # team filter - stored as text on job, if you have Job.team column use that; otherwise ignore if not present
+    # if team:
+    #     # if Job has 'team' attribute, use it; otherwise ignore
+    #     if hasattr(Job, "team"):
+    #         query = query.filter(Job.team.ilike(f"%{team}%"))
 
     # team_member: search inside the JSON text for substring (simple)
     if team_member:
@@ -215,9 +240,9 @@ def get_jobs():
             "agreed_value": float(j.agreed_value) if j.agreed_value else None,
             "deposit_amount": float(j.deposit_amount) if j.deposit_amount else None,
             "location": j.location,
-            "account_manager": j.account_manager,
+         #   "account_manager": j.account_manager,
             "team_members": j.team_members,   # <-- use property (list)
-            "team": getattr(j, "team", None),
+         #   "team": getattr(j, "team", None),
             "primary_contact": j.primary_contact,
             "notes": j.notes,
             "created_at": j.created_at.isoformat() if j.created_at else None,
@@ -245,7 +270,7 @@ def update_job(job_id):
     if "agreed_value" in data: job.agreed_value = data.get("agreed_value")
     if "deposit_amount" in data: job.deposit_amount = data.get("deposit_amount")
     if "location" in data: job.location = data.get("location")
-    if "account_manager" in data: job.account_manager = data.get("account_manager")
+  #  if "account_manager" in data: job.account_manager = data.get("account_manager")
     if "primary_contact" in data: job.primary_contact = data.get("primary_contact")
     if "notes" in data: job.notes = data.get("notes")
     if "tags" in data: job.tags = data.get("tags")
@@ -284,7 +309,29 @@ def update_job(job_id):
 
     db.session.commit()
 
-    return jsonify({"message": "Job updated successfully"}), 200
+    return jsonify({
+        "id": job.id,
+        "job_reference": job.job_reference,
+        "title": job.title,
+        "stage": job.stage,
+        "priority": job.priority,
+        "job_type": job.job_type,
+        "customer_id": job.customer_id,
+        "customer_name": job.customer.name if job.customer else None,
+        "start_date": job.start_date.isoformat() if job.start_date else None,
+        "due_date": job.due_date.isoformat() if job.due_date else None,
+        "completion_date": job.completion_date.isoformat() if job.completion_date else None,
+        "estimated_value": float(job.estimated_value) if job.estimated_value else None,
+        "agreed_value": float(job.agreed_value) if job.agreed_value else None,
+        "deposit_amount": float(job.deposit_amount) if job.deposit_amount else None,
+        "deposit_due_date": job.deposit_due_date.isoformat() if job.deposit_due_date else None,
+        "location": job.location,
+        "primary_contact": job.primary_contact,
+        "team_members": job.team_members,
+        "notes": job.notes,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None
+    }), 200
 
 
 # ----------------------------
