@@ -753,7 +753,7 @@ class Job(db.Model):
     customer = db.relationship("Customer", backref="jobs")
 
     # Dates
-    start_date = db.Column(db.Date, default=lambda: datetime.utcnow().date())
+    start_date = db.Column(db.Date, nullable=True)
     due_date = db.Column(db.Date)
     completion_date = db.Column(db.Date)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
