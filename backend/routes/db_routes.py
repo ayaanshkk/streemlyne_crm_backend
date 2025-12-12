@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify
+# routes/db_routes.py
+from flask import Blueprint, request, jsonify, g
 from database import db
 from models import (
     Customer, Opportunity, Activity, OpportunityNote, OpportunityDocument,
@@ -6,6 +7,7 @@ from models import (
     Invoice, InvoiceLineItem, Payment, Team, TeamMember, 
     Salesperson, FormSubmission, CustomerFormData, AuditLog, Assignment
 )
+from tenant_middleware import require_tenant  # ADD THIS IMPORT
 import json
 from datetime import datetime
 
@@ -13,200 +15,17 @@ from datetime import datetime
 db_bp = Blueprint('database', __name__)
 
 # ----------------------------------
-# Customer Routes
-# ----------------------------------
-
-@db_bp.route('/customers', methods=['GET', 'POST'])
-def handle_customers():
-    if request.method == 'POST':
-        data = request.json
-        
-        # Convert empty string to None for enum field
-        preferred_contact = data.get('preferred_contact_method')
-        if preferred_contact == '':
-            preferred_contact = None
-        
-        customer = Customer(
-            name=data.get('name', ''),
-            company_name=data.get('company_name'),
-            address=data.get('address'),
-            postcode=data.get('postcode'),
-            phone=data.get('phone'),
-            email=data.get('email'),
-            industry=data.get('industry'),
-            company_size=data.get('company_size'),
-            contact_made=data.get('contact_made', 'Unknown'),
-            preferred_contact_method=preferred_contact,  # Use the converted value
-            marketing_opt_in=data.get('marketing_opt_in', False),
-            stage=data.get('stage', 'Prospect'),
-            salesperson=data.get('salesperson'),
-            notes=data.get('notes'),
-            created_by=data.get('created_by', 'System'),
-            status=data.get('status', 'active'),
-        )
-        
-        db.session.add(customer)
-        db.session.commit()
-        
-        return jsonify({
-            'id': customer.id,
-            'name': customer.name,
-            'company_name': customer.company_name,
-            'address': customer.address,
-            'postcode': customer.postcode,
-            'phone': customer.phone,
-            'email': customer.email,
-            'industry': customer.industry,
-            'company_size': customer.company_size,
-            'contact_made': customer.contact_made,
-            'preferred_contact_method': customer.preferred_contact_method,
-            'marketing_opt_in': customer.marketing_opt_in,
-            'stage': customer.stage,
-            'salesperson': customer.salesperson,
-            'notes': customer.notes,
-            'status': customer.status,
-            'created_at': customer.created_at.isoformat() if customer.created_at else None,
-            'updated_at': customer.updated_at.isoformat() if customer.updated_at else None,
-            'created_by': customer.created_by,
-            'updated_by': customer.updated_by,
-            'message': 'Customer created successfully'
-        }), 201
-
-    
-    # GET all customers or filter by name
-    name_query = request.args.get('name', type=str)
-    if name_query:
-        customers = Customer.query.filter(Customer.name.ilike(f"%{name_query}%")).all()
-    else:
-        customers = Customer.query.order_by(Customer.created_at.desc()).all()
-    return jsonify([
-        {
-            'id': c.id,
-            'name': c.name,
-            'company_name': c.company_name,
-            'address': c.address,
-            'postcode': c.postcode,
-            'phone': c.phone,
-            'email': c.email,
-            'industry': c.industry,
-            'company_size': c.company_size,
-            'contact_made': c.contact_made,
-            'preferred_contact_method': c.preferred_contact_method,
-            'marketing_opt_in': c.marketing_opt_in,
-            'stage': c.stage,
-            'salesperson': c.salesperson,
-            'notes': c.notes,
-            'status': c.status,
-            'created_at': c.created_at.isoformat() if c.created_at else None,
-            'updated_at': c.updated_at.isoformat() if c.updated_at else None,
-            'created_by': c.created_by,
-            'updated_by': c.updated_by,
-        }
-        for c in customers
-    ])
-
-@db_bp.route('/customers/<string:customer_id>', methods=['GET', 'PUT', 'DELETE'])
-def handle_single_customer(customer_id):
-    customer = Customer.query.get_or_404(customer_id)
-    
-    if request.method == 'GET':
-        # Fetch form submissions
-        form_entries = CustomerFormData.query.filter_by(customer_id=customer.id).order_by(CustomerFormData.submitted_at.desc()).all()
-        
-        form_submissions = []
-        for f in form_entries:
-            try:
-                parsed = json.loads(f.form_data)
-            except Exception:
-                parsed = {"raw": f.form_data}
-            
-            form_submissions.append({
-                "id": f.id,
-                "token_used": f.token_used,
-                "submitted_at": f.submitted_at.isoformat() if f.submitted_at else None,
-                "form_data": parsed,
-                "source": "web_form"
-            })
-
-        return jsonify({
-            'id': customer.id,
-            'name': customer.name,
-            'company_name': customer.company_name,
-            'address': customer.address,
-            'postcode': customer.postcode,
-            'phone': customer.phone,
-            'email': customer.email,
-            'industry': customer.industry,
-            'company_size': customer.company_size,
-            'contact_made': customer.contact_made,
-            'preferred_contact_method': customer.preferred_contact_method,
-            'marketing_opt_in': customer.marketing_opt_in,
-            'stage': customer.stage,
-            'salesperson': customer.salesperson,
-            'notes': customer.notes,
-            'status': customer.status,
-            'created_at': customer.created_at.isoformat() if customer.created_at else None,
-            'updated_at': customer.updated_at.isoformat() if customer.updated_at else None,
-            'created_by': customer.created_by,
-            'updated_by': customer.updated_by,
-            'form_submissions': form_submissions,
-            'opportunities': [
-                {
-                    'id': o.id,
-                    'opportunity_name': o.opportunity_name,
-                    'opportunity_reference': o.opportunity_reference,
-                    'stage': o.stage,
-                    'estimated_value': float(o.estimated_value) if o.estimated_value else None,
-                    'probability': o.probability,
-                    'expected_close_date': o.expected_close_date.isoformat() if o.expected_close_date else None,
-                }
-                for o in customer.opportunities
-            ]
-        })
-    
-    elif request.method == 'PUT':
-        data = request.json
-        customer.name = data.get('name', customer.name)
-        customer.company_name = data.get('company_name', customer.company_name)
-        customer.address = data.get('address', customer.address)
-        customer.postcode = data.get('postcode', customer.postcode)
-        customer.phone = data.get('phone', customer.phone)
-        customer.email = data.get('email', customer.email)
-        customer.industry = data.get('industry', customer.industry)
-        customer.company_size = data.get('company_size', customer.company_size)
-        customer.contact_made = data.get('contact_made', customer.contact_made)
-        
-        # Handle preferred_contact_method - convert empty string to None
-        preferred_contact = data.get('preferred_contact_method', customer.preferred_contact_method)
-        if preferred_contact == '':
-            preferred_contact = None
-        customer.preferred_contact_method = preferred_contact
-        
-        customer.marketing_opt_in = data.get('marketing_opt_in', customer.marketing_opt_in)
-        customer.stage = data.get('stage', customer.stage)
-        customer.salesperson = data.get('salesperson', customer.salesperson)
-        customer.notes = data.get('notes', customer.notes)
-        customer.status = data.get('status', customer.status)
-        customer.updated_by = data.get('updated_by', 'System')
-        
-        db.session.commit()
-        return jsonify({'message': 'Customer updated successfully'})
-    
-    elif request.method == 'DELETE':
-        db.session.delete(customer)
-        db.session.commit()
-        return jsonify({'message': 'Customer deleted successfully'})
-
-# ----------------------------------
 # Opportunity Routes
 # ----------------------------------
 
 @db_bp.route('/opportunities', methods=['GET', 'POST'])
+@require_tenant  # ADD THIS
 def handle_opportunities():
     if request.method == 'POST':
         data = request.json
         
         opportunity = Opportunity(
+            tenant_id=g.tenant_id,  # ADD THIS - CRITICAL!
             customer_id=data['customer_id'],
             opportunity_name=data.get('opportunity_name'),
             opportunity_reference=data.get('opportunity_reference'),
@@ -227,12 +46,14 @@ def handle_opportunities():
             'message': 'Opportunity created successfully'
         }), 201
     
-    # GET opportunities (optionally filtered by customer)
+    # GET opportunities (filtered by tenant)
     customer_id = request.args.get('customer_id')
+    query = Opportunity.query.filter_by(tenant_id=g.tenant_id)  # ADD TENANT FILTER
+    
     if customer_id:
-        opportunities = Opportunity.query.filter_by(customer_id=customer_id).order_by(Opportunity.created_at.desc()).all()
-    else:
-        opportunities = Opportunity.query.order_by(Opportunity.created_at.desc()).all()
+        query = query.filter_by(customer_id=customer_id)
+    
+    opportunities = query.order_by(Opportunity.created_at.desc()).all()
     
     return jsonify([
         {
@@ -256,8 +77,16 @@ def handle_opportunities():
     ])
 
 @db_bp.route('/opportunities/<string:opportunity_id>', methods=['GET', 'PUT', 'DELETE'])
+@require_tenant  # ADD THIS
 def handle_single_opportunity(opportunity_id):
-    opportunity = Opportunity.query.get_or_404(opportunity_id)
+    # ADD TENANT FILTER - CRITICAL FOR SECURITY!
+    opportunity = Opportunity.query.filter_by(
+        id=opportunity_id,
+        tenant_id=g.tenant_id
+    ).first()
+    
+    if not opportunity:
+        return jsonify({'error': 'Opportunity not found'}), 404
     
     if request.method == 'GET':
         return jsonify({
@@ -307,10 +136,12 @@ def handle_single_opportunity(opportunity_id):
 # ----------------------------------
 
 @db_bp.route('/proposals', methods=['GET', 'POST'])
+@require_tenant  # ADD THIS
 def handle_proposals():
     if request.method == 'POST':
         data = request.json
         proposal = Proposal(
+            tenant_id=g.tenant_id,  # ADD THIS
             customer_id=data['customer_id'],
             reference_number=data.get('reference_number'),
             title=data.get('title'),
@@ -324,6 +155,7 @@ def handle_proposals():
 
         for item in data.get('items', []):
             p_item = ProposalItem(
+                tenant_id=g.tenant_id,  # ADD THIS
                 proposal_id=proposal.id,
                 product_id=item.get('product_id'),
                 description=item['description'],
@@ -337,10 +169,12 @@ def handle_proposals():
         return jsonify({'id': proposal.id, 'message': 'Proposal created successfully'}), 201
 
     customer_id = request.args.get('customer_id', type=str)
+    query = Proposal.query.filter_by(tenant_id=g.tenant_id)  # ADD TENANT FILTER
+    
     if customer_id:
-        proposals = Proposal.query.filter_by(customer_id=customer_id).all()
-    else:
-        proposals = Proposal.query.all()
+        query = query.filter_by(customer_id=customer_id)
+    
+    proposals = query.all()
         
     return jsonify([
         {
@@ -371,11 +205,13 @@ def handle_proposals():
 # ----------------------------------
 
 @db_bp.route('/invoices', methods=['GET', 'POST'])
+@require_tenant  # ADD THIS
 def handle_invoices():
     if request.method == 'POST':
         data = request.json
         
         invoice = Invoice(
+            tenant_id=g.tenant_id,  # ADD THIS
             opportunity_id=data['opportunity_id'],
             invoice_number=data['invoice_number'],
             status=data.get('status', 'Draft'),
@@ -388,6 +224,7 @@ def handle_invoices():
         # Add line items
         for item in data.get('line_items', []):
             line_item = InvoiceLineItem(
+                tenant_id=g.tenant_id,  # ADD THIS
                 invoice_id=invoice.id,
                 description=item['description'],
                 quantity=item.get('quantity', 1),
@@ -403,12 +240,14 @@ def handle_invoices():
             'message': 'Invoice created successfully'
         }), 201
     
-    # GET invoices
+    # GET invoices (filtered by tenant)
     opportunity_id = request.args.get('opportunity_id')
+    query = Invoice.query.filter_by(tenant_id=g.tenant_id)  # ADD TENANT FILTER
+    
     if opportunity_id:
-        invoices = Invoice.query.filter_by(opportunity_id=opportunity_id).order_by(Invoice.created_at.desc()).all()
-    else:
-        invoices = Invoice.query.order_by(Invoice.created_at.desc()).all()
+        query = query.filter_by(opportunity_id=opportunity_id)
+    
+    invoices = query.order_by(Invoice.created_at.desc()).all()
     
     return jsonify([
         {
@@ -430,10 +269,12 @@ def handle_invoices():
 # ----------------------------------
 
 @db_bp.route('/teams', methods=['GET', 'POST'])
+@require_tenant  # ADD THIS
 def handle_teams():
     if request.method == 'POST':
         data = request.json
         team = Team(
+            tenant_id=g.tenant_id,  # ADD THIS
             name=data['name'],
             specialty=data.get('specialty'),
             active=data.get('active', True)
@@ -445,7 +286,7 @@ def handle_teams():
             'message': 'Team created successfully'
         }), 201
     
-    teams = Team.query.filter_by(active=True).all()
+    teams = Team.query.filter_by(tenant_id=g.tenant_id, active=True).all()  # ADD TENANT FILTER
     return jsonify([
         {
             'id': t.id,
@@ -458,10 +299,12 @@ def handle_teams():
     ])
 
 @db_bp.route('/salespeople', methods=['GET', 'POST'])
+@require_tenant  # ADD THIS
 def handle_salespeople():
     if request.method == 'POST':
         data = request.json
         salesperson = Salesperson(
+            tenant_id=g.tenant_id,  # ADD THIS
             name=data['name'],
             email=data.get('email'),
             phone=data.get('phone'),
@@ -474,7 +317,7 @@ def handle_salespeople():
             'message': 'Salesperson created successfully'
         }), 201
     
-    salespeople = Salesperson.query.filter_by(active=True).all()
+    salespeople = Salesperson.query.filter_by(tenant_id=g.tenant_id, active=True).all()  # ADD TENANT FILTER
     return jsonify([
         {
             'id': s.id,
@@ -492,6 +335,7 @@ def handle_salespeople():
 # ----------------------------------
 
 @db_bp.route('/jobs', methods=['GET', 'POST'])
+@require_tenant  # ADD THIS
 def handle_jobs():
     """Jobs are mapped to Opportunities in the backend"""
     if request.method == 'POST':
@@ -505,6 +349,7 @@ def handle_jobs():
         
         # Create new opportunity (job)
         opportunity = Opportunity(
+            tenant_id=g.tenant_id,  # ADD THIS
             customer_id=data['customer_id'],
             opportunity_name=data['job_name'],
             opportunity_reference=data.get('job_reference'),
@@ -549,12 +394,14 @@ def handle_jobs():
             'updated_at': opportunity.updated_at.isoformat() if opportunity.updated_at else None,
         }), 201
     
-    # GET jobs (mapped to opportunities)
+    # GET jobs (mapped to opportunities, filtered by tenant)
     customer_id = request.args.get('customer_id')
+    query = Opportunity.query.filter_by(tenant_id=g.tenant_id)  # ADD TENANT FILTER
+    
     if customer_id:
-        opportunities = Opportunity.query.filter_by(customer_id=customer_id).order_by(Opportunity.created_at.desc()).all()
-    else:
-        opportunities = Opportunity.query.order_by(Opportunity.created_at.desc()).all()
+        query = query.filter_by(customer_id=customer_id)
+    
+    opportunities = query.order_by(Opportunity.created_at.desc()).all()
     
     return jsonify([
         {
@@ -581,9 +428,17 @@ def handle_jobs():
 
 
 @db_bp.route('/jobs/<string:job_id>', methods=['GET', 'PUT', 'DELETE'])
+@require_tenant  # ADD THIS
 def handle_single_job(job_id):
     """Single job endpoint (mapped to opportunity)"""
-    opportunity = Opportunity.query.get_or_404(job_id)
+    # ADD TENANT FILTER
+    opportunity = Opportunity.query.filter_by(
+        id=job_id,
+        tenant_id=g.tenant_id
+    ).first()
+    
+    if not opportunity:
+        return jsonify({'error': 'Job not found'}), 404
     
     if request.method == 'GET':
         job_data = {
@@ -673,12 +528,14 @@ def handle_single_job(job_id):
 # ----------------------------------
 
 @db_bp.route('/pipeline', methods=['GET'])
+@require_tenant  # ADD THIS
 def get_pipeline_data():
     """
     Returns combined customer/opportunity data for pipeline view
     """
-    customers = Customer.query.all()
-    opportunities = Opportunity.query.all()
+    # FILTER BY TENANT
+    customers = Customer.query.filter_by(tenant_id=g.tenant_id).all()
+    opportunities = Opportunity.query.filter_by(tenant_id=g.tenant_id).all()
     
     # Map opportunities by customer
     opps_by_customer = {}
@@ -759,55 +616,26 @@ def get_pipeline_data():
 # ----------------------------------
 # Stage Update Routes (CRITICAL FOR DRAG & DROP)
 # ----------------------------------
-
-@db_bp.route('/customers/<string:customer_id>/stage', methods=['PATCH', 'OPTIONS'])
-def update_customer_stage(customer_id):
-    """Update customer stage via drag and drop"""
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-    
-    customer = Customer.query.get_or_404(customer_id)
-    data = request.json
-    
-    new_stage = data.get('stage')
-    reason = data.get('reason', 'Stage updated via drag and drop')
-    updated_by = data.get('updated_by', 'System')
-    
-    if not new_stage:
-        return jsonify({'error': 'Stage is required'}), 400
-    
-    old_stage = customer.stage
-    customer.stage = new_stage
-    customer.updated_by = updated_by
-    customer.updated_at = datetime.utcnow()
-    
-    # Add audit note
-    note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage}. Reason: {reason}"
-    customer.notes = (customer.notes or '') + note_entry
-    
-    db.session.commit()
-    
-    return jsonify({
-        'message': 'Stage updated successfully',
-        'customer_id': customer.id,
-        'old_stage': old_stage,
-        'new_stage': new_stage,
-        'stage_updated': True
-    }), 200
-
-
 @db_bp.route('/opportunities/<string:opportunity_id>/stage', methods=['PATCH', 'OPTIONS'])
+@require_tenant  # ADD THIS
 def update_opportunity_stage(opportunity_id):
     """Update opportunity stage via drag and drop"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
-    opportunity = Opportunity.query.get_or_404(opportunity_id)
+    # ADD TENANT FILTER
+    opportunity = Opportunity.query.filter_by(
+        id=opportunity_id,
+        tenant_id=g.tenant_id
+    ).first()
+    
+    if not opportunity:
+        return jsonify({'error': 'Opportunity not found'}), 404
+    
     data = request.json
     
     new_stage = data.get('stage')
     reason = data.get('reason', 'Stage updated via drag and drop')
-    updated_by = data.get('updated_by', 'System')
     
     if not new_stage:
         return jsonify({'error': 'Stage is required'}), 400

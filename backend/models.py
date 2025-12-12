@@ -6,7 +6,8 @@ import json
 import uuid
 import secrets
 from datetime import datetime, timedelta, date
-
+import random
+import string
 from database import db  # Import SQLAlchemy instance
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -45,6 +46,7 @@ class User(db.Model):
     __tablename__ = 'users'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)  # ADD THIS
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
 
@@ -72,6 +74,8 @@ class User(db.Model):
 
     # Email verification
     verification_token = db.Column(db.String(100))
+
+    tenant = db.relationship('Tenant', back_populates='users')
 
     def __repr__(self):
         return f'<User {self.email}>'
@@ -118,6 +122,7 @@ class User(db.Model):
     def to_dict(self) -> dict:
         return {
             'id': self.id,
+            'tenant_id': self.tenant_id,
             'email': self.email,
             'first_name': self.first_name,
             'last_name': self.last_name,
@@ -136,6 +141,7 @@ class LoginAttempt(db.Model):
     __tablename__ = 'login_attempts'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     email = db.Column(db.String(120), nullable=False, index=True)
     ip_address = db.Column(db.String(45), nullable=False)
     success = db.Column(db.Boolean, default=False)
@@ -149,6 +155,7 @@ class Session(db.Model):
     __tablename__ = 'user_sessions'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     session_token = db.Column(db.String(255), unique=True, nullable=False)
     ip_address = db.Column(db.String(45))
@@ -170,7 +177,9 @@ class Customer(db.Model):
     __tablename__ = 'customers'
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)  # ADD THIS
+    tenant = db.relationship('Tenant', back_populates='customers')  # ADD THIS
+
     # Basic contact information
     name = db.Column(db.String(200), nullable=False)
     company_name = db.Column(db.String(255), nullable=True)
@@ -240,6 +249,7 @@ class Team(db.Model):
     __tablename__ = 'teams'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     name = db.Column(db.String(200), nullable=False)
     specialty = db.Column(db.String(100))
     active = db.Column(db.Boolean, default=True)
@@ -247,11 +257,14 @@ class Team(db.Model):
 
     members = db.relationship('TeamMember', back_populates='team', lazy=True)
 
+    tenant = db.relationship('Tenant')
+
 
 class TeamMember(db.Model):
     __tablename__ = 'team_members'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     name = db.Column(db.String(200), nullable=False)
     team_id = db.Column(db.Integer, db.ForeignKey('teams.id'))
     role = db.Column(db.String(100))
@@ -261,22 +274,28 @@ class TeamMember(db.Model):
 
     team = db.relationship('Team', back_populates='members')
 
+    tenant = db.relationship('Tenant')
+
 
 class Salesperson(db.Model):
     __tablename__ = 'salespeople'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     name = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120))
     phone = db.Column(db.String(20))
     active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    tenant = db.relationship('Tenant')
+
 
 class Opportunity(db.Model):
     __tablename__ = 'opportunities'
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
 
     # Basic opportunity info
@@ -324,6 +343,8 @@ class Opportunity(db.Model):
     # ADDED: Explicitly define backref for Assignment with passive_deletes
     assignments = db.relationship('Assignment', backref='opportunity_rel', lazy=True, passive_deletes='all')
 
+    tenant = db.relationship('Tenant')
+
     def __repr__(self):
         return f'<Opportunity {self.opportunity_reference or self.id}: {self.opportunity_name}>'
 
@@ -336,6 +357,7 @@ class OpportunityDocument(db.Model):
     __tablename__ = 'opportunity_documents'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
     filename = db.Column(db.String(255), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
@@ -348,11 +370,14 @@ class OpportunityDocument(db.Model):
 
     opportunity = db.relationship('Opportunity', back_populates='documents')
 
+    tenant = db.relationship('Tenant')
+
 
 class Activity(db.Model):
     __tablename__ = 'activities'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
     
     activity_type = db.Column(db.String(50), nullable=False)  # meeting, call, email, task
@@ -375,6 +400,7 @@ class OpportunityNote(db.Model):
     __tablename__ = 'opportunity_notes'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
     note_type = db.Column(db.String(50), default='general')
@@ -382,6 +408,8 @@ class OpportunityNote(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     opportunity = db.relationship('Opportunity', back_populates='notes_list')
+
+    tenant = db.relationship('Tenant')
 
 
 # ----------------------------------
@@ -392,12 +420,15 @@ class ProductCategory(db.Model):
     __tablename__ = 'product_categories'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
     description = db.Column(db.Text)
     active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     products = db.relationship('Product', back_populates='category', lazy=True)
+
+    tenant = db.relationship('Tenant')  
 
     def __repr__(self):
         return f'<ProductCategory {self.name}>'
@@ -407,6 +438,7 @@ class Product(db.Model):
     __tablename__ = 'products'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     category_id = db.Column(db.Integer, db.ForeignKey('product_categories.id'), nullable=False)
 
     sku = db.Column(db.String(100), nullable=False, unique=True)
@@ -432,6 +464,8 @@ class Product(db.Model):
     category = db.relationship('ProductCategory', back_populates='products')
     proposal_items = db.relationship('ProposalItem', back_populates='product', lazy=True)
 
+    tenant = db.relationship('Tenant')
+
     def __repr__(self):
         return f'<Product {self.sku}: {self.name}>'
 
@@ -444,6 +478,7 @@ class Proposal(db.Model):
     __tablename__ = 'proposals'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
     reference_number = db.Column(db.String(50), unique=True)
     title = db.Column(db.String(255))
@@ -463,6 +498,7 @@ class ProposalItem(db.Model):
     __tablename__ = 'proposal_items'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     proposal_id = db.Column(db.Integer, db.ForeignKey('proposals.id'), nullable=False)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'))
 
@@ -475,6 +511,8 @@ class ProposalItem(db.Model):
 
     proposal = db.relationship('Proposal', back_populates='items')
     product = db.relationship('Product', back_populates='proposal_items')
+
+    tenant = db.relationship('Tenant')
 
     def calculate_line_total(self):
         self.line_total = (self.unit_price or 0) * (self.quantity or 0)
@@ -489,6 +527,7 @@ class Invoice(db.Model):
     __tablename__ = 'invoices'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
     invoice_number = db.Column(db.String(50), unique=True, nullable=False)
     status = db.Column(db.String(20), default='Draft')  # Draft, Sent, Paid, Overdue, Cancelled
@@ -500,6 +539,8 @@ class Invoice(db.Model):
     opportunity = db.relationship('Opportunity', back_populates='invoices')
     line_items = db.relationship('InvoiceLineItem', back_populates='invoice', lazy=True, cascade='all, delete-orphan')
     payments = db.relationship('Payment', back_populates='invoice', lazy=True)
+
+    tenant = db.relationship('Tenant')
 
     @property
     def amount_due(self):
@@ -519,6 +560,7 @@ class InvoiceLineItem(db.Model):
     __tablename__ = 'invoice_line_items'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'), nullable=False)
     description = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Integer, default=1)
@@ -532,6 +574,7 @@ class Payment(db.Model):
     __tablename__ = 'payments'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'))
 
@@ -547,6 +590,8 @@ class Payment(db.Model):
     opportunity = db.relationship('Opportunity', back_populates='payments')
     invoice = db.relationship('Invoice', back_populates='payments')
 
+    tenant = db.relationship('Tenant')
+
 
 # ----------------------------------
 # Templates Library
@@ -556,12 +601,15 @@ class DocumentTemplate(db.Model):
     __tablename__ = 'document_templates'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     name = db.Column(db.String(120), nullable=False)
     template_type = db.Column(DOCUMENT_TEMPLATE_TYPE_ENUM, nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
     merge_fields = db.Column(db.JSON)
     uploaded_by = db.Column(db.String(200))
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    tenant = db.relationship('Tenant')
 
 
 # ----------------------------------
@@ -572,6 +620,7 @@ class AuditLog(db.Model):
     __tablename__ = 'audit_logs'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     entity_type = db.Column(db.String(120), nullable=False)
     entity_id = db.Column(db.String(120), nullable=False)
     action = db.Column(AUDIT_ACTION_ENUM, nullable=False)
@@ -586,6 +635,7 @@ class VersionedSnapshot(db.Model):
     __tablename__ = 'versioned_snapshots'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     entity_type = db.Column(db.String(120), nullable=False)
     entity_id = db.Column(db.String(120), nullable=False)
     version_number = db.Column(db.Integer, nullable=False)
@@ -603,6 +653,7 @@ class FormSubmission(db.Model):
     __tablename__ = 'form_submissions'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
     form_data = db.Column(db.Text, nullable=False)
     source = db.Column(db.String(100))
@@ -617,12 +668,15 @@ class CustomerFormData(db.Model):
     __tablename__ = 'customer_form_data'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
     form_data = db.Column(db.Text, nullable=False)
     token_used = db.Column(db.String(64), nullable=False)
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     customer = db.relationship('Customer', back_populates='form_data')
+
+    tenant = db.relationship('Tenant')
 
     def __repr__(self):
         return f'<CustomerFormData {self.id} for Customer {self.customer_id}>'
@@ -632,6 +686,7 @@ class DataImport(db.Model):
     __tablename__ = 'data_imports'
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     filename = db.Column(db.String(255), nullable=False)
     import_type = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default='processing')
@@ -654,6 +709,7 @@ class Assignment(db.Model):
     __tablename__ = 'assignments'
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     
     type = db.Column(ASSIGNMENT_TYPE_ENUM, nullable=False, default='task')
     title = db.Column(db.String(255), nullable=False)
@@ -676,16 +732,13 @@ class Assignment(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_by = db.Column(db.String(200))
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # REMOVED the simple backref:
-    # staff = db.relationship('TeamMember', backref='assignments')
-    # opportunity = db.relationship('Opportunity', backref='assignments')
-    # customer = db.relationship('Customer', backref='assignments')
-    
+        
     # REPLACED by explicit backrefs in Customer and Opportunity models to prevent lazy loading issues.
     staff = db.relationship('TeamMember', backref='assignments') 
     opportunity = db.relationship('Opportunity', backref='opportunity_assignments', viewonly=True)
     customer = db.relationship('Customer', backref='customer_assignments', viewonly=True)
+
+    tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<Assignment {self.id}: {self.title} on {self.date}>'
@@ -721,20 +774,26 @@ class Assignment(db.Model):
             'customer_name': self.customer.name if self.customer else None,
         }
     
-
-
-
 #--------------
 # JOB 
 #--------------
 
 def generate_job_reference():
-    return "JOB-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    """
+    Generate a unique job reference with format: JOB-YYYYMMDD-HHMMSS-XXX
+    Where XXX is a random 3-character alphanumeric suffix for uniqueness
+    """
+    now = datetime.utcnow()
+    date_part = now.strftime("%Y%m%d")
+    time_part = now.strftime("%H%M%S")
+    random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
+    return f"JOB-{date_part}-{time_part}-{random_suffix}"
 
 class Job(db.Model):
     __tablename__ = "jobs"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     job_reference = db.Column(db.String(50), unique=True, nullable=False, default=generate_job_reference)
 
     # Core job info
@@ -753,7 +812,7 @@ class Job(db.Model):
     customer = db.relationship("Customer", backref="jobs")
 
     # Dates
-    start_date = db.Column(db.Date)            # optional
+    start_date = db.Column(db.Date, nullable=True)
     due_date = db.Column(db.Date)
     completion_date = db.Column(db.Date)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -770,7 +829,7 @@ class Job(db.Model):
     primary_contact = db.Column(db.String(255))  # name of main contact
 
     # Team / Assignment
-    account_manager = db.Column(db.String(100))
+   # account_manager = db.Column(db.String(100))
     team_members_json = db.Column(db.Text)   # JSON list of team members; keep text for sqlite compatibility
 
     # Links
@@ -778,6 +837,8 @@ class Job(db.Model):
 
     # Notes
     notes = db.Column(db.Text)
+
+    tenant = db.relationship('Tenant')
 
     def __repr__(self):
         return f"<Job {self.job_reference}: {self.title}>"
@@ -796,3 +857,61 @@ class Job(db.Model):
             self.team_members_json = json.dumps(value or [])
         except Exception:
             self.team_members_json = "[]"
+
+
+# Add to models.py
+
+class Tenant(db.Model):
+    __tablename__ = 'tenants'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    
+    # Company identification
+    company_name = db.Column(db.String(255), nullable=False, unique=True)
+    subdomain = db.Column(db.String(100), unique=True, nullable=False)  # aztec, client2
+    custom_domain = db.Column(db.String(255), unique=True)  # optional: aztec.com
+    
+    # Contact info
+    contact_email = db.Column(db.String(255))
+    contact_phone = db.Column(db.String(50))
+    
+    # Subscription & Features
+    subscription_tier = db.Column(db.String(50), default='basic')  # basic, professional, enterprise
+    features = db.Column(db.JSON)  # Feature flags
+    settings = db.Column(db.JSON)  # Tenant-specific settings
+    
+    # Branding
+    logo_url = db.Column(db.String(500))
+    primary_color = db.Column(db.String(7))  # hex color
+    
+    # Status
+    is_active = db.Column(db.Boolean, default=True)
+    is_trial = db.Column(db.Boolean, default=False)
+    trial_ends_at = db.Column(db.DateTime)
+    
+    # Audit
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    users = db.relationship('User', back_populates='tenant', lazy=True)
+    customers = db.relationship('Customer', back_populates='tenant', lazy=True)
+    
+    def __repr__(self):
+        return f'<Tenant {self.company_name} ({self.subdomain})>'
+    
+    def has_feature(self, feature_name: str) -> bool:
+        """Check if tenant has access to a feature"""
+        if not self.features:
+            return False
+        return self.features.get(feature_name, False)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'company_name': self.company_name,
+            'subdomain': self.subdomain,
+            'subscription_tier': self.subscription_tier,
+            'is_active': self.is_active,
+            'features': self.features or {}
+        }

@@ -1,7 +1,7 @@
 # routes/auth_routes.py
 from flask import Blueprint, request, jsonify, current_app
 from database import db
-from models import User, LoginAttempt, Session
+from models import User, LoginAttempt, Session, Tenant
 from datetime import datetime, timedelta
 from functools import wraps
 import secrets
@@ -105,7 +105,7 @@ def register():
         data = request.get_json()
         
         # Validate required fields
-        required_fields = ['email', 'password', 'first_name', 'last_name']
+        required_fields = ['email', 'password', 'first_name', 'last_name', 'tenant_id']  # ADD tenant_id
         for field in required_fields:
             if not data.get(field):
                 return jsonify({'error': f'{field} is required'}), 400
@@ -114,6 +114,7 @@ def register():
         password = data['password']
         first_name = data['first_name'].strip()
         last_name = data['last_name'].strip()
+        tenant_id = data['tenant_id']  # NEW
         
         # Validate email format
         if not validate_email(email):
@@ -124,12 +125,20 @@ def register():
         if not is_valid:
             return jsonify({'error': message}), 400
         
-        # Check if user already exists
-        if User.query.filter_by(email=email).first():
-            return jsonify({'error': 'Email already registered'}), 409
+        # NEW: Verify tenant exists and is active
+        tenant = Tenant.query.get(tenant_id)
+        if not tenant:
+            return jsonify({'error': 'Invalid tenant'}), 400
+        if not tenant.is_active:
+            return jsonify({'error': 'Tenant account is inactive'}), 403
+        
+        # Check if user already exists (email unique per tenant)
+        if User.query.filter_by(email=email, tenant_id=tenant_id).first():
+            return jsonify({'error': 'Email already registered for this tenant'}), 409
         
         # Create new user
         user = User(
+            tenant_id=tenant_id,  # NEW: Set tenant_id
             email=email,
             first_name=first_name,
             last_name=last_name,
@@ -149,7 +158,8 @@ def register():
         
         return jsonify({
             'message': 'User registered successfully',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'tenant': tenant.to_dict()  # NEW: Return tenant info
         }), 201
         
     except Exception as e:
@@ -173,7 +183,7 @@ def login():
         if not check_rate_limit(email):
             return jsonify({'error': 'Too many failed login attempts. Try again later.'}), 429
         
-        # Find user
+        # Find user (email is now unique per tenant, but we don't know tenant yet)
         user = User.query.filter_by(email=email).first()
         
         if not user or not user.check_password(password):
@@ -181,17 +191,29 @@ def login():
             return jsonify({'error': 'Invalid email or password'}), 401
         
         if not user.is_active:
+            log_login_attempt(email, ip_address, False)
             return jsonify({'error': 'Account is disabled'}), 401
+        
+        # NEW: Get tenant info and verify it's active
+        tenant = Tenant.query.get(user.tenant_id)
+        if not tenant:
+            log_login_attempt(email, ip_address, False)
+            return jsonify({'error': 'Tenant not found'}), 404
+        
+        if not tenant.is_active:
+            log_login_attempt(email, ip_address, False)
+            return jsonify({'error': 'Tenant account is inactive'}), 403
         
         # Update last login
         user.last_login = datetime.utcnow()
         
-        # Generate JWT token
+        # Generate JWT token (includes user_id which links to tenant)
         token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         
         # Create session record
         session = Session(
             user_id=user.id,
+            tenant_id=user.tenant_id,  # NEW: Add tenant_id to session
             session_token=token,
             ip_address=ip_address,
             user_agent=request.headers.get('User-Agent', ''),
@@ -207,7 +229,8 @@ def login():
         return jsonify({
             'message': 'Login successful',
             'token': token,
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'tenant': tenant.to_dict()  # NEW: Return tenant info to frontend
         }), 200
         
     except Exception as e:
@@ -231,6 +254,55 @@ def logout():
         return jsonify({'message': 'Logged out successfully'}), 200
         
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/auth/me', methods=['GET'])
+@token_required
+def get_current_user():
+    """Get current user information"""
+    try:
+        user = request.current_user
+        
+        # NEW: Also return tenant info
+        tenant = Tenant.query.get(user.tenant_id)
+        
+        return jsonify({
+            'user': user.to_dict(),
+            'tenant': tenant.to_dict() if tenant else None  # NEW
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/auth/refresh', methods=['POST'])
+@token_required
+def refresh_token():
+    """Refresh JWT token"""
+    try:
+        user = request.current_user
+        
+        # NEW: Verify tenant is still active
+        tenant = Tenant.query.get(user.tenant_id)
+        if not tenant or not tenant.is_active:
+            return jsonify({'error': 'Tenant account is inactive'}), 403
+        
+        new_token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
+        
+        # Update session with new token
+        old_token = request.headers.get('Authorization').split(" ")[1]
+        session = Session.query.filter_by(session_token=old_token).first()
+        if session:
+            session.session_token = new_token
+            session.expires_at = datetime.utcnow() + timedelta(days=7)
+            db.session.commit()
+        
+        return jsonify({
+            'token': new_token,
+            'user': user.to_dict(),
+            'tenant': tenant.to_dict()  # NEW
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/me', methods=['GET'])
@@ -379,9 +451,11 @@ def change_password():
 @auth_bp.route('/auth/users', methods=['GET'])
 @admin_required
 def get_users():
-    """Get all users (admin only)"""
+    """Get all users (admin only) - scoped to current user's tenant"""
     try:
-        users = User.query.order_by(User.created_at.desc()).all()
+        # NEW: Filter users by tenant
+        current_user = request.current_user
+        users = User.query.filter_by(tenant_id=current_user.tenant_id).order_by(User.created_at.desc()).all()
         
         return jsonify({
             'users': [user.to_dict() for user in users]
@@ -395,7 +469,10 @@ def get_users():
 def toggle_user_status(user_id):
     """Toggle user active status (admin only)"""
     try:
-        user = User.query.get_or_404(user_id)
+        current_user = request.current_user
+        
+        # NEW: Security check - can only toggle users in same tenant
+        user = User.query.filter_by(id=user_id, tenant_id=current_user.tenant_id).first_or_404()
         
         user.is_active = not user.is_active
         user.updated_at = datetime.utcnow()
@@ -409,4 +486,22 @@ def toggle_user_status(user_id):
         
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+    
+@auth_bp.route('/auth/tenant', methods=['GET'])
+@token_required
+def get_tenant_info():
+    """Get current tenant information"""
+    try:
+        user = request.current_user
+        tenant = Tenant.query.get(user.tenant_id)
+        
+        if not tenant:
+            return jsonify({'error': 'Tenant not found'}), 404
+        
+        return jsonify({
+            'tenant': tenant.to_dict()
+        }), 200
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
