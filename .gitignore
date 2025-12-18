@@ -1,0 +1,8 @@
+﻿node_modules
+database.db
+venv/
+__pycache__/
+*.pyc
+instance/
+.env
+.vscode/
