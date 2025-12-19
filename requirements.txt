@@ -11,3 +11,4 @@ reportlab
 pandas
 openpyxl
 PyJWT
+gunicorn==21.2.0
