@@ -114,7 +114,7 @@ def register():
     }
     """
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         
         # ✅ CRITICAL: Check for tenant_type, NOT tenant_id
         required_fields = ['email', 'password', 'first_name', 'last_name', 'tenant_type']
@@ -240,13 +240,15 @@ def register():
             is_verified=False
         )
         user.set_password(password)
-        user.generate_verification_token()
+        user.generate_verification_token()#
+
+        db.session.add(user)
+        db.session.flush() 
         
         # Link individual tenant to owner user
         if tenant_type == 'individual':
             tenant.owner_user_id = user.id
         
-        db.session.add(user)
         db.session.commit()
         
         # Generate JWT token
@@ -275,8 +277,8 @@ def register():
 def login():
     """Login user"""
     try:
-        data = request.get_json()
-        
+        data = request.get_json(silent=True) or {}
+
         if not data.get('email') or not data.get('password'):
             return jsonify({'error': 'Email and password are required'}), 400
         
@@ -414,7 +416,7 @@ def refresh_token():
 def forgot_password():
     """Request password reset"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         
         if not data.get('email'):
             return jsonify({'error': 'Email is required'}), 400
@@ -443,7 +445,7 @@ def forgot_password():
 def reset_password():
     """Reset password with token"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         
         required_fields = ['token', 'password']
         for field in required_fields:
@@ -485,7 +487,7 @@ def reset_password():
 def change_password():
     """Change password for authenticated user"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         
         required_fields = ['current_password', 'new_password']
         for field in required_fields:
@@ -582,7 +584,7 @@ def check_company():
     Used in frontend to show if user is joining existing company or creating new
     """
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         company_name = data.get('company_name', '').strip()
         
         if not company_name:
