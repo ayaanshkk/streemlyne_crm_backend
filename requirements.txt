@@ -13,3 +13,4 @@ pandas
 openpyxl
 PyJWT
 gunicorn==21.2.0
+Werkzeug>=3.0.0
