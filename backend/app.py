@@ -4,6 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 from flask_migrate import Migrate
 import os
+import re
 from database import db, init_db
 # ----------------------------------------------------
 # New Import: Load environment variables from .env file
@@ -21,24 +22,27 @@ def create_app():
     # Fetches from .env or uses fallback
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-fallback-secret-key')
     
-    # ✅ FIXED: Configure CORS properly with explicit settings
-    CORS(app, resources={
-        r"/*": {
-            "origins": [
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:3001",
-                "http://127.0.0.1:3001",
-                "https://streemlyne-crm-frontend.vercel.app",
-                "https://*.vercel.app"
-            ],
-            "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-            "supports_credentials": True,
-            "expose_headers": ["Content-Type", "Authorization"],
-            "max_age": 3600
-        }
-    })
+    # ✅ FIXED: Configure CORS to allow all Vercel deployments (including preview URLs)
+    def cors_origin_validator(origin):
+        """Allow localhost and all Vercel deployments"""
+        if not origin:
+            return False
+            
+        allowed_patterns = [
+            r'^http://localhost:\d+$',
+            r'^http://127\.0\.0\.1:\d+$',
+            r'^https://.*\.vercel\.app$',  # Matches all Vercel deployments
+        ]
+        return any(re.match(pattern, origin) for pattern in allowed_patterns)
+    
+    CORS(app, 
+         origins=cors_origin_validator,
+         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+         supports_credentials=True,
+         expose_headers=["Content-Type", "Authorization"],
+         max_age=3600
+    )
     
     # Database configuration: SWITCHING TO SUPABASE POSTGRESQL
     # -----------------------------------------------------------
@@ -96,7 +100,7 @@ def create_app():
     app.register_blueprint(chat_bp)
     
     # ✅ ADDED: Print CORS configuration on startup for debugging
-    print("✅ CORS enabled for origins: http://localhost:3000, http://127.0.0.1:3000")
+    print("✅ CORS enabled for: localhost (all ports) and all Vercel deployments (*.vercel.app)")
     print("✅ CORS methods allowed: GET, POST, PUT, PATCH, DELETE, OPTIONS")
     
     return app
