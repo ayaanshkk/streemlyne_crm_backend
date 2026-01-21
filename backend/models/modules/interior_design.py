@@ -1,15 +1,6 @@
 import uuid
-import sys
-import os
-from datetime import datetime
 from datetime import datetime
 from models.core import db
-
-# Add parent directory to path (go up 2 levels: modules/ -> models/ -> backend/)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from database import db
-
 
 # ============================================================
 # PROJECTS (Multiple per Customer)
@@ -80,10 +71,7 @@ class Project(db.Model):
 # ============================================================
 
 class KitchenChecklist(db.Model):
-    """
-    Kitchen installation checklist
-    Tracks appliances, worktops, sinks, taps, and accessories
-    """
+    """Kitchen installation checklist"""
     __tablename__ = 'interior_kitchen_checklists'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -91,12 +79,8 @@ class KitchenChecklist(db.Model):
     project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
     
-    # Appliances (JSON array of appliance objects)
+    # Appliances (JSON array)
     appliances = db.Column(db.JSON)
-    # Example: [
-    #   {"type": "Oven", "make": "Bosch", "model": "HBA5780S0B", "order_date": "2024-01-15"},
-    #   {"type": "Dishwasher", "make": "Siemens", "model": "SN678X36TE", "order_date": "2024-01-15"}
-    # ]
     
     # Worktop Details
     worktop_features = db.Column(db.Text)
@@ -111,13 +95,12 @@ class KitchenChecklist(db.Model):
     
     # Accessories (JSON array)
     accessories = db.Column(db.JSON)
-    # Example: ["Wine Rack", "Plate Rack", "Pull-out Bins", "Drawer Dividers"]
     
     # Floor Protection
     floor_protection = db.Column(db.String(100))
     
     # Approval Status
-    approval_status = db.Column(db.String(50))  # Draft, Approved, Changes Required
+    approval_status = db.Column(db.String(50))
     approved_by = db.Column(db.String(200))
     approved_date = db.Column(db.DateTime)
     
@@ -162,10 +145,7 @@ class KitchenChecklist(db.Model):
 # ============================================================
 
 class BedroomChecklist(db.Model):
-    """
-    Bedroom/Wardrobe installation checklist
-    Tracks wardrobes, mirrors, lights, and accessories
-    """
+    """Bedroom/Wardrobe installation checklist"""
     __tablename__ = 'interior_bedroom_checklists'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -194,13 +174,12 @@ class BedroomChecklist(db.Model):
     
     # Accessories (JSON array)
     accessories = db.Column(db.JSON)
-    # Example: ["Hanging Rails", "Shoe Racks", "Drawer Units", "Tie Racks"]
     
     # Floor Protection
     floor_protection = db.Column(db.String(100))
     
     # Approval Status
-    approval_status = db.Column(db.String(50))  # Draft, Approved, Changes Required
+    approval_status = db.Column(db.String(50))
     approved_by = db.Column(db.String(200))
     approved_date = db.Column(db.DateTime)
     
@@ -248,10 +227,7 @@ class BedroomChecklist(db.Model):
 # ============================================================
 
 class MaterialOrder(db.Model):
-    """
-    Material ordering with supplier tracking
-    Tracks materials from order to delivery
-    """
+    """Material ordering with supplier tracking"""
     __tablename__ = 'interior_material_orders'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -262,14 +238,14 @@ class MaterialOrder(db.Model):
     material_description = db.Column(db.Text, nullable=False)
     quantity_requested = db.Column(db.Numeric(10, 2))
     quantity_ordered = db.Column(db.Numeric(10, 2))
-    unit = db.Column(db.String(50))  # m², sheets, units, etc.
+    unit = db.Column(db.String(50))
     
     # Supplier Information
     supplier_name = db.Column(db.String(255))
     supplier_reference = db.Column(db.String(100))
     
     # Status & Tracking
-    status = db.Column(db.String(50))  # not_ordered, ordered, in_transit, delivered, delayed
+    status = db.Column(db.String(50))
     order_date = db.Column(db.Date)
     expected_delivery_date = db.Column(db.Date)
     actual_delivery_date = db.Column(db.Date)
@@ -316,88 +292,25 @@ class MaterialOrder(db.Model):
 
 
 # ============================================================
-# CUTTING LISTS (Manufacturing)
-# ============================================================
-
-class CuttingList(db.Model):
-    """
-    Manufacturing cutting lists
-    Tracks components to be cut for production
-    """
-    __tablename__ = 'interior_cutting_lists'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    
-    # List Details
-    list_name = db.Column(db.String(255))
-    template_type = db.Column(db.String(100))  # KitchenCountingSheet, BedCountingSheet
-    room_name = db.Column(db.String(100))
-    
-    # Items (JSON array)
-    items = db.Column(db.JSON)
-    # Example: [
-    #   {"description": "Base Unit 600mm", "qty_requested": 4, "qty_ordered": 4, "qty_counted": 4},
-    #   {"description": "Wall Unit 400mm", "qty_requested": 6, "qty_ordered": 6, "qty_counted": 5}
-    # ]
-    
-    # Status
-    status = db.Column(db.String(50))  # Draft, Approved, In Production, Complete
-    approved_by = db.Column(db.String(200))
-    approved_date = db.Column(db.DateTime)
-    
-    # Audit
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    project = db.relationship('Project', backref='cutting_lists')
-    tenant = db.relationship('Tenant')
-    
-    def __repr__(self):
-        return f'<CuttingList {self.list_name} - {self.status}>'
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'tenant_id': self.tenant_id,
-            'project_id': self.project_id,
-            'list_name': self.list_name,
-            'template_type': self.template_type,
-            'room_name': self.room_name,
-            'items': self.items or [],
-            'status': self.status,
-            'approved_by': self.approved_by,
-            'approved_date': self.approved_date.isoformat() if self.approved_date else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
-# ============================================================
 # APPLIANCE CATALOG
 # ============================================================
 
 class ApplianceCatalog(db.Model):
-    """
-    Appliance product catalog with tier-based pricing
-    Master catalog of available appliances
-    """
+    """Appliance product catalog with tier-based pricing"""
     __tablename__ = 'interior_appliance_catalog'
     
     id = db.Column(db.Integer, primary_key=True)
     tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     
     # Appliance Details
-    category = db.Column(db.String(100))  # Oven, Dishwasher, Fridge, Hob, Hood, etc.
+    category = db.Column(db.String(100))
     brand = db.Column(db.String(100))
     model = db.Column(db.String(100))
     sku = db.Column(db.String(100), unique=True)
     
     # Specifications
-    dimensions = db.Column(db.JSON)  # {width: 600, height: 595, depth: 548}
-    energy_rating = db.Column(db.String(10))  # A+++, A++, A+, A, B, C, D
+    dimensions = db.Column(db.JSON)
+    energy_rating = db.Column(db.String(10))
     warranty_years = db.Column(db.Integer)
     
     # Tier-Based Pricing
@@ -453,10 +366,7 @@ class ApplianceCatalog(db.Model):
 # ============================================================
 
 class DrawingDocument(db.Model):
-    """
-    CAD drawings and layout management
-    Stores design drawings, floor plans, elevations
-    """
+    """CAD drawings and layout management"""
     __tablename__ = 'interior_drawings'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -472,12 +382,12 @@ class DrawingDocument(db.Model):
     file_size = db.Column(db.Integer)
     
     # Document Info
-    category = db.Column(db.String(50))  # Drawing, Layout, Photo
-    drawing_type = db.Column(db.String(100))  # Floor Plan, Elevation, 3D Render, Photo
+    category = db.Column(db.String(50))
+    drawing_type = db.Column(db.String(100))
     version = db.Column(db.Integer, default=1)
     
     # Status
-    status = db.Column(db.String(50))  # Draft, Approved, Superseded
+    status = db.Column(db.String(50))
     
     # Audit
     uploaded_by = db.Column(db.String(200))
@@ -512,15 +422,20 @@ class DrawingDocument(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
+
+# ============================================================
+# DRAWING ANALYSER MODULE - Technical Drawings with OCR
+# ============================================================
+
 class Drawing(db.Model):
-    """Technical drawings uploaded for cutting list generation"""
+    """Technical drawings uploaded for cutting list generation (Drawing Analyser)"""
     __tablename__ = 'drawings'
     
-    id = db.Column(db.String(36), primary_key=True)
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False)
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=True)
     job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('projects.id'), nullable=True)  # Link to Project if exists
+    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'), nullable=True)
     
     project_name = db.Column(db.String(255), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
@@ -535,10 +450,10 @@ class Drawing(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    tenant = db.relationship('Tenant', backref='drawings')
-    customer = db.relationship('Customer', backref='drawings')
-    job = db.relationship('Job', backref='drawings')
-    cutting_list = db.relationship('CuttingList', backref='drawing', cascade='all, delete-orphan', lazy='dynamic')
+    tenant = db.relationship('Tenant', backref='drawing_analyser_drawings')
+    customer = db.relationship('Customer', backref='drawing_analyser_drawings')
+    job = db.relationship('Job', backref='drawing_analyser_drawings')
+    cutting_list_items = db.relationship('CuttingList', backref='drawing', cascade='all, delete-orphan', lazy='dynamic')
     
     def to_dict(self, include_cutting_list=False):
         result = {
@@ -557,8 +472,8 @@ class Drawing(db.Model):
         }
         
         if include_cutting_list:
-            result['cutting_list'] = [item.to_dict() for item in self.cutting_list]
-            result['total_pieces'] = sum(item.quantity for item in self.cutting_list)
+            result['cutting_list'] = [item.to_dict() for item in self.cutting_list_items]
+            result['total_pieces'] = sum(item.quantity for item in self.cutting_list_items)
             result['total_area_m2'] = self._calculate_total_area()
         
         return result
@@ -567,18 +482,21 @@ class Drawing(db.Model):
         """Calculate total area in square meters"""
         total_mm2 = sum(
             (item.component_width or 0) * (item.height or 0) * (item.quantity or 0)
-            for item in self.cutting_list
+            for item in self.cutting_list_items
         )
-        return round(total_mm2 / 1_000_000, 2)  # Convert mm² to m²
+        return round(total_mm2 / 1_000_000, 2)
 
 
-# Update your existing CuttingList model to link to Drawing
+# ============================================================
+# CUTTING LISTS - Auto-generated from Drawing Analyser
+# ============================================================
+
 class CuttingList(db.Model):
+    """Cutting list items generated from technical drawings"""
     __tablename__ = 'cutting_lists'
     
-    id = db.Column(db.String(36), primary_key=True)
-    drawing_id = db.Column(db.String(36), db.ForeignKey('drawings.id', ondelete='CASCADE'), nullable=True)  # NEW
-    project_id = db.Column(db.String(36), db.ForeignKey('projects.id'), nullable=True)  # Keep for backward compatibility
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    drawing_id = db.Column(db.String(36), db.ForeignKey('drawings.id', ondelete='CASCADE'), nullable=False)
     
     component_type = db.Column(db.String(100))  # GABLE, BASE, SHELF, BACKS, BRACES
     part_name = db.Column(db.String(255))
@@ -586,13 +504,13 @@ class CuttingList(db.Model):
     overall_unit_width = db.Column(db.Integer)  # Original cabinet width (e.g., 900)
     component_width = db.Column(db.Integer)  # Calculated width (e.g., 864)
     height = db.Column(db.Integer)
-    depth = db.Column(db.Integer)  # For 3D items if needed
+    depth = db.Column(db.Integer, nullable=True)
     quantity = db.Column(db.Integer, default=1)
     material_thickness = db.Column(db.Integer)
     
     edge_banding_notes = db.Column(db.Text)
     
-    # Optional: Track completion status
+    # Track completion status
     is_completed = db.Column(db.Boolean, default=False)
     completed_at = db.Column(db.DateTime)
     
@@ -602,7 +520,6 @@ class CuttingList(db.Model):
         return {
             'id': self.id,
             'drawing_id': self.drawing_id,
-            'project_id': self.project_id,
             'component_type': self.component_type,
             'part_name': self.part_name,
             'overall_unit_width': self.overall_unit_width,

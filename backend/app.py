@@ -22,7 +22,7 @@ def create_app():
     CORS(app,
          resources={r"/api/*": {"origins": "*"}},
          supports_credentials=True,
-         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
          methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
          expose_headers=["Content-Type", "Authorization"],
     )
@@ -35,7 +35,7 @@ def create_app():
             headers = response.headers
             headers['Access-Control-Allow-Origin'] = '*'
             headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-            headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+            headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-Tenant-ID'  # ✅ ADD X-Tenant-ID
             headers['Access-Control-Max-Age'] = '3600'
             return response
     
@@ -135,7 +135,8 @@ def create_app():
     from routes.assignment_routes import assignment_bp
     from routes.chat_routes import chat_bp
     from routes.tenant_routes import tenant_bp
-    
+    from routes.drawing_analyser import drawing_bp
+
     app.register_blueprint(customer_bp)
     app.register_blueprint(job_bp)
     app.register_blueprint(core_bp)
@@ -145,7 +146,9 @@ def create_app():
     app.register_blueprint(assignment_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(tenant_bp)
-    
+    app.register_blueprint(drawing_bp)  # NEW - Drawing Analyser Blueprint
+
+    print("✅ Drawing Analyser routes registered")
     print("✅ All blueprints registered")
     
     # ============================================================

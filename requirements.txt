@@ -24,3 +24,5 @@ opencv-python>=4.8.0
 shapely>=2.0.0
 google-cloud-vision==3.5.0
 openai>=1.12.0
+opencv-python==4.8.1.78
+numpy==1.24.3
