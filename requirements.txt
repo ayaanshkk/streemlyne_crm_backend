@@ -5,9 +5,7 @@ Flask-Migrate==4.0.5
 SQLAlchemy==2.0.23
 psycopg2-binary==2.9.9
 python-dotenv
-openai
 pytesseract
-Pillow
 reportlab
 pandas
 openpyxl
@@ -19,10 +17,8 @@ cadquery>=2.4.0
 ezdxf==1.1.0
 Pillow==10.2.0
 pdf2image==1.17.0
-numpy>=1.26.0
-opencv-python>=4.8.0
+numpy==1.26.4
 shapely>=2.0.0
 google-cloud-vision==3.5.0
 openai>=1.12.0
 opencv-python==4.8.1.78
-numpy==1.24.3
