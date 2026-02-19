@@ -6,3 +6,13 @@ __pycache__/
 instance/
 .env
 .vscode/
+
+
+
+.env
+.env.*
+backups/
+*.dump
+*.sql
+venv/
+__pycache__/
