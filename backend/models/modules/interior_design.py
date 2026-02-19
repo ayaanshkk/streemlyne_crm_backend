@@ -14,8 +14,16 @@ class Project(db.Model):
     __tablename__ = 'interior_projects'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+
+
+    # 
+
+    # tenant_id = db.Column(db.String(36), nullable=False, index=True)
+    # customer_id = db.Column(db.String(36), nullable=False)
+    # ✅ Fixed - keep columns, remove FK constraints
+    customer_id = db.Column(db.String(36), nullable=False)
+    tenant_id = db.Column(db.String(36), nullable=False)
+
     
     # Project Details
     project_name = db.Column(db.String(255))
@@ -40,8 +48,8 @@ class Project(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    customer = db.relationship('Customer', backref='interior_projects')
-    tenant = db.relationship('Tenant')
+    # TEMP DISABLED: customer = db.relationship('Customer', backref='interior_projects')
+    # TEMP DISABLED: tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<Project {self.project_name} - {self.project_type}>'
@@ -75,9 +83,9 @@ class KitchenChecklist(db.Model):
     __tablename__ = 'interior_kitchen_checklists'
     
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    tenant_id = db.Column(db.String(36), nullable=False, index=True)
     project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    customer_id = db.Column(db.String(36))
     
     # Appliances (JSON array)
     appliances = db.Column(db.JSON)
@@ -110,8 +118,8 @@ class KitchenChecklist(db.Model):
     
     # Relationships
     project = db.relationship('Project', backref='kitchen_checklists')
-    customer = db.relationship('Customer', backref='kitchen_checklists')
-    tenant = db.relationship('Tenant')
+    # TEMP DISABLED: customer = db.relationship('Customer', backref='kitchen_checklists')
+    # TEMP DISABLED: tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<KitchenChecklist {self.id} for Project {self.project_id}>'
@@ -149,9 +157,9 @@ class BedroomChecklist(db.Model):
     __tablename__ = 'interior_bedroom_checklists'
     
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    tenant_id = db.Column(db.String(36), nullable=False, index=True)
     project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    customer_id = db.Column(db.String(36))
     
     # Wardrobes & Furniture
     bedside_cabinets = db.Column(db.Boolean)
@@ -189,8 +197,8 @@ class BedroomChecklist(db.Model):
     
     # Relationships
     project = db.relationship('Project', backref='bedroom_checklists')
-    customer = db.relationship('Customer', backref='bedroom_checklists')
-    tenant = db.relationship('Tenant')
+    # TEMP DISABLED: customer = db.relationship('Customer', backref='bedroom_checklists')
+    # TEMP DISABLED: tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<BedroomChecklist {self.id} for Project {self.project_id}>'
@@ -231,7 +239,7 @@ class MaterialOrder(db.Model):
     __tablename__ = 'interior_material_orders'
     
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    tenant_id = db.Column(db.String(36), nullable=False, index=True)
     project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
     
     # Material Details
@@ -263,7 +271,7 @@ class MaterialOrder(db.Model):
     
     # Relationships
     project = db.relationship('Project', backref='material_orders')
-    tenant = db.relationship('Tenant')
+    # TEMP DISABLED: tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<MaterialOrder {self.id} - {self.material_description[:30]}>'
@@ -300,7 +308,7 @@ class ApplianceCatalog(db.Model):
     __tablename__ = 'interior_appliance_catalog'
     
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    tenant_id = db.Column(db.String(36), nullable=False, index=True)
     
     # Appliance Details
     category = db.Column(db.String(100))
@@ -332,7 +340,7 @@ class ApplianceCatalog(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    tenant = db.relationship('Tenant')
+    # TEMP DISABLED: tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<ApplianceCatalog {self.brand} {self.model}>'
@@ -370,9 +378,9 @@ class DrawingDocument(db.Model):
     __tablename__ = 'interior_drawings'
     
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    tenant_id = db.Column(db.String(36), nullable=False, index=True)
     project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    customer_id = db.Column(db.String(36))
     
     # File Details
     file_name = db.Column(db.String(255))
@@ -396,8 +404,8 @@ class DrawingDocument(db.Model):
     
     # Relationships
     project = db.relationship('Project', backref='drawings')
-    customer = db.relationship('Customer', backref='drawings')
-    tenant = db.relationship('Tenant')
+    # TEMP DISABLED: customer = db.relationship('Customer', backref='drawings')
+    # TEMP DISABLED: tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<DrawingDocument {self.file_name}>'
@@ -432,8 +440,8 @@ class Drawing(db.Model):
     __tablename__ = 'drawings'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=True)
+    tenant_id = db.Column(db.String(36), nullable=False)
+    customer_id = db.Column(db.String(36), nullable=True)
     job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=True)
     project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'), nullable=True)
     
@@ -450,8 +458,8 @@ class Drawing(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    tenant = db.relationship('Tenant', backref='drawing_analyser_drawings')
-    customer = db.relationship('Customer', backref='drawing_analyser_drawings')
+    # TEMP DISABLED: tenant = db.relationship('Tenant', backref='drawing_analyser_drawings')
+    # TEMP DISABLED: customer = db.relationship('Customer', backref='drawing_analyser_drawings')
     job = db.relationship('Job', backref='drawing_analyser_drawings')
     cutting_list_items = db.relationship('CuttingList', backref='drawing', cascade='all, delete-orphan', lazy='dynamic')
     
