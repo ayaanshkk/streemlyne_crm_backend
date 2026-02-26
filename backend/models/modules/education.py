@@ -1,3 +1,17 @@
+# C:\streemlyne_crm_backend\backend\models\modules\education.py
+"""
+Education Module Models for StreemLyne CRM
+Handles test results, certificates, training batches, and PTI forms
+
+SCHEMA: StreemLyne_MT
+
+MAJOR CHANGES FROM OLD SCHEMA:
+- All tables now use StreemLyne_MT schema
+- UUID tenant/customer/user IDs → SmallInteger references
+- Added proper foreign key relationships to new schema tables
+- Removed legacy table references
+"""
+
 import uuid
 import sys
 import os
@@ -17,13 +31,20 @@ class TestResult(db.Model):
     """
     AI-powered test grading results
     Stores student test performance with question-by-question breakdown
+    
+    SCHEMA: StreemLyne_MT.education_test_results
+    
+    MIGRATION NOTE:
+    - Old: UUID tenant_id, user_id (legacy), customer_id (legacy)
+    - New: SmallInteger tenant_id, employee_id (instructor), client_id (student)
     """
     __tablename__ = 'education_test_results'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True, index=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # Instructor who graded
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))  # Student
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)  # Instructor who graded
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))  # Student
     
     # Participant Information
     participant_name = db.Column(db.String(255), nullable=False)
@@ -49,9 +70,9 @@ class TestResult(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    user = db.relationship('User', backref='test_results')
-    customer = db.relationship('Customer', backref='test_results')
-    tenant = db.relationship('Tenant')
+    tenant = db.relationship('TenantMaster', backref='education_test_results')
+    instructor = db.relationship('EmployeeMaster', backref='graded_test_results')
+    client = db.relationship('ClientMaster', backref='test_results')
     
     def __repr__(self):
         return f"<TestResult {self.id} - {self.participant_name} - {self.mhe_type} - {self.grade}>"
@@ -63,8 +84,10 @@ class TestResult(db.Model):
         return {
             'id': self.id,
             'tenant_id': self.tenant_id,
-            'user_id': self.user_id,
-            'customer_id': self.customer_id,
+            'employee_id': self.employee_id,
+            'instructor_name': self.instructor.employee_name if self.instructor else None,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'participant_name': self.participant_name,
             'company': self.company,
             'date': self.date,
@@ -90,13 +113,16 @@ class Certificate(db.Model):
     """
     Certificate tracking for training completion
     Manages certificate generation, dispatch, and validity
+    
+    SCHEMA: StreemLyne_MT.education_certificates
     """
     __tablename__ = 'education_certificates'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))  # Student
-    test_result_id = db.Column(db.Integer, db.ForeignKey('education_test_results.id'))
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))  # Student
+    test_result_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.education_test_results.id'))
     
     # Certificate Details
     certificate_number = db.Column(db.String(100), unique=True)
@@ -120,9 +146,9 @@ class Certificate(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    customer = db.relationship('Customer', backref='certificates')
+    tenant = db.relationship('TenantMaster', backref='education_certificates')
+    client = db.relationship('ClientMaster', backref='certificates')
     test_result = db.relationship('TestResult', backref='certificates')
-    tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<Certificate {self.certificate_number} - {self.status}>'
@@ -131,7 +157,8 @@ class Certificate(db.Model):
         return {
             'id': self.id,
             'tenant_id': self.tenant_id,
-            'customer_id': self.customer_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'test_result_id': self.test_result_id,
             'certificate_number': self.certificate_number,
             'certificate_type': self.certificate_type,
@@ -157,11 +184,14 @@ class TrainingBatch(db.Model):
     """
     Training batch management for group training sessions
     Tracks participants, schedule, and batch capacity
+    
+    SCHEMA: StreemLyne_MT.education_training_batches
     """
     __tablename__ = 'education_training_batches'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     
     # Batch Info
     batch_number = db.Column(db.String(100), unique=True)
@@ -178,7 +208,7 @@ class TrainingBatch(db.Model):
     enrolled_count = db.Column(db.Integer, default=0)
     
     # Instructor & Venue
-    instructor_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    instructor_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
     venue = db.Column(db.String(255))
     venue_address = db.Column(db.Text)
     
@@ -193,8 +223,8 @@ class TrainingBatch(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    instructor = db.relationship('User', backref='training_batches')
-    tenant = db.relationship('Tenant')
+    tenant = db.relationship('TenantMaster', backref='education_training_batches')
+    instructor = db.relationship('EmployeeMaster', backref='training_batches')
     
     def __repr__(self):
         return f'<TrainingBatch {self.batch_number} - {self.status}>'
@@ -212,6 +242,7 @@ class TrainingBatch(db.Model):
             'max_participants': self.max_participants,
             'enrolled_count': self.enrolled_count,
             'instructor_id': self.instructor_id,
+            'instructor_name': self.instructor.employee_name if self.instructor else None,
             'venue': self.venue,
             'venue_address': self.venue_address,
             'status': self.status,
@@ -229,12 +260,15 @@ class PTIForm(db.Model):
     """
     Practical Training Instructor forms
     Records practical training assessment and instructor sign-off
+    
+    SCHEMA: StreemLyne_MT.education_pti_forms
     """
     __tablename__ = 'education_pti_forms'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))  # Student
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))  # Student
     
     # PTI Details
     pti_number = db.Column(db.String(100), unique=True)
@@ -248,7 +282,7 @@ class PTIForm(db.Model):
     practical_assessment = db.Column(db.JSON)  # Checklist items with pass/fail
     
     # Instructor Sign-off
-    instructor_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    instructor_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
     instructor_signature = db.Column(db.Text)  # Base64 signature image
     sign_off_date = db.Column(db.DateTime)
     
@@ -260,9 +294,9 @@ class PTIForm(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    customer = db.relationship('Customer', backref='pti_forms')
-    instructor = db.relationship('User', backref='pti_forms')
-    tenant = db.relationship('Tenant')
+    tenant = db.relationship('TenantMaster', backref='education_pti_forms')
+    client = db.relationship('ClientMaster', backref='pti_forms')
+    instructor = db.relationship('EmployeeMaster', backref='pti_forms')
     
     def __repr__(self):
         return f'<PTIForm {self.pti_number} - {self.status}>'
@@ -271,7 +305,8 @@ class PTIForm(db.Model):
         return {
             'id': self.id,
             'tenant_id': self.tenant_id,
-            'customer_id': self.customer_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'pti_number': self.pti_number,
             'participant_name': self.participant_name,
             'company': self.company,
@@ -280,6 +315,7 @@ class PTIForm(db.Model):
             'training_hours': self.training_hours,
             'practical_assessment': self.practical_assessment,
             'instructor_id': self.instructor_id,
+            'instructor_name': self.instructor.employee_name if self.instructor else None,
             'sign_off_date': self.sign_off_date.isoformat() if self.sign_off_date else None,
             'status': self.status,
             'created_at': self.created_at.isoformat() if self.created_at else None,

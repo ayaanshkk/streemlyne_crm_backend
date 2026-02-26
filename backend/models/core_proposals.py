@@ -1,3 +1,18 @@
+# C:\streemlyne_crm_backend\backend\models\core_proposals.py
+"""
+Proposal and Invoice Models for StreemLyne CRM
+Handles proposals, invoices, and their line items
+
+SCHEMA: StreemLyne_MT
+
+MAJOR CHANGES FROM OLD SCHEMA:
+- Proposal → Proposal_Master (proposal_id)
+- Invoice → Invoice_Master (invoice_id)
+- Added Proposal_Details and Invoice_Details for line items
+- All tables use StreemLyne_MT schema
+- SmallInteger IDs instead of UUIDs
+"""
+
 import sys
 import os
 from datetime import datetime
@@ -9,238 +24,292 @@ from database import db
 
 
 # ============================================================
-# PRODUCT CATALOG
+# PROPOSAL MASTER
 # ============================================================
 
-class ProductCategory(db.Model):
-    """Product/Service categories"""
-    __tablename__ = 'product_categories'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    name = db.Column(db.String(100), nullable=False, unique=True)
-    description = db.Column(db.Text)
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    products = db.relationship('Product', back_populates='category', lazy=True)
-    tenant = db.relationship('Tenant')
-
-    def __repr__(self):
-        return f'<ProductCategory {self.name}>'
-
-
-class Product(db.Model):
-    """Product/Service catalog"""
-    __tablename__ = 'products'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    category_id = db.Column(db.Integer, db.ForeignKey('product_categories.id'), nullable=False)
-
-    sku = db.Column(db.String(100), nullable=False, unique=True)
-    name = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text)
-
-    # Pricing
-    base_price = db.Column(db.Numeric(10, 2))
-    discount_price = db.Column(db.Numeric(10, 2))
+class ProposalMaster(db.Model):
+    """
+    Proposal/Quotation master data
     
-    # Inventory
-    active = db.Column(db.Boolean, default=True)
-    in_stock = db.Column(db.Boolean, default=True)
-    stock_quantity = db.Column(db.Integer)
-
-    # Additional Info
-    specifications = db.Column(db.Text)  # JSON string
-    notes = db.Column(db.Text)
-
-    # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships
-    category = db.relationship('ProductCategory', back_populates='products')
-    proposal_items = db.relationship('ProposalItem', back_populates='product', lazy=True)
-    tenant = db.relationship('Tenant')
-
-    def __repr__(self):
-        return f'<Product {self.sku}: {self.name}>'
-
-
-# ============================================================
-# PROPOSALS
-# ============================================================
-
-class Proposal(db.Model):
-    """Proposals/Quotations"""
-    __tablename__ = 'proposals'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+    SCHEMA: StreemLyne_MT.Proposal_Master
     
-    # Basic Info
-    reference_number = db.Column(db.String(50), unique=True)
-    title = db.Column(db.String(255))
-    total = db.Column(db.Numeric(10, 2), nullable=False)
-    status = db.Column(db.String(20), default='Draft')  # Draft, Sent, Accepted, Rejected
-    valid_until = db.Column(db.Date)
-    notes = db.Column(db.Text)
+    MIGRATION NOTE:
+    - Old: Proposal model with UUID id
+    - New: ProposalMaster with SmallInteger proposal_id
+    """
+    __tablename__ = 'Proposal_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    # 🎯 NEW: Industry-Specific Data
-    custom_data = db.Column(db.JSON, default=dict)
-    # Examples:
-    # Education: {"ifo_number": "IFO-123", "mode_of_enquiry": "Email", "igst_percentage": 18.0}
-    # Interior: {"room_breakdown": {...}, "appliance_list": [...]}
+    # Primary Key
+    proposal_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'))
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    
+    # Financial Information
+    sub_total = db.Column(db.Float)
+    total_amount = db.Column(db.Float, nullable=False)
+    discount_percent = db.Column(db.Float)
+    discount_amount = db.Column(db.Float)
+    
+    # Tax
+    tax_id = db.Column(db.SmallInteger, nullable=False)  # Reference to tax rate
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    
     # Relationships
-    customer = db.relationship('Customer', back_populates='proposals')
-    items = db.relationship('ProposalItem', back_populates='proposal', lazy=True, cascade='all, delete-orphan')
-    opportunity = db.relationship('Opportunity', back_populates='proposal', uselist=False)
-
+    client = db.relationship('ClientMaster', back_populates='proposals')
+    project = db.relationship('ProjectDetails', backref='proposals')
+    currency = db.relationship('CurrencyMaster', backref='proposals')
+    proposal_details = db.relationship('ProposalDetails', back_populates='proposal', lazy='dynamic', cascade='all, delete-orphan')
+    invoices = db.relationship('InvoiceMaster', back_populates='proposal', lazy='dynamic')
+    
     def __repr__(self):
-        return f'<Proposal {self.reference_number}>'
+        return f'<ProposalMaster {self.proposal_id}>'
+    
+    def to_dict(self):
+        return {
+            'proposal_id': self.proposal_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
+            'project_id': self.project_id,
+            'project_title': self.project.project_title if self.project else None,
+            'currency_id': self.currency_id,
+            'currency_code': self.currency.currency_code if self.currency else None,
+            'sub_total': self.sub_total,
+            'total_amount': self.total_amount,
+            'discount_percent': self.discount_percent,
+            'discount_amount': self.discount_amount,
+            'tax_id': self.tax_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
+    def calculate_totals(self):
+        """Calculate sub_total and total_amount from line items"""
+        details = self.proposal_details.all()
+        self.sub_total = sum(d.quantity * d.service.service_rate for d in details if d.service)
+        
+        # Apply discount
+        if self.discount_percent:
+            self.discount_amount = self.sub_total * (self.discount_percent / 100)
+        elif self.discount_amount:
+            pass  # Use provided discount_amount
+        else:
+            self.discount_amount = 0
+        
+        self.total_amount = self.sub_total - (self.discount_amount or 0)
+        return self.total_amount
 
 
-class ProposalItem(db.Model):
-    """Line items in proposals"""
-    __tablename__ = 'proposal_items'
+# ============================================================
+# PROPOSAL DETAILS (Line Items)
+# ============================================================
 
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
-    proposal_id = db.Column(db.Integer, db.ForeignKey('proposals.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'))
-
-    description = db.Column(db.String(255), nullable=False)
-    quantity = db.Column(db.Integer, default=1)
-    unit_price = db.Column(db.Numeric(10, 2), nullable=False)
-    line_total = db.Column(db.Numeric(10, 2))
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+class ProposalDetails(db.Model):
+    """
+    Proposal line items
+    
+    SCHEMA: StreemLyne_MT.Proposal_Details
+    """
+    __tablename__ = 'Proposal_Details'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    proposal_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    proposal_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Proposal_Master.proposal_id'), nullable=False)
+    service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
+    uom_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=False)
+    
+    # Line Item Details
+    quantity = db.Column(db.Float, nullable=False)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    
     # Relationships
-    proposal = db.relationship('Proposal', back_populates='items')
-    product = db.relationship('Product', back_populates='proposal_items')
-    tenant = db.relationship('Tenant')
-
+    proposal = db.relationship('ProposalMaster', back_populates='proposal_details')
+    service = db.relationship('ServicesMaster', backref='proposal_details')
+    uom = db.relationship('UOMMaster', backref='proposal_details')
+    
+    def __repr__(self):
+        return f'<ProposalDetails {self.proposal_details_id} for Proposal {self.proposal_id}>'
+    
+    def to_dict(self):
+        return {
+            'proposal_details_id': self.proposal_details_id,
+            'proposal_id': self.proposal_id,
+            'service_id': self.service_id,
+            'service_title': self.service.service_title if self.service else None,
+            'service_code': self.service.service_code if self.service else None,
+            'service_rate': self.service.service_rate if self.service else None,
+            'uom_id': self.uom_id,
+            'uom_description': self.uom.uom_description if self.uom else None,
+            'quantity': self.quantity,
+            'line_total': self.calculate_line_total(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
     def calculate_line_total(self):
-        """Calculate line total from quantity and unit price"""
-        self.line_total = (self.unit_price or 0) * (self.quantity or 0)
-        return self.line_total
-
-    def __repr__(self):
-        return f'<ProposalItem {self.description}>'
+        """Calculate line total from quantity and service rate"""
+        if self.service and self.service.service_rate:
+            return self.quantity * self.service.service_rate
+        return 0
 
 
 # ============================================================
-# INVOICES
+# INVOICE MASTER
 # ============================================================
 
-class Invoice(db.Model):
-    """Invoices"""
-    __tablename__ = 'invoices'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
+class InvoiceMaster(db.Model):
+    """
+    Invoice master data
     
-    # Basic Info
-    invoice_number = db.Column(db.String(50), unique=True, nullable=False)
-    status = db.Column(db.String(20), default='Draft')  # Draft, Sent, Paid, Overdue, Cancelled
-    due_date = db.Column(db.Date)
-    paid_date = db.Column(db.Date)
+    SCHEMA: StreemLyne_MT.Invoice_Master
     
-    # 🎯 NEW: Industry-Specific Data
-    custom_data = db.Column(db.JSON, default=dict)
-    # Examples:
-    # Education: {"gst_number": "GST123", "bank_details": {...}}
-    # Interior: {"deposit_schedule": [...]}
+    MIGRATION NOTE:
+    - Old: Invoice model with UUID id
+    - New: InvoiceMaster with SmallInteger invoice_id
+    """
+    __tablename__ = 'Invoice_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    invoice_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'))
+    proposal_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Proposal_Master.proposal_id'))
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    
+    # Invoice Information
+    invoice_number = db.Column(db.String(50), nullable=False)
+    billing_remarks = db.Column(db.String(500))
+    
+    # Financial Information
+    sub_total = db.Column(db.Float)
+    total_amount = db.Column(db.Float, nullable=False)
+    discount_percent = db.Column(db.Float)
+    discount_amount = db.Column(db.Float)
+    
+    # Tax
+    tax_id = db.Column(db.SmallInteger, nullable=False)
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships
-    opportunity = db.relationship('Opportunity', back_populates='invoices')
-    line_items = db.relationship('InvoiceLineItem', back_populates='invoice', lazy=True, cascade='all, delete-orphan')
-    payments = db.relationship('Payment', back_populates='invoice', lazy=True)
-    tenant = db.relationship('Tenant')
-
-    @property
-    def amount_due(self):
-        """Calculate total amount due"""
-        total = sum([(li.quantity or 0) * (li.unit_price or 0) for li in self.line_items])
-        return total
-
-    @property
-    def amount_paid(self):
-        """Calculate total amount paid"""
-        return sum([p.amount or 0 for p in self.payments if p.cleared])
-
-    @property
-    def balance(self):
-        """Calculate remaining balance"""
-        return (self.amount_due or 0) - (self.amount_paid or 0)
-
-    def __repr__(self):
-        return f'<Invoice {self.invoice_number}>'
-
-
-class InvoiceLineItem(db.Model):
-    """Line items in invoices"""
-    __tablename__ = 'invoice_line_items'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
-    invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     
-    description = db.Column(db.String(255), nullable=False)
-    quantity = db.Column(db.Integer, default=1)
-    unit_price = db.Column(db.Numeric(10, 2), nullable=False)
-    tax_rate = db.Column(db.Numeric(5, 2), default=0)  # e.g., 20.00 for 20% VAT
-
     # Relationships
-    invoice = db.relationship('Invoice', back_populates='line_items')
-
+    client = db.relationship('ClientMaster', back_populates='invoices')
+    project = db.relationship('ProjectDetails', back_populates='invoices')
+    proposal = db.relationship('ProposalMaster', back_populates='invoices')
+    currency = db.relationship('CurrencyMaster', backref='invoices')
+    invoice_details = db.relationship('InvoiceDetails', back_populates='invoice', lazy='dynamic', cascade='all, delete-orphan')
+    
     def __repr__(self):
-        return f'<InvoiceLineItem {self.description}>'
+        return f'<InvoiceMaster {self.invoice_id}: {self.invoice_number}>'
+    
+    def to_dict(self):
+        return {
+            'invoice_id': self.invoice_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
+            'project_id': self.project_id,
+            'project_title': self.project.project_title if self.project else None,
+            'proposal_id': self.proposal_id,
+            'currency_id': self.currency_id,
+            'currency_code': self.currency.currency_code if self.currency else None,
+            'invoice_number': self.invoice_number,
+            'billing_remarks': self.billing_remarks,
+            'sub_total': self.sub_total,
+            'total_amount': self.total_amount,
+            'discount_percent': self.discount_percent,
+            'discount_amount': self.discount_amount,
+            'tax_id': self.tax_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
+    def calculate_totals(self):
+        """Calculate sub_total and total_amount from line items"""
+        details = self.invoice_details.all()
+        self.sub_total = sum(d.quantity * d.service.service_rate for d in details if d.service)
+        
+        # Apply discount
+        if self.discount_percent:
+            self.discount_amount = self.sub_total * (self.discount_percent / 100)
+        elif self.discount_amount:
+            pass  # Use provided discount_amount
+        else:
+            self.discount_amount = 0
+        
+        self.total_amount = self.sub_total - (self.discount_amount or 0)
+        return self.total_amount
 
 
 # ============================================================
-# PAYMENTS
+# INVOICE DETAILS (Line Items)
 # ============================================================
 
-class Payment(db.Model):
-    """Payment records"""
-    __tablename__ = 'payments'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
-    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
-    invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'))
-
-    # Payment Details
-    date = db.Column(db.Date, default=datetime.utcnow)
-    amount = db.Column(db.Numeric(10, 2), nullable=False)
-    method = db.Column(db.String(50), default='Bank Transfer')  # Bank Transfer, Cash, Card, Check, Other
-    reference = db.Column(db.String(120))
-    notes = db.Column(db.Text)
-
-    # Status
-    cleared = db.Column(db.Boolean, default=True)
+class InvoiceDetails(db.Model):
+    """
+    Invoice line items
     
-    # Timestamp
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+    SCHEMA: StreemLyne_MT.Invoice_Details
+    """
+    __tablename__ = 'Invoice_Details'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    invoice_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    invoice_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Invoice_Master.invoice_id'), nullable=False)
+    service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
+    uom_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=False)
+    
+    # Line Item Details
+    quantity = db.Column(db.Float, nullable=False)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    
     # Relationships
-    opportunity = db.relationship('Opportunity', back_populates='payments')
-    invoice = db.relationship('Invoice', back_populates='payments')
-    tenant = db.relationship('Tenant')
-
+    invoice = db.relationship('InvoiceMaster', back_populates='invoice_details')
+    service = db.relationship('ServicesMaster', backref='invoice_details')
+    uom = db.relationship('UOMMaster', backref='invoice_details')
+    
     def __repr__(self):
-        return f'<Payment {self.amount} on {self.date}>'
+        return f'<InvoiceDetails {self.invoice_details_id} for Invoice {self.invoice_id}>'
+    
+    def to_dict(self):
+        return {
+            'invoice_details_id': self.invoice_details_id,
+            'invoice_id': self.invoice_id,
+            'service_id': self.service_id,
+            'service_title': self.service.service_title if self.service else None,
+            'service_code': self.service.service_code if self.service else None,
+            'service_rate': self.service.service_rate if self.service else None,
+            'uom_id': self.uom_id,
+            'uom_description': self.uom.uom_description if self.uom else None,
+            'quantity': self.quantity,
+            'line_total': self.calculate_line_total(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
+    def calculate_line_total(self):
+        """Calculate line total from quantity and service rate"""
+        if self.service and self.service.service_rate:
+            return self.quantity * self.service.service_rate
+        return 0

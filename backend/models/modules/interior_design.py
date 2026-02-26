@@ -1,21 +1,49 @@
+# C:\streemlyne_crm_backend\backend\models\modules\interior_design.py
+"""
+Interior Design Module Models for StreemLyne CRM
+Handles projects, checklists, material orders, appliances, and drawings
+
+SCHEMA: StreemLyne_MT
+
+MAJOR CHANGES FROM OLD SCHEMA:
+- All tables now use StreemLyne_MT schema
+- UUID tenant/customer IDs → SmallInteger references
+- Added proper foreign key relationships to new schema tables
+- Removed legacy table references
+"""
+
 import uuid
+import sys
+import os
 from datetime import datetime
-from models.core import db
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from database import db
+
 
 # ============================================================
-# PROJECTS (Multiple per Customer)
+# PROJECTS (Multiple per Client)
 # ============================================================
 
 class Project(db.Model):
     """
-    Multiple projects per customer (Kitchen, Bedroom, Wardrobe, etc.)
-    Each customer can have multiple concurrent or historical projects
+    Multiple projects per client (Kitchen, Bedroom, Wardrobe, etc.)
+    Each client can have multiple concurrent or historical projects
+    
+    SCHEMA: StreemLyne_MT.interior_projects
+    
+    MIGRATION NOTE:
+    - Old: UUID id, tenant_id, customer_id (legacy)
+    - New: SmallInteger id, tenant_id, client_id (new schema)
     """
     __tablename__ = 'interior_projects'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
     
     # Project Details
     project_name = db.Column(db.String(255))
@@ -40,8 +68,8 @@ class Project(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    customer = db.relationship('Customer', backref='interior_projects')
-    tenant = db.relationship('Tenant')
+    tenant = db.relationship('TenantMaster', backref='interior_projects')
+    client = db.relationship('ClientMaster', backref='interior_projects')
     
     def __repr__(self):
         return f'<Project {self.project_name} - {self.project_type}>'
@@ -50,7 +78,8 @@ class Project(db.Model):
         return {
             'id': self.id,
             'tenant_id': self.tenant_id,
-            'customer_id': self.customer_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'project_name': self.project_name,
             'project_type': self.project_type,
             'stage': self.stage,
@@ -73,11 +102,12 @@ class Project(db.Model):
 class KitchenChecklist(db.Model):
     """Kitchen installation checklist"""
     __tablename__ = 'interior_kitchen_checklists'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.interior_projects.id'))
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
     
     # Appliances (JSON array)
     appliances = db.Column(db.JSON)
@@ -109,9 +139,9 @@ class KitchenChecklist(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
+    tenant = db.relationship('TenantMaster', backref='kitchen_checklists')
     project = db.relationship('Project', backref='kitchen_checklists')
-    customer = db.relationship('Customer', backref='kitchen_checklists')
-    tenant = db.relationship('Tenant')
+    client = db.relationship('ClientMaster', backref='kitchen_checklists')
     
     def __repr__(self):
         return f'<KitchenChecklist {self.id} for Project {self.project_id}>'
@@ -121,7 +151,8 @@ class KitchenChecklist(db.Model):
             'id': self.id,
             'tenant_id': self.tenant_id,
             'project_id': self.project_id,
-            'customer_id': self.customer_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'appliances': self.appliances or [],
             'worktop_features': self.worktop_features,
             'worktop_size': self.worktop_size,
@@ -147,11 +178,12 @@ class KitchenChecklist(db.Model):
 class BedroomChecklist(db.Model):
     """Bedroom/Wardrobe installation checklist"""
     __tablename__ = 'interior_bedroom_checklists'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.interior_projects.id'))
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
     
     # Wardrobes & Furniture
     bedside_cabinets = db.Column(db.Boolean)
@@ -188,9 +220,9 @@ class BedroomChecklist(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
+    tenant = db.relationship('TenantMaster', backref='bedroom_checklists')
     project = db.relationship('Project', backref='bedroom_checklists')
-    customer = db.relationship('Customer', backref='bedroom_checklists')
-    tenant = db.relationship('Tenant')
+    client = db.relationship('ClientMaster', backref='bedroom_checklists')
     
     def __repr__(self):
         return f'<BedroomChecklist {self.id} for Project {self.project_id}>'
@@ -200,7 +232,8 @@ class BedroomChecklist(db.Model):
             'id': self.id,
             'tenant_id': self.tenant_id,
             'project_id': self.project_id,
-            'customer_id': self.customer_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'bedside_cabinets': self.bedside_cabinets,
             'dresser_desk': self.dresser_desk,
             'internal_mirror': self.internal_mirror,
@@ -229,10 +262,11 @@ class BedroomChecklist(db.Model):
 class MaterialOrder(db.Model):
     """Material ordering with supplier tracking"""
     __tablename__ = 'interior_material_orders'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.interior_projects.id'))
     
     # Material Details
     material_description = db.Column(db.Text, nullable=False)
@@ -262,8 +296,8 @@ class MaterialOrder(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
+    tenant = db.relationship('TenantMaster', backref='material_orders')
     project = db.relationship('Project', backref='material_orders')
-    tenant = db.relationship('Tenant')
     
     def __repr__(self):
         return f'<MaterialOrder {self.id} - {self.material_description[:30]}>'
@@ -298,9 +332,10 @@ class MaterialOrder(db.Model):
 class ApplianceCatalog(db.Model):
     """Appliance product catalog with tier-based pricing"""
     __tablename__ = 'interior_appliance_catalog'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     
     # Appliance Details
     category = db.Column(db.String(100))
@@ -332,7 +367,7 @@ class ApplianceCatalog(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    tenant = db.relationship('Tenant')
+    tenant = db.relationship('TenantMaster', backref='appliance_catalog')
     
     def __repr__(self):
         return f'<ApplianceCatalog {self.brand} {self.model}>'
@@ -368,11 +403,12 @@ class ApplianceCatalog(db.Model):
 class DrawingDocument(db.Model):
     """CAD drawings and layout management"""
     __tablename__ = 'interior_drawings'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.interior_projects.id'))
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
     
     # File Details
     file_name = db.Column(db.String(255))
@@ -395,9 +431,9 @@ class DrawingDocument(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    project = db.relationship('Project', backref='drawings')
-    customer = db.relationship('Customer', backref='drawings')
-    tenant = db.relationship('Tenant')
+    tenant = db.relationship('TenantMaster', backref='drawing_documents')
+    project = db.relationship('Project', backref='drawing_documents')
+    client = db.relationship('ClientMaster', backref='drawing_documents')
     
     def __repr__(self):
         return f'<DrawingDocument {self.file_name}>'
@@ -407,7 +443,8 @@ class DrawingDocument(db.Model):
             'id': self.id,
             'tenant_id': self.tenant_id,
             'project_id': self.project_id,
-            'customer_id': self.customer_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'file_name': self.file_name,
             'storage_path': self.storage_path,
             'file_url': self.file_url,
@@ -429,13 +466,13 @@ class DrawingDocument(db.Model):
 
 class Drawing(db.Model):
     """Technical drawings uploaded for cutting list generation (Drawing Analyser)"""
-    __tablename__ = 'drawings'
+    __tablename__ = 'interior_drawing_analyser'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=True)
-    project_id = db.Column(db.String(36), db.ForeignKey('interior_projects.id'), nullable=True)
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=True)
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.interior_projects.id'), nullable=True)
     
     project_name = db.Column(db.String(255), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
@@ -450,17 +487,17 @@ class Drawing(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    tenant = db.relationship('Tenant', backref='drawing_analyser_drawings')
-    customer = db.relationship('Customer', backref='drawing_analyser_drawings')
-    job = db.relationship('Job', backref='drawing_analyser_drawings')
+    tenant = db.relationship('TenantMaster', backref='drawing_analyser_drawings')
+    client = db.relationship('ClientMaster', backref='drawing_analyser_drawings')
+    project = db.relationship('Project', backref='drawing_analyser_drawings')
     cutting_list_items = db.relationship('CuttingList', backref='drawing', cascade='all, delete-orphan', lazy='dynamic')
     
     def to_dict(self, include_cutting_list=False):
         result = {
             'id': self.id,
             'tenant_id': self.tenant_id,
-            'customer_id': self.customer_id,
-            'job_id': self.job_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'project_id': self.project_id,
             'project_name': self.project_name,
             'original_filename': self.original_filename,
@@ -472,17 +509,19 @@ class Drawing(db.Model):
         }
         
         if include_cutting_list:
-            result['cutting_list'] = [item.to_dict() for item in self.cutting_list_items]
-            result['total_pieces'] = sum(item.quantity for item in self.cutting_list_items)
+            items = self.cutting_list_items.all()
+            result['cutting_list'] = [item.to_dict() for item in items]
+            result['total_pieces'] = sum(item.quantity for item in items)
             result['total_area_m2'] = self._calculate_total_area()
         
         return result
     
     def _calculate_total_area(self):
         """Calculate total area in square meters"""
+        items = self.cutting_list_items.all()
         total_mm2 = sum(
             (item.component_width or 0) * (item.height or 0) * (item.quantity or 0)
-            for item in self.cutting_list_items
+            for item in items
         )
         return round(total_mm2 / 1_000_000, 2)
 
@@ -493,10 +532,11 @@ class Drawing(db.Model):
 
 class CuttingList(db.Model):
     """Cutting list items generated from technical drawings"""
-    __tablename__ = 'cutting_lists'
+    __tablename__ = 'interior_cutting_lists'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    drawing_id = db.Column(db.String(36), db.ForeignKey('drawings.id', ondelete='CASCADE'), nullable=False)
+    id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    drawing_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.interior_drawing_analyser.id', ondelete='CASCADE'), nullable=False)
     
     component_type = db.Column(db.String(100))  # GABLE, BASE, SHELF, BACKS, BRACES
     part_name = db.Column(db.String(255))
@@ -515,6 +555,9 @@ class CuttingList(db.Model):
     completed_at = db.Column(db.DateTime)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    drawing = db.relationship('Drawing', backref='cutting_list_items')
     
     def to_dict(self):
         return {

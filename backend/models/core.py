@@ -1,721 +1,705 @@
-import json
-import uuid
-import secrets
-from datetime import datetime, timedelta
-import random
-import string
+# C:\streemlyne_crm_backend\backend\models\core.py
+"""
+Core Business Models for StreemLyne CRM
+Handles clients, opportunities, projects, employees, and users
+
+SCHEMA: StreemLyne_MT
+
+MAJOR CHANGES FROM OLD SCHEMA:
+- Customer → Client_Master (client_id)
+- UUIDs → SmallInteger IDs
+- Added Employee_Master, User_Master, Customer_Auth
+- Added Project_Details, Client_Interactions
+- All tables use StreemLyne_MT schema
+"""
+
 import sys
 import os
-
-# Add parent directory to path so we can import database
-# Get the directory containing this file (models/)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# Get the parent directory (backend/)
-parent_dir = os.path.dirname(current_dir)
-# Add to path if not already there
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from database import db
+from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ============================================================
-# ENUMS - Universal definitions
-# ============================================================
-
-STAGE_ENUM = db.Enum(
-    'Prospect', 'Qualified', 'Contact Made', 'Meeting Scheduled', 'Proposal Sent',
-    'Negotiation', 'Closed Won', 'Closed Lost', 'On Hold',
-    name='stage_enum'
-)
-
-CONTACT_MADE_ENUM = db.Enum('Yes', 'No', 'Unknown', name='contact_made_enum')
-PREFERRED_CONTACT_ENUM = db.Enum('Phone', 'Email', 'WhatsApp', name='preferred_contact_enum')
-DOCUMENT_TEMPLATE_TYPE_ENUM = db.Enum(
-    'Invoice', 'Receipt', 'Proposal', 'Contract', 'Agreement', 'Terms', 'Other',
-    name='document_template_type_enum'
-)
-PAYMENT_METHOD_ENUM = db.Enum('Bank Transfer', 'Cash', 'Card', 'Check', 'Other', name='payment_method_enum')
-AUDIT_ACTION_ENUM = db.Enum('create', 'update', 'delete', name='audit_action_enum')
-ASSIGNMENT_TYPE_ENUM = db.Enum('meeting', 'call', 'task', 'delivery', 'note', name='assignment_type_enum')
+from database import db
 
 
 # ============================================================
-# TENANT & INDUSTRY CONFIGURATION
+# CLIENT MASTER (Formerly Customer)
 # ============================================================
 
-class Tenant(db.Model):
+class ClientMaster(db.Model):
     """
-    Multi-tenant isolation with industry template support
-    Each tenant can have different industry configuration and enabled modules
+    Client/Customer master data
+    
+    SCHEMA: StreemLyne_MT.Client_Master
+    
+    MIGRATION NOTE:
+    - Old: Customer model with UUID id
+    - New: ClientMaster with SmallInteger client_id
     """
-    __tablename__ = 'tenants'
+    __tablename__ = 'Client_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
     
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # Primary Key
+    client_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     
-    # Tenant Type & Identity
-    tenant_type = db.Column(db.String(20), nullable=False, default='company')  # 'individual' or 'company'
-    company_name = db.Column(db.String(255), unique=True, nullable=True)
-    subdomain = db.Column(db.String(100), unique=True, nullable=True)
-    custom_domain = db.Column(db.String(255), unique=True)
+    # Foreign Keys
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    country_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Country_Master.country_id'))
+    default_currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
     
-    # 🎯 NEW: Industry Template System
-    industry_template = db.Column(db.String(50), default='generic')
-    # Values: 'generic', 'education', 'interior_design', 'healthcare', etc.
-    
-    # 🎯 NEW: Enabled Modules (Feature Flags)
-    enabled_modules = db.Column(db.JSON, default=dict)
-    # Example: {"education": True, "test_grading": True, "kitchen_checklist": False}
-    
-    # 🎯 NEW: Custom Terminology
-    terminology = db.Column(db.JSON, default=dict)
-    # Example: {"customer": "Student", "opportunity": "Enrollment", "job": "Training Session"}
-    
-    # 🎯 NEW: Pipeline Stage Configuration
-    pipeline_stages = db.Column(db.JSON, default=dict)
-    # Example: {"sales": ["Enquiry", "Proposal", "Converted"], "training": [...]}
-    
-    # 🎯 NEW: Custom Fields Configuration
-    custom_fields_config = db.Column(db.JSON, default=dict)
-    # Example: {"customer": [{"name": "mhe_type", "type": "select", "options": [...]}]}
-    
-    # Owner (for individual tenants)
-    owner_user_id = db.Column(db.Integer, nullable=True)
-    
-    # Contact & Branding
-    contact_email = db.Column(db.String(255))
-    contact_phone = db.Column(db.String(50))
-    logo_url = db.Column(db.String(500))
-    primary_color = db.Column(db.String(7))
-    
-    # Subscription & Limits
-    subscription_tier = db.Column(db.String(50), default='basic')  # basic, professional, enterprise
-    max_users = db.Column(db.Integer, default=999999)
-    is_active = db.Column(db.Boolean, default=True)
-    is_trial = db.Column(db.Boolean, default=False)
-    trial_ends_at = db.Column(db.DateTime)
-    
-    # Settings & Features (keep for backward compatibility)
-    features = db.Column(db.JSON, default=dict)
-    settings = db.Column(db.JSON, default=dict)
+    # Client Information
+    client_company_name = db.Column(db.String(255), nullable=False)
+    client_contact_name = db.Column(db.String(255))
+    address = db.Column(db.String(500))
+    post_code = db.Column(db.String(20))
+    client_phone = db.Column(db.String(50))
+    client_email = db.Column(db.String(255))
+    client_website = db.Column(db.String(255))
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     
     # Relationships
-    users = db.relationship('User', back_populates='tenant', foreign_keys='User.tenant_id', lazy=True)
-    customers = db.relationship('Customer', back_populates='tenant', lazy=True)
+    tenant = db.relationship('TenantMaster', back_populates='clients')
+    country = db.relationship('CountryMaster', backref='clients')
+    default_currency = db.relationship('CurrencyMaster', backref='default_currency_clients')
+    opportunities = db.relationship('OpportunityDetails', back_populates='client', lazy='dynamic')
+    projects = db.relationship('ProjectDetails', back_populates='client', lazy='dynamic')
+    interactions = db.relationship('ClientInteractions', back_populates='client', lazy='dynamic')
+    proposals = db.relationship('ProposalMaster', back_populates='client', lazy='dynamic')
+    invoices = db.relationship('InvoiceMaster', back_populates='client', lazy='dynamic')
+    customer_auths = db.relationship('CustomerAuth', back_populates='client', lazy='dynamic')
+    case_documents = db.relationship('CaseDocuments', back_populates='client', lazy='dynamic')
+    customer_documents = db.relationship('CustomerDocuments', back_populates='client', lazy='dynamic')
     
     def __repr__(self):
-        if self.tenant_type == 'company':
-            return f'<Tenant Company: {self.company_name}>'
-        return f'<Tenant Individual: {self.id}>'
-    
-    def has_feature(self, feature_name: str) -> bool:
-        """Check if feature is enabled (backward compatibility)"""
-        if self.features and feature_name in self.features:
-            return self.features.get(feature_name, False)
-        return False
-    
-    def is_module_enabled(self, module_name: str) -> bool:
-        """Check if module is enabled"""
-        if not self.enabled_modules:
-            return False
-        return self.enabled_modules.get(module_name, False)
-    
-    def get_terminology(self, key: str, default: str = None) -> str:
-        """Get custom terminology for this tenant"""
-        if not self.terminology:
-            return default or key
-        return self.terminology.get(key, default or key)
-    
-    def get_pipeline_stages(self, pipeline_type: str = 'sales') -> list:
-        """Get pipeline stages for this tenant"""
-        if not self.pipeline_stages:
-            # Return universal default
-            return ['Prospect', 'Qualified', 'Contact Made', 'Meeting Scheduled', 
-                    'Proposal Sent', 'Negotiation', 'Closed Won', 'Closed Lost', 'On Hold']
-        return self.pipeline_stages.get(pipeline_type, [])
-    
-    @staticmethod
-    def create_slug(company_name: str) -> str:
-        """Create URL-friendly slug from company name"""
-        import re
-        slug = company_name.lower()
-        slug = re.sub(r'[^a-z0-9]+', '-', slug)
-        slug = slug.strip('-')
-        return slug
-    
-    def to_dict(self) -> dict:
-        return {
-            'id': self.id,
-            'tenant_type': self.tenant_type,
-            'company_name': self.company_name,
-            'subdomain': self.subdomain,
-            'industry_template': self.industry_template,
-            'enabled_modules': self.enabled_modules or {},
-            'terminology': self.terminology or {},
-            'pipeline_stages': self.pipeline_stages or {},
-            'subscription_tier': self.subscription_tier,
-            'is_active': self.is_active,
-            'max_users': self.max_users,
-            'features': self.features or {}
-        }
-
-
-# ============================================================
-# USER & AUTHENTICATION
-# ============================================================
-
-class User(db.Model):
-    """User accounts with multi-tenant isolation"""
-    __tablename__ = 'users'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    email = db.Column(db.String(120), nullable=False, index=True)
-    password_hash = db.Column(db.String(255), nullable=False)
-
-    # Profile
-    first_name = db.Column(db.String(50), nullable=False)
-    last_name = db.Column(db.String(50), nullable=False)
-    phone = db.Column(db.String(20))
-
-    # Role & Permissions
-    role = db.Column(db.String(20), default='member')  # admin, manager, member, viewer
-    department = db.Column(db.String(50))
-
-    # Account Status
-    is_active = db.Column(db.Boolean, default=True)
-    is_verified = db.Column(db.Boolean, default=False)
-
-    # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_login = db.Column(db.DateTime)
-
-    # Password Reset
-    reset_token = db.Column(db.String(100))
-    reset_token_expires = db.Column(db.DateTime)
-
-    # Email Verification
-    verification_token = db.Column(db.String(100))
-
-    # Relationships
-    tenant = db.relationship('Tenant', back_populates='users', foreign_keys=[tenant_id])
-
-    # Unique constraint on email + tenant_id
-    __table_args__ = (
-        db.UniqueConstraint('email', 'tenant_id', name='uq_user_email_tenant'),
-    )
-
-    def __repr__(self):
-        return f'<User {self.email}>'
-
-    def set_password(self, password: str) -> None:
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password: str) -> bool:
-        return check_password_hash(self.password_hash, password)
-
-    def get_full_name(self) -> str:
-        return f"{self.first_name} {self.last_name}"
-
-    def generate_reset_token(self) -> str:
-        self.reset_token = secrets.token_urlsafe(32)
-        self.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
-        return self.reset_token
-
-    def generate_verification_token(self) -> str:
-        self.verification_token = secrets.token_urlsafe(32)
-        return self.verification_token
-
-    def generate_jwt_token(self, secret_key: str) -> str:
-        payload = {
-            'user_id': self.id,
-            'email': self.email,
-            'role': self.role,
-            'tenant_id': self.tenant_id,
-            'exp': datetime.utcnow() + timedelta(days=7),
-            'iat': datetime.utcnow(),
-        }
-        return jwt.encode(payload, secret_key, algorithm='HS256')
-
-    @staticmethod
-    def verify_jwt_token(token: str, secret_key: str):
-        try:
-            payload = jwt.decode(token, secret_key, algorithms=['HS256'])
-            user = User.query.get(payload['user_id'])
-            return user if user and user.is_active else None
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return None
-
-    def to_dict(self) -> dict:
-        return {
-            'id': self.id,
-            'tenant_id': self.tenant_id,
-            'email': self.email,
-            'first_name': self.first_name,
-            'last_name': self.last_name,
-            'full_name': self.get_full_name(),
-            'phone': self.phone,
-            'role': self.role,
-            'department': self.department,
-            'is_active': self.is_active,
-            'is_verified': self.is_verified,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'last_login': self.last_login.isoformat() if self.last_login else None,
-            'tenant_type': self.tenant.tenant_type if self.tenant else None,
-            'company_name': self.tenant.company_name if self.tenant and self.tenant.tenant_type == 'company' else None,
-        }
-
-
-class LoginAttempt(db.Model):
-    """Track login attempts for security"""
-    __tablename__ = 'login_attempts'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
-    email = db.Column(db.String(120), nullable=False, index=True)
-    ip_address = db.Column(db.String(45), nullable=False)
-    success = db.Column(db.Boolean, default=False)
-    attempted_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<LoginAttempt {self.email} - {"Success" if self.success else "Failed"}>'
-
-
-class Session(db.Model):
-    """User session management"""
-    __tablename__ = 'user_sessions'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    session_token = db.Column(db.String(255), unique=True, nullable=False)
-    ip_address = db.Column(db.String(45))
-    user_agent = db.Column(db.Text)
-    expires_at = db.Column(db.DateTime, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    user = db.relationship('User', backref='sessions')
-
-    def is_expired(self) -> bool:
-        return datetime.utcnow() > self.expires_at
-
-
-# ============================================================
-# CUSTOMER (Universal B2B/B2C)
-# ============================================================
-
-class Customer(db.Model):
-    """
-    Universal customer model with industry-agnostic fields
-    Industry-specific data stored in custom_data JSON field
-    """
-    __tablename__ = 'customers'
-
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-
-    # Basic Contact Information
-    name = db.Column(db.String(200), nullable=False)
-    company_name = db.Column(db.String(255), nullable=True)
-    address = db.Column(db.Text)
-    postcode = db.Column(db.String(20))
-    phone = db.Column(db.String(50))
-    email = db.Column(db.String(200))
-    
-    # Business Information (B2B)
-    industry = db.Column(db.String(255), nullable=True)
-    company_size = db.Column(db.String(50), nullable=True)  # "1-10", "11-50", "51-200", etc.
-    
-    # Contact Preferences
-    contact_made = db.Column(CONTACT_MADE_ENUM, default='Unknown')
-    preferred_contact_method = db.Column(PREFERRED_CONTACT_ENUM, nullable=True)
-    marketing_opt_in = db.Column(db.Boolean, default=False)
-    
-    # Sales Pipeline
-    stage = db.Column(db.String(50), default='Prospect')  # Universal stage
-    salesperson = db.Column(db.String(200))
-    
-    # 🎯 NEW: Industry-Specific Data (JSONB)
-    custom_data = db.Column(db.JSON, default=dict)
-    # Examples:
-    # Education: {"customer_type": "Individual", "mhe_type": "Forklift", "batch_size": 10, "training_stage": "Scheduled"}
-    # Interior: {"project_types": ["Kitchen", "Bedroom"], "date_of_measure": "2024-01-15", "room_count": 3}
-    # Generic: {} (empty)
-    
-    # Additional Information
-    notes = db.Column(db.Text)
-    status = db.Column(db.String(50), default='active')
-    
-    # Audit Fields
-    created_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200))
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships
-    tenant = db.relationship('Tenant', back_populates='customers')
-    opportunities = db.relationship('Opportunity', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    proposals = db.relationship('Proposal', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    form_data = db.relationship('CustomerFormData', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    form_submissions = db.relationship('FormSubmission', back_populates='customer', lazy=True)
-    assignments = db.relationship('Assignment', backref='customer_rel', lazy=True, passive_deletes='all')
-
-    def update_stage_from_opportunity(self):
-        """Update customer stage based on primary opportunity"""
-        primary_opp = self.get_primary_opportunity()
-        if primary_opp:
-            self.stage = primary_opp.stage
-            db.session.commit()
-
-    def get_primary_opportunity(self):
-        """Get customer's most recent active opportunity"""
-        from sqlalchemy import and_
-        return Opportunity.query.filter(
-            and_(Opportunity.customer_id == self.id, Opportunity.stage != 'Closed Lost')
-        ).order_by(Opportunity.created_at.desc()).first()
-
-    def save(self):
-        """Save customer to database"""
-        db.session.add(self)
-        db.session.commit()
-
-    def __repr__(self):
-        return f'<Customer {self.name}>'
-
-
-# ============================================================
-# OPPORTUNITY (Universal Sales)
-# ============================================================
-
-class Opportunity(db.Model):
-    """
-    Universal opportunity/deal tracking
-    Industry-specific data stored in custom_data JSON field
-    """
-    __tablename__ = 'opportunities'
-
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
-
-    # Basic Opportunity Info
-    opportunity_reference = db.Column(db.String(100), unique=True)
-    opportunity_name = db.Column(db.String(200))
-    stage = db.Column(db.String(50), nullable=False, default='Prospect')
-    priority = db.Column(db.String(20), default='Medium')  # Low, Medium, High, Urgent
-
-    # Financial Information
-    estimated_value = db.Column(db.Numeric(10, 2))
-    probability = db.Column(db.Integer)  # 0-100% win probability
-    
-    # Dates
-    expected_close_date = db.Column(db.DateTime)
-    actual_close_date = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Team Assignments
-    salesperson_name = db.Column(db.String(100))
-    salesperson_id = db.Column(db.Integer, db.ForeignKey('salespeople.id'))
-
-    # Links
-    proposal_id = db.Column(db.Integer, db.ForeignKey('proposals.id'))
-
-    # Boolean Flags
-    has_proposal = db.Column(db.Boolean, default=False)
-    has_contract = db.Column(db.Boolean, default=False)
-    has_invoice = db.Column(db.Boolean, default=False)
-
-    # 🎯 NEW: Industry-Specific Data
-    custom_data = db.Column(db.JSON, default=dict)
-    # Examples:
-    # Education: {"course_type": "Forklift Advanced", "participants": 15}
-    # Interior: {"rooms": ["Kitchen", "Master Bedroom"], "installation_type": "Full"}
-    
-    # Additional Info
-    notes = db.Column(db.Text)
-
-    # Relationships
-    tenant = db.relationship('Tenant')
-    customer = db.relationship('Customer', back_populates='opportunities')
-    proposal = db.relationship('Proposal', foreign_keys=[proposal_id], back_populates='opportunity', uselist=False)
-    salesperson = db.relationship('Salesperson', foreign_keys=[salesperson_id])
-    documents = db.relationship('OpportunityDocument', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    activities = db.relationship('Activity', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    notes_list = db.relationship('OpportunityNote', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    invoices = db.relationship('Invoice', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    payments = db.relationship('Payment', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    assignments = db.relationship('Assignment', backref='opportunity_rel', lazy=True, passive_deletes='all')
-
-    def __repr__(self):
-        return f'<Opportunity {self.opportunity_reference or self.id}: {self.opportunity_name}>'
-
-
-# ============================================================
-# JOB (Universal Work Management)
-# ============================================================
-
-def generate_job_reference():
-    """Generate unique job reference: JOB-YYYYMMDD-HHMMSS-XXX"""
-    now = datetime.utcnow()
-    date_part = now.strftime("%Y%m%d")
-    time_part = now.strftime("%H%M%S")
-    random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
-    return f"JOB-{date_part}-{time_part}-{random_suffix}"
-
-
-class Job(db.Model):
-    """
-    Universal job/work unit tracking
-    Industry-specific data stored in custom_data JSON field
-    """
-    __tablename__ = "jobs"
-
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    job_reference = db.Column(db.String(50), unique=True, nullable=False, default=generate_job_reference)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
-
-    # Core Job Info
-    title = db.Column(db.String(255), nullable=False, default="New Job")
-    job_type = db.Column(db.String(100), default="General")
-    description = db.Column(db.Text)
-    requirements = db.Column(db.Text)
-    tags = db.Column(db.String(255))  # Comma-separated
-
-    # Pipeline / Status
-    stage = db.Column(db.String(50), default="Prospect")
-    priority = db.Column(db.String(20), default="Medium")
-
-    # Timeline
-    start_date = db.Column(db.Date, nullable=True)
-    due_date = db.Column(db.Date)
-    completion_date = db.Column(db.Date)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Financial
-    estimated_value = db.Column(db.Numeric(10, 2))
-    agreed_value = db.Column(db.Numeric(10, 2))
-    deposit_amount = db.Column(db.Numeric(10, 2))
-    deposit_due_date = db.Column(db.Date)
-
-    # Location & Team
-    location = db.Column(db.String(255))
-    primary_contact = db.Column(db.String(255))
-    team_members_json = db.Column(db.Text)  # JSON list of team members
-
-    # Links
-    quote_id = db.Column(db.String(36))
-
-    # 🎯 NEW: Industry-Specific Data
-    custom_data = db.Column(db.JSON, default=dict)
-    # Examples:
-    # Education: {"training_date": "2024-03-15", "instructor": "John Doe", "venue": "Main Hall"}
-    # Interior: {"rooms": ["Kitchen"], "work_stage": "Production", "fitter": "Team A"}
-    
-    # Notes
-    notes = db.Column(db.Text)
-
-    # Relationships
-    tenant = db.relationship('Tenant')
-    customer = db.relationship("Customer", backref="jobs")
-
-    def __repr__(self):
-        return f"<Job {self.job_reference}: {self.title}>"
-
-    @property
-    def team_members(self):
-        """Get team members list from JSON"""
-        try:
-            return json.loads(self.team_members_json) if self.team_members_json else []
-        except Exception:
-            return []
-
-    @team_members.setter
-    def team_members(self, value):
-        """Set team members list as JSON"""
-        try:
-            self.team_members_json = json.dumps(value or [])
-        except Exception:
-            self.team_members_json = "[]"
-
-
-# ============================================================
-# TEAM MANAGEMENT
-# ============================================================
-
-class Team(db.Model):
-    """Teams for organizing staff"""
-    __tablename__ = 'teams'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    name = db.Column(db.String(200), nullable=False)
-    specialty = db.Column(db.String(100))
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    members = db.relationship('TeamMember', back_populates='team', lazy=True)
-    tenant = db.relationship('Tenant')
-
-
-class TeamMember(db.Model):
-    """Individual team members/staff"""
-    __tablename__ = 'team_members'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    name = db.Column(db.String(200), nullable=False)
-    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'))
-    role = db.Column(db.String(100))
-    skills = db.Column(db.Text)
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    team = db.relationship('Team', back_populates='members')
-    tenant = db.relationship('Tenant')
-
-
-class Salesperson(db.Model):
-    """Sales team members"""
-    __tablename__ = 'salespeople'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
-    name = db.Column(db.String(200), nullable=False)
-    email = db.Column(db.String(120))
-    phone = db.Column(db.String(20))
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    tenant = db.relationship('Tenant')
-
-
-# ============================================================
-# SCHEDULE & ASSIGNMENTS
-# ============================================================
-
-class Assignment(db.Model):
-    """Calendar assignments and tasks"""
-    __tablename__ = 'assignments'
-
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True)
-    
-    # Assignment Type & Details
-    type = db.Column(ASSIGNMENT_TYPE_ENUM, nullable=False, default='task')
-    title = db.Column(db.String(255), nullable=False)
-    date = db.Column(db.Date, nullable=False)
-    
-    # Date Range
-    start_date = db.Column(db.Date, nullable=True)
-    end_date = db.Column(db.Date, nullable=True)
-    
-    # Staff Assignment
-    staff_id = db.Column(db.Integer, db.ForeignKey('team_members.id'), nullable=True)
-    team_member = db.Column(db.String(200), nullable=True)
-    
-    # Customer/Opportunity Links
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=True)
-    customer_name = db.Column(db.String(200), nullable=True)
-    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id', ondelete='CASCADE'), nullable=True)
-    job_id = db.Column(db.String(36), nullable=True)
-    job_type = db.Column(db.String(100), nullable=True)
-    
-    # Time Tracking
-    start_time = db.Column(db.Time, nullable=True)
-    end_time = db.Column(db.Time, nullable=True)
-    estimated_hours = db.Column(db.Float, nullable=True)
-    
-    # Additional Info
-    notes = db.Column(db.Text, nullable=True)
-    priority = db.Column(db.String(20), default='Medium')
-    status = db.Column(db.String(20), default='Scheduled')
-    
-    # Audit
-    created_by = db.Column(db.String(200), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200), nullable=True)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    staff = db.relationship('TeamMember', backref='assignments')
-    opportunity = db.relationship('Opportunity', backref='opportunity_assignments', viewonly=True)
-    customer = db.relationship('Customer', backref='customer_assignments', viewonly=True)
-    tenant = db.relationship('Tenant')
-    
-    def __repr__(self):
-        return f'<Assignment {self.id}: {self.title} on {self.date}>'
-    
-    def calculate_hours(self):
-        """Calculate hours from start_time and end_time"""
-        if self.start_time and self.end_time:
-            start_datetime = datetime.combine(datetime.today(), self.start_time)
-            end_datetime = datetime.combine(datetime.today(), self.end_time)
-            duration = end_datetime - start_datetime
-            return duration.total_seconds() / 3600
-        return self.estimated_hours or 0
+        return f'<ClientMaster {self.client_id}: {self.client_company_name}>'
     
     def to_dict(self):
-        """Convert to dictionary"""
-        staff_name = None
-        try:
-            if self.staff and hasattr(self.staff, 'name'):
-                staff_name = self.staff.name
-            elif self.team_member:
-                staff_name = self.team_member
-        except Exception:
-            staff_name = self.team_member
-        
-        customer_name = None
-        try:
-            if self.customer and hasattr(self.customer, 'name'):
-                customer_name = self.customer.name
-            elif self.customer_name:
-                customer_name = self.customer_name
-        except Exception:
-            customer_name = self.customer_name
-        
-        opportunity_reference = None
-        try:
-            if self.opportunity and hasattr(self.opportunity, 'opportunity_reference'):
-                opportunity_reference = self.opportunity.opportunity_reference
-        except Exception:
-            pass
-        
+        return {
+            'client_id': self.client_id,
+            'tenant_id': self.tenant_id,
+            'client_company_name': self.client_company_name,
+            'client_contact_name': self.client_contact_name,
+            'address': self.address,
+            'country_id': self.country_id,
+            'country_name': self.country.country_name if self.country else None,
+            'post_code': self.post_code,
+            'client_phone': self.client_phone,
+            'client_email': self.client_email,
+            'client_website': self.client_website,
+            'default_currency_id': self.default_currency_id,
+            'default_currency_code': self.default_currency.currency_code if self.default_currency else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============================================================
+# CLIENT INTERACTIONS
+# ============================================================
+
+class ClientInteractions(db.Model):
+    """
+    Track interactions with clients
+    
+    SCHEMA: StreemLyne_MT.Client_Interactions
+    """
+    __tablename__ = 'Client_Interactions'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    interaction_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    
+    # Interaction Details
+    contact_date = db.Column(db.Date, nullable=False)
+    contact_method = db.Column(db.SmallInteger, nullable=False)  # 1=Phone, 2=Email, 3=In-person, 4=Other
+    notes = db.Column(db.String(1000))
+    next_steps = db.Column(db.String(500))
+    reminder_date = db.Column(db.Date)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    
+    # Relationships
+    client = db.relationship('ClientMaster', back_populates='interactions')
+    
+    def __repr__(self):
+        return f'<ClientInteractions {self.interaction_id} for Client {self.client_id}>'
+    
+    def to_dict(self):
+        return {
+            'interaction_id': self.interaction_id,
+            'client_id': self.client_id,
+            'contact_date': self.contact_date.isoformat() if self.contact_date else None,
+            'contact_method': self.contact_method,
+            'contact_method_name': self.get_contact_method_name(),
+            'notes': self.notes,
+            'next_steps': self.next_steps,
+            'reminder_date': self.reminder_date.isoformat() if self.reminder_date else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+    
+    def get_contact_method_name(self):
+        methods = {1: 'Phone', 2: 'Email', 3: 'In-person', 4: 'Other'}
+        return methods.get(self.contact_method, 'Unknown')
+
+
+# ============================================================
+# EMPLOYEE MASTER
+# ============================================================
+
+class EmployeeMaster(db.Model):
+    """
+    Employee master data
+    
+    SCHEMA: StreemLyne_MT.Employee_Master
+    """
+    __tablename__ = 'Employee_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    employee_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    tenant_id = db.Column(db.BigInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    employee_designation_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Designation_Master.designation_id'))
+    
+    # Employee Information
+    employee_name = db.Column(db.String(255), nullable=False)
+    phone = db.Column(db.String(50))
+    email = db.Column(db.String(255), unique=True)
+    date_of_birth = db.Column(db.Date)
+    date_of_joining = db.Column(db.Date)
+    id_type = db.Column(db.String(50))
+    id_number = db.Column(db.String(100))
+    role_ids = db.Column(db.String(255))  # Comma-separated role IDs
+    commission_percentage = db.Column(db.Float)
+    
+    # Timestamps
+    created_on = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    updated_on = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    
+    # Relationships
+    tenant = db.relationship('TenantMaster', back_populates='employees')
+    designation = db.relationship('DesignationMaster', backref='employees')
+    owned_opportunities = db.relationship('OpportunityDetails', foreign_keys='OpportunityDetails.opportunity_owner_employee_id', back_populates='opportunity_owner')
+    assigned_opportunities = db.relationship('OpportunityDetails', foreign_keys='OpportunityDetails.assigned_to_employee_id', back_populates='assigned_employee')
+    managed_projects = db.relationship('ProjectDetails', back_populates='employee')
+    energy_contracts = db.relationship('EnergyContractMaster', back_populates='employee')
+    user = db.relationship('UserMaster', back_populates='employee', uselist=False)
+    
+    def __repr__(self):
+        return f'<EmployeeMaster {self.employee_id}: {self.employee_name}>'
+    
+    def to_dict(self):
+        return {
+            'employee_id': self.employee_id,
+            'tenant_id': self.tenant_id,
+            'employee_name': self.employee_name,
+            'employee_designation_id': self.employee_designation_id,
+            'designation_name': self.designation.designation_description if self.designation else None,
+            'phone': self.phone,
+            'email': self.email,
+            'date_of_birth': self.date_of_birth.isoformat() if self.date_of_birth else None,
+            'date_of_joining': self.date_of_joining.isoformat() if self.date_of_joining else None,
+            'id_type': self.id_type,
+            'id_number': self.id_number,
+            'role_ids': self.role_ids,
+            'commission_percentage': self.commission_percentage,
+            'created_on': self.created_on.isoformat() if self.created_on else None,
+            'updated_on': self.updated_on.isoformat() if self.updated_on else None
+        }
+
+
+# ============================================================
+# USER MASTER
+# ============================================================
+
+class UserMaster(db.Model):
+    """
+    User accounts for system access
+    
+    SCHEMA: StreemLyne_MT.User_Master
+    """
+    __tablename__ = 'User_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    user_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    
+    # User Information
+    user_name = db.Column(db.String(100), unique=True)
+    password = db.Column(db.String(255))
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.Date, onupdate=datetime.utcnow)
+    
+    # Relationships
+    employee = db.relationship('EmployeeMaster', back_populates='user')
+    roles = db.relationship('RoleMaster', secondary='StreemLyne_MT.User_Role_Mapping', backref='users')
+    
+    def __repr__(self):
+        return f'<UserMaster {self.user_id}: {self.user_name}>'
+    
+    def set_password(self, password: str) -> None:
+        self.password = generate_password_hash(password)
+    
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password, password)
+    
+    def to_dict(self):
+        return {
+            'user_id': self.user_id,
+            'employee_id': self.employee_id,
+            'user_name': self.user_name,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+# ============================================================
+# USER ROLE MAPPING (Association Table)
+# ============================================================
+
+class UserRoleMapping(db.Model):
+    """
+    Maps users to roles (many-to-many)
+    
+    SCHEMA: StreemLyne_MT.User_Role_Mapping
+    """
+    __tablename__ = 'User_Role_Mapping'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Composite Primary Key
+    user_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.User_Master.user_id'), primary_key=True)
+    role_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Role_Master.role_id'), primary_key=True)
+    
+    def __repr__(self):
+        return f'<UserRoleMapping User:{self.user_id} Role:{self.role_id}>'
+
+
+# ============================================================
+# CUSTOMER AUTH (Client Portal Access)
+# ============================================================
+
+class CustomerAuth(db.Model):
+    """
+    Customer authentication for client portal access
+    
+    SCHEMA: StreemLyne_MT.Customer_Auth
+    """
+    __tablename__ = 'Customer_Auth'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    customer_user_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    
+    # Auth Information
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    password_hash = db.Column(db.Text, nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    
+    # Relationships
+    client = db.relationship('ClientMaster', back_populates='customer_auths')
+    password_resets = db.relationship('CustomerPasswordReset', back_populates='customer_user', lazy='dynamic')
+    
+    def __repr__(self):
+        return f'<CustomerAuth {self.email}>'
+    
+    def set_password(self, password: str) -> None:
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
+    
+    def to_dict(self):
+        return {
+            'customer_user_id': self.customer_user_id,
+            'client_id': self.client_id,
+            'tenant_id': self.tenant_id,
+            'email': self.email,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class CustomerPasswordReset(db.Model):
+    """
+    Password reset tokens for customer accounts
+    
+    SCHEMA: StreemLyne_MT.Customer_Password_Reset
+    """
+    __tablename__ = 'Customer_Password_Reset'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    customer_user_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Customer_Auth.customer_user_id'))
+    
+    # Reset Information
+    token = db.Column(db.Text, nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=False), nullable=False)
+    used = db.Column(db.Boolean, default=False)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    
+    # Relationships
+    customer_user = db.relationship('CustomerAuth', back_populates='password_resets')
+    
+    def __repr__(self):
+        return f'<CustomerPasswordReset {self.id} for User:{self.customer_user_id}>'
+    
+    def to_dict(self):
         return {
             'id': self.id,
-            'type': self.type,
-            'title': self.title,
-            'date': self.date.isoformat() if self.date else None,
+            'customer_user_id': self.customer_user_id,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'used': self.used,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============================================================
+# OPPORTUNITY DETAILS
+# ============================================================
+
+class OpportunityDetails(db.Model):
+    """
+    Opportunity/Lead tracking
+    
+    SCHEMA: StreemLyne_MT.Opportunity_Details
+    
+    MIGRATION NOTE:
+    - Old: Opportunity model with UUID id
+    - New: OpportunityDetails with SmallInteger opportunity_id
+    """
+    __tablename__ = 'Opportunity_Details'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    opportunity_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+    opportunity_owner_employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    assigned_to_employee_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    stage_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Stage_Master.stage_id'), nullable=False)
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    tenant_id = db.Column(db.BigInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
+    service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'))
+    
+    # Opportunity Information
+    opportunity_title = db.Column(db.String(255), nullable=False)
+    opportunity_description = db.Column(db.Text)
+    opportunity_date = db.Column(db.Date)
+    opportunity_value = db.Column(db.SmallInteger)
+    
+    # Additional Fields
+    mpan_mpr = db.Column(db.String(50))
+    business_name = db.Column(db.String(255))
+    contact_person = db.Column(db.String(255))
+    tel_number = db.Column(db.String(50))
+    email = db.Column(db.String(255))
+    start_date = db.Column(db.Date)
+    end_date = db.Column(db.Date)
+    misc_col1 = db.Column(db.String(255))
+    
+    # Soft Delete
+    deleted_at = db.Column(db.DateTime(timezone=False))
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    
+    # Relationships
+    client = db.relationship('ClientMaster', back_populates='opportunities')
+    opportunity_owner = db.relationship('EmployeeMaster', foreign_keys=[opportunity_owner_employee_id], back_populates='owned_opportunities')
+    assigned_employee = db.relationship('EmployeeMaster', foreign_keys=[assigned_to_employee_id], back_populates='assigned_opportunities')
+    stage = db.relationship('StageMaster', back_populates='opportunities')
+    currency = db.relationship('CurrencyMaster', backref='opportunities')
+    service = db.relationship('ServicesMaster', backref='opportunities')
+    projects = db.relationship('ProjectDetails', back_populates='opportunity', lazy='dynamic')
+    case_documents = db.relationship('CaseDocuments', back_populates='opportunity', lazy='dynamic')
+    customer_documents = db.relationship('CustomerDocuments', back_populates='opportunity', lazy='dynamic')
+    
+    def __repr__(self):
+        return f'<OpportunityDetails {self.opportunity_id}: {self.opportunity_title}>'
+    
+    def to_dict(self):
+        return {
+            'opportunity_id': self.opportunity_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
+            'opportunity_title': self.opportunity_title,
+            'opportunity_description': self.opportunity_description,
+            'opportunity_date': self.opportunity_date.isoformat() if self.opportunity_date else None,
+            'opportunity_owner_employee_id': self.opportunity_owner_employee_id,
+            'opportunity_owner_name': self.opportunity_owner.employee_name if self.opportunity_owner else None,
+            'assigned_to_employee_id': self.assigned_to_employee_id,
+            'assigned_employee_name': self.assigned_employee.employee_name if self.assigned_employee else None,
+            'stage_id': self.stage_id,
+            'stage_name': self.stage.stage_name if self.stage else None,
+            'opportunity_value': self.opportunity_value,
+            'currency_id': self.currency_id,
+            'currency_code': self.currency.currency_code if self.currency else None,
+            'tenant_id': self.tenant_id,
+            'service_id': self.service_id,
+            'mpan_mpr': self.mpan_mpr,
+            'business_name': self.business_name,
+            'contact_person': self.contact_person,
+            'tel_number': self.tel_number,
+            'email': self.email,
             'start_date': self.start_date.isoformat() if self.start_date else None,
             'end_date': self.end_date.isoformat() if self.end_date else None,
-            'staff_id': str(self.staff_id) if self.staff_id else None,
-            'team_member': staff_name,
-            'staff_name': staff_name,
-            'customer_id': self.customer_id,
-            'customer_name': customer_name,
+            'misc_col1': self.misc_col1,
+            'deleted_at': self.deleted_at.isoformat() if self.deleted_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============================================================
+# PROJECT DETAILS
+# ============================================================
+
+class ProjectDetails(db.Model):
+    """
+    Project tracking (converted opportunities)
+    
+    SCHEMA: StreemLyne_MT.Project_Details
+    """
+    __tablename__ = 'Project_Details'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    project_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
+    employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
+    
+    # Project Information
+    project_title = db.Column(db.String(255), nullable=False)
+    project_description = db.Column(db.Text)
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date)
+    address = db.Column(db.String(500))
+    misc_col1 = db.Column(db.String(255))
+    misc_col2 = db.Column(db.Integer)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    
+    # Relationships
+    client = db.relationship('ClientMaster', back_populates='projects')
+    opportunity = db.relationship('OpportunityDetails', back_populates='projects')
+    employee = db.relationship('EmployeeMaster', back_populates='managed_projects')
+    energy_contracts = db.relationship('EnergyContractMaster', back_populates='project', lazy='dynamic')
+    invoices = db.relationship('InvoiceMaster', back_populates='project', lazy='dynamic')
+    
+    def __repr__(self):
+        return f'<ProjectDetails {self.project_id}: {self.project_title}>'
+    
+    def to_dict(self):
+        return {
+            'project_id': self.project_id,
+            'client_id': self.client_id,
+            'client_name': self.client.client_company_name if self.client else None,
             'opportunity_id': self.opportunity_id,
-            'opportunity_reference': opportunity_reference,
-            'job_id': self.job_id,
-            'job_type': self.job_type,
-            'start_time': self.start_time.strftime('%H:%M') if self.start_time else None,
-            'end_time': self.end_time.strftime('%H:%M') if self.end_time else None,
-            'estimated_hours': self.estimated_hours,
-            'notes': self.notes,
-            'priority': self.priority,
-            'status': self.status,
-            'created_by': self.created_by,
+            'opportunity_title': self.opportunity.opportunity_title if self.opportunity else None,
+            'employee_id': self.employee_id,
+            'employee_name': self.employee.employee_name if self.employee else None,
+            'project_title': self.project_title,
+            'project_description': self.project_description,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'address': self.address,
+            'misc_col1': self.misc_col1,
+            'misc_col2': self.misc_col2,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_by': self.updated_by,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+# ============================================================
+# CASE DOCUMENTS
+# ============================================================
+
+class CaseDocuments(db.Model):
+    """
+    Documents attached to opportunities/cases
+    
+    SCHEMA: StreemLyne_MT.Case_Documents
+    """
+    __tablename__ = 'Case_Documents'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    
+    # Document Information
+    uploaded_by = db.Column(db.String(255), nullable=False)
+    document_type = db.Column(db.String(100))
+    file_name = db.Column(db.String(255), nullable=False)
+    blob_url = db.Column(db.Text, nullable=False)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    
+    # Relationships
+    opportunity = db.relationship('OpportunityDetails', back_populates='case_documents')
+    client = db.relationship('ClientMaster', back_populates='case_documents')
+    
+    def __repr__(self):
+        return f'<CaseDocuments {self.id}: {self.file_name}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'opportunity_id': self.opportunity_id,
+            'client_id': self.client_id,
             'tenant_id': self.tenant_id,
+            'uploaded_by': self.uploaded_by,
+            'document_type': self.document_type,
+            'file_name': self.file_name,
+            'blob_url': self.blob_url,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============================================================
+# CUSTOMER DOCUMENTS
+# ============================================================
+
+class CustomerDocuments(db.Model):
+    """
+    Documents uploaded by customers
+    
+    SCHEMA: StreemLyne_MT.Customer_Documents
+    """
+    __tablename__ = 'Customer_Documents'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'))
+    
+    # Document Information
+    file_url = db.Column(db.Text, nullable=False)
+    file_name = db.Column(db.Text, nullable=False)
+    
+    # Timestamps
+    uploaded_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    
+    # Relationships
+    client = db.relationship('ClientMaster', back_populates='customer_documents')
+    opportunity = db.relationship('OpportunityDetails', back_populates='customer_documents')
+    
+    def __repr__(self):
+        return f'<CustomerDocuments {self.id}: {self.file_name}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'client_id': self.client_id,
+            'opportunity_id': self.opportunity_id,
+            'file_url': self.file_url,
+            'file_name': self.file_name,
+            'uploaded_at': self.uploaded_at.isoformat() if self.uploaded_at else None
+        }
+
+
+# ============================================================
+# ENERGY CONTRACT MASTER
+# ============================================================
+
+class EnergyContractMaster(db.Model):
+    """
+    Energy contract management
+    
+    SCHEMA: StreemLyne_MT.Energy_Contract_Master
+    """
+    __tablename__ = 'Energy_Contract_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+    
+    # Primary Key
+    energy_contract_master_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign Keys
+    project_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'))
+    employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
+    supplier_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Supplier_Master.supplier_id'), nullable=False)
+    service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    
+    # Contract Information
+    contract_start_date = db.Column(db.Date, nullable=False)
+    contract_end_date = db.Column(db.Date, nullable=False)
+    terms_of_sale = db.Column(db.String(500), nullable=False)
+    unit_rate = db.Column(db.Float, nullable=False)
+    document_details = db.Column(db.String(500))
+    mpan_number = db.Column(db.String(50))
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), onupdate=datetime.utcnow)
+    
+    # Relationships
+    project = db.relationship('ProjectDetails', back_populates='energy_contracts')
+    employee = db.relationship('EmployeeMaster', back_populates='energy_contracts')
+    supplier = db.relationship('SupplierMaster', backref='energy_contracts')
+    service = db.relationship('ServicesMaster', backref='energy_contracts')
+    currency = db.relationship('CurrencyMaster', backref='energy_contracts')
+    
+    def __repr__(self):
+        return f'<EnergyContractMaster {self.energy_contract_master_id}>'
+    
+    def to_dict(self):
+        return {
+            'energy_contract_master_id': self.energy_contract_master_id,
+            'project_id': self.project_id,
+            'employee_id': self.employee_id,
+            'employee_name': self.employee.employee_name if self.employee else None,
+            'supplier_id': self.supplier_id,
+            'supplier_name': self.supplier.supplier_company_name if self.supplier else None,
+            'service_id': self.service_id,
+            'service_title': self.service.service_title if self.service else None,
+            'currency_id': self.currency_id,
+            'currency_code': self.currency.currency_code if self.currency else None,
+            'contract_start_date': self.contract_start_date.isoformat() if self.contract_start_date else None,
+            'contract_end_date': self.contract_end_date.isoformat() if self.contract_end_date else None,
+            'terms_of_sale': self.terms_of_sale,
+            'unit_rate': self.unit_rate,
+            'document_details': self.document_details,
+            'mpan_number': self.mpan_number,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

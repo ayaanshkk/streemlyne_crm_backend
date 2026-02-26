@@ -1,64 +1,113 @@
 # ============================================================
-# CORE MODELS - Always Available
+# STREEMLYNE CRM MODELS
+# ============================================================
+# 
+# This package contains all SQLAlchemy models for the StreemLyne CRM.
+# 
+# SCHEMA STRUCTURE:
+# - StreemLyne_MT: Main schema for new normalized tables (NEW)
+# - Default schema: Legacy tables for backward compatibility (OLD)
+#
+# MODEL ORGANIZATION:
+# - tenancy.py: Tenant, subscriptions, modules (NEW - StreemLyne_MT)
+# - core.py: Clients, opportunities, projects, employees, users (NEW - StreemLyne_MT)
+# - masters.py: Reference data (countries, currencies, etc.) (NEW - StreemLyne_MT)
+# - core_proposals.py: Proposals and invoices (NEW - StreemLyne_MT)
+# - core_documents.py: Documents, activities, chat (NEW/legacy mix)
+# - modules/: Industry-specific modules (education, interior_design)
+# - legacy/: Legacy models for backward compatibility only
+#
+# ============================================================
+
+
+# ============================================================
+# TENANCY MODELS - Multi-tenant Architecture
+# ============================================================
+
+from .tenancy import (
+    TenantMaster,
+    SubscriptionPlan,
+    ModuleMaster,
+    SubscriptionModuleMapping,
+    TenantModuleMapping,
+    TenantSubscription,
+)
+
+
+# ============================================================
+# CORE BUSINESS MODELS - Main Entities
 # ============================================================
 
 from .core import (
-    # Enums
-    STAGE_ENUM, 
-    CONTACT_MADE_ENUM, 
-    PREFERRED_CONTACT_ENUM,
-    DOCUMENT_TEMPLATE_TYPE_ENUM, 
-    PAYMENT_METHOD_ENUM,
-    AUDIT_ACTION_ENUM, 
-    ASSIGNMENT_TYPE_ENUM,
+    # Client Management
+    ClientMaster,
+    ClientInteractions,
     
-    # Tenant & Users
-    Tenant, 
-    User, 
-    LoginAttempt, 
-    Session,
+    # Employee & User Management
+    EmployeeMaster,
+    UserMaster,
+    UserRoleMapping,
+    CustomerAuth,
+    CustomerPasswordReset,
     
-    # CRM Core
-    Customer, 
-    Opportunity, 
-    Job,
+    # Opportunity & Project Management
+    OpportunityDetails,
+    ProjectDetails,
     
-    # Teams
-    Team, 
-    TeamMember, 
-    Salesperson,
+    # Documents
+    CaseDocuments,
+    CustomerDocuments,
     
-    # Schedule
-    Assignment,
-    
-    # Utilities
-    generate_job_reference,
+    # Energy Contracts
+    EnergyContractMaster,
 )
 
-# Proposals & Financial
+
+# ============================================================
+# MASTER DATA MODELS - Reference Tables
+# ============================================================
+
+from .masters import (
+    CountryMaster,
+    CurrencyMaster,
+    DesignationMaster,
+    ServicesMaster,
+    UOMMaster,
+    StageMaster,
+    SupplierMaster,
+    RoleMaster,
+    PermissionCatalog,
+    RolePermissionMapping,
+)
+
+
+# ============================================================
+# PROPOSAL & INVOICE MODELS
+# ============================================================
+
 from .core_proposals import (
-    Product, 
-    ProductCategory,
-    Proposal, 
-    ProposalItem,
-    Invoice, 
-    InvoiceLineItem,
-    Payment,
+    ProposalMaster,
+    ProposalDetails,
+    InvoiceMaster,
+    InvoiceDetails,
 )
 
-# Documents & Activities
+
+# ============================================================
+# DOCUMENT & ACTIVITY MODELS
+# ============================================================
+
 from .core_documents import (
-    OpportunityDocument, 
-    Activity, 
+    Activity,
     OpportunityNote,
-    DocumentTemplate, 
-    FormSubmission, 
+    DocumentTemplate,
+    FormSubmission,
     CustomerFormData,
-    DataImport, 
-    AuditLog, 
+    DataImport,
+    AuditLog,
     VersionedSnapshot,
-    ChatConversation, 
-    ChatMessage, 
+    ChatConversation,
+    ChatMessage,
     ChatHistory,
 )
 
@@ -77,7 +126,6 @@ try:
     )
     EDUCATION_MODULE_AVAILABLE = True
 except ImportError:
-    # Education module not installed or enabled
     EDUCATION_MODULE_AVAILABLE = False
     TestResult = None
     Certificate = None
@@ -94,11 +142,10 @@ try:
         CuttingList, 
         ApplianceCatalog, 
         DrawingDocument,
-        Drawing  # NEW - Drawing Analyser
+        Drawing
     )
     INTERIOR_MODULE_AVAILABLE = True
 except ImportError:
-    # Interior design module not installed or enabled
     INTERIOR_MODULE_AVAILABLE = False
     Project = None
     KitchenChecklist = None
@@ -107,7 +154,17 @@ except ImportError:
     CuttingList = None
     ApplianceCatalog = None
     DrawingDocument = None
-    Drawing = None  # NEW
+    Drawing = None
+
+
+# ============================================================
+# LEGACY MODELS - Backward Compatibility Only
+# ============================================================
+# NOTE: Legacy models are available but should NOT be used for new development.
+# They use the OLD schema (UUIDs, default schema).
+# Import them only when needed for backward compatibility with existing routes.
+
+LEGACY_MODELS_AVAILABLE = True  # Legacy models exist in the legacy/ folder
 
 
 # ============================================================
@@ -115,37 +172,63 @@ except ImportError:
 # ============================================================
 
 __all__ = [
-    # Enums
-    'STAGE_ENUM', 'CONTACT_MADE_ENUM', 'PREFERRED_CONTACT_ENUM',
-    'DOCUMENT_TEMPLATE_TYPE_ENUM', 'PAYMENT_METHOD_ENUM',
-    'AUDIT_ACTION_ENUM', 'ASSIGNMENT_TYPE_ENUM',
+    # Tenancy Models (NEW - StreemLyne_MT schema)
+    'TenantMaster',
+    'SubscriptionPlan',
+    'ModuleMaster',
+    'SubscriptionModuleMapping',
+    'TenantModuleMapping',
+    'TenantSubscription',
     
-    # Core Models
-    'Tenant', 'User', 'LoginAttempt', 'Session',
-    'Customer', 'Opportunity', 'Job',
-    'Team', 'TeamMember', 'Salesperson',
-    'Assignment',
+    # Core Business Models (NEW - StreemLyne_MT schema)
+    'ClientMaster',
+    'ClientInteractions',
+    'EmployeeMaster',
+    'UserMaster',
+    'UserRoleMapping',
+    'CustomerAuth',
+    'CustomerPasswordReset',
+    'OpportunityDetails',
+    'ProjectDetails',
+    'CaseDocuments',
+    'CustomerDocuments',
+    'EnergyContractMaster',
     
-    # Financial
-    'Product', 'ProductCategory',
-    'Proposal', 'ProposalItem',
-    'Invoice', 'InvoiceLineItem',
-    'Payment',
+    # Master Data Models (NEW - StreemLyne_MT schema)
+    'CountryMaster',
+    'CurrencyMaster',
+    'DesignationMaster',
+    'ServicesMaster',
+    'UOMMaster',
+    'StageMaster',
+    'SupplierMaster',
+    'RoleMaster',
+    'PermissionCatalog',
+    'RolePermissionMapping',
     
-    # Documents
-    'OpportunityDocument', 'Activity', 'OpportunityNote',
-    'DocumentTemplate', 'FormSubmission', 'CustomerFormData',
-    'DataImport', 'AuditLog', 'VersionedSnapshot',
+    # Proposal & Invoice Models (NEW - StreemLyne_MT schema)
+    'ProposalMaster',
+    'ProposalDetails',
+    'InvoiceMaster',
+    'InvoiceDetails',
     
-    # Chat
-    'ChatConversation', 'ChatMessage', 'ChatHistory',
-    
-    # Utilities
-    'generate_job_reference',
+    # Document & Activity Models
+    'Activity',
+    'OpportunityNote',
+    'DocumentTemplate',
+    'FormSubmission',
+    'CustomerFormData',
+    'DataImport',
+    'AuditLog',
+    'VersionedSnapshot',
+    'ChatConversation',
+    'ChatMessage',
+    'ChatHistory',
     
     # Module availability flags
     'EDUCATION_MODULE_AVAILABLE',
     'INTERIOR_MODULE_AVAILABLE',
+    'LEGACY_MODELS_AVAILABLE',
 ]
 
 # Add education models to exports if available
@@ -159,12 +242,12 @@ if INTERIOR_MODULE_AVAILABLE:
     __all__.extend([
         'Project', 'KitchenChecklist', 'BedroomChecklist',
         'MaterialOrder', 'CuttingList', 'ApplianceCatalog', 'DrawingDocument',
-        'Drawing'  # NEW
+        'Drawing'
     ])
 
 
 # ============================================================
-# HELPER FUNCTION TO CHECK MODULE AVAILABILITY
+# HELPER FUNCTIONS
 # ============================================================
 
 def is_module_available(module_name: str) -> bool:
@@ -172,7 +255,7 @@ def is_module_available(module_name: str) -> bool:
     Check if a module is available
     
     Args:
-        module_name: 'education' or 'interior_design'
+        module_name: 'education', 'interior_design', or 'legacy'
     
     Returns:
         bool: True if module is available
@@ -181,6 +264,8 @@ def is_module_available(module_name: str) -> bool:
         return EDUCATION_MODULE_AVAILABLE
     elif module_name == 'interior_design':
         return INTERIOR_MODULE_AVAILABLE
+    elif module_name == 'legacy':
+        return LEGACY_MODELS_AVAILABLE
     return False
 
 
@@ -196,4 +281,59 @@ def get_available_modules() -> list:
         modules.append('education')
     if INTERIOR_MODULE_AVAILABLE:
         modules.append('interior_design')
+    if LEGACY_MODELS_AVAILABLE:
+        modules.append('legacy')
     return modules
+
+
+def get_new_schema_models() -> list:
+    """
+    Get list of models using the new StreemLyne_MT schema
+    
+    Returns:
+        list: List of model class names using new schema
+    """
+    return [
+        # Tenancy
+        'TenantMaster', 'SubscriptionPlan', 'ModuleMaster',
+        'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
+        
+        # Core
+        'ClientMaster', 'ClientInteractions', 'EmployeeMaster', 'UserMaster',
+        'UserRoleMapping', 'CustomerAuth', 'CustomerPasswordReset',
+        'OpportunityDetails', 'ProjectDetails', 'CaseDocuments', 
+        'CustomerDocuments', 'EnergyContractMaster',
+        
+        # Masters
+        'CountryMaster', 'CurrencyMaster', 'DesignationMaster',
+        'ServicesMaster', 'UOMMaster', 'StageMaster', 'SupplierMaster',
+        'RoleMaster', 'PermissionCatalog', 'RolePermissionMapping',
+        
+        # Proposals
+        'ProposalMaster', 'ProposalDetails', 'InvoiceMaster', 'InvoiceDetails',
+    ]
+
+
+def get_legacy_schema_models() -> list:
+    """
+    Get list of models using the legacy/default schema
+    
+    Returns:
+        list: List of model class names using legacy schema
+    """
+    return [
+        # Legacy Core
+        'Tenant', 'User', 'LoginAttempt', 'Session',
+        'Customer', 'Opportunity', 'Job',
+        'Team', 'TeamMember', 'Salesperson', 'Assignment',
+        
+        # Legacy Proposals
+        'Product', 'ProductCategory', 'Proposal', 'ProposalItem',
+        'Invoice', 'InvoiceLineItem', 'Payment',
+        
+        # Legacy Documents
+        'OpportunityDocument', 'Activity', 'OpportunityNote',
+        'DocumentTemplate', 'FormSubmission', 'CustomerFormData',
+        'DataImport', 'AuditLog', 'VersionedSnapshot',
+        'ChatConversation', 'ChatMessage', 'ChatHistory',
+    ]
