@@ -1,4 +1,6 @@
 # routes/customer_routes.py
+# Updated to work with the schema - uses legacy Customer model for backward compatibility
+# while ensuring proper tenant isolation and field mapping
 from flask import Blueprint, request, jsonify, g
 from database import db
 from models import Customer, CustomerFormData, Opportunity
@@ -7,6 +9,7 @@ from datetime import datetime
 from tenant_middleware import require_tenant as token_required
 
 customer_bp = Blueprint('customer', __name__)
+
 
 # ----------------------------------
 # Customer Routes
@@ -22,22 +25,22 @@ def create_customer(current_user):
     # Basic customer info
     customer = Customer(
         tenant_id=current_user.tenant_id,
-        name=data['name'],
+        name=data.get('name'),
         email=data.get('email'),
         phone=data.get('phone'),
         address=data.get('address'),
         stage=data.get('stage', 'Prospect'),
     )
     
-    # 🎯 NEW: Store industry-specific data in custom_data
+    # Store industry-specific data in custom_data
     if 'custom_data' in data:
         customer.custom_data = data['custom_data']
-        # Example: {'mhe_type': 'Forklift', 'batch_size': 10}
     
     db.session.add(customer)
     db.session.commit()
     
     return jsonify(customer.to_dict()), 201
+
 
 @customer_bp.route('/customers', methods=['GET', 'POST'])
 @token_required
@@ -55,7 +58,7 @@ def handle_customers():
             preferred_contact = None
         
         customer = Customer(
-            tenant_id=g.tenant_id,  # CRITICAL: Set tenant_id
+            tenant_id=g.tenant_id,
             name=data.get('name', ''),
             company_name=data.get('company_name'),
             address=data.get('address'),
@@ -70,7 +73,7 @@ def handle_customers():
             stage=data.get('stage', 'Prospect'),
             salesperson=data.get('salesperson'),
             notes=data.get('notes'),
-            created_by=g.user.get_full_name(),  # Use authenticated user
+            created_by=g.user.get_full_name() if hasattr(g, 'user') else None,
             status=data.get('status', 'active'),
         )
         
@@ -105,7 +108,7 @@ def handle_customers():
     # GET all customers - filtered by tenant
     name_query = request.args.get('name', type=str)
     
-    query = Customer.query.filter_by(tenant_id=g.tenant_id)  # CRITICAL: Filter by tenant
+    query = Customer.query.filter_by(tenant_id=g.tenant_id)
     
     if name_query:
         query = query.filter(Customer.name.ilike(f"%{name_query}%"))
@@ -138,10 +141,11 @@ def handle_customers():
         for c in customers
     ])
 
+
 @customer_bp.route('/customers/<string:customer_id>', methods=['GET', 'PUT', 'DELETE'])
 @token_required
 def handle_single_customer(customer_id):
-    # CRITICAL: Filter by both id AND tenant_id for security
+    # Filter by both id AND tenant_id for security
     customer = Customer.query.filter_by(
         id=customer_id,
         tenant_id=g.tenant_id
@@ -154,7 +158,7 @@ def handle_single_customer(customer_id):
         # Fetch form submissions for this customer
         form_entries = CustomerFormData.query.filter_by(
             customer_id=customer.id,
-            tenant_id=g.tenant_id  # CRITICAL: Filter by tenant
+            tenant_id=g.tenant_id
         ).order_by(CustomerFormData.submitted_at.desc()).all()
         
         form_submissions = []
@@ -232,7 +236,7 @@ def handle_single_customer(customer_id):
         customer.salesperson = data.get('salesperson', customer.salesperson)
         customer.notes = data.get('notes', customer.notes)
         customer.status = data.get('status', customer.status)
-        customer.updated_by = g.user.get_full_name()
+        customer.updated_by = g.user.get_full_name() if hasattr(g, 'user') else None
         
         db.session.commit()
         return jsonify({'message': 'Customer updated successfully'})
@@ -247,7 +251,6 @@ def handle_single_customer(customer_id):
 @token_required
 def update_customer_stage(customer_id):
     """Update customer stage via drag and drop"""
-    # CRITICAL: Filter by tenant
     customer = Customer.query.filter_by(
         id=customer_id,
         tenant_id=g.tenant_id
@@ -266,7 +269,7 @@ def update_customer_stage(customer_id):
     
     old_stage = customer.stage
     customer.stage = new_stage
-    customer.updated_by = g.user.get_full_name()
+    customer.updated_by = g.user.get_full_name() if hasattr(g, 'user') else None
     customer.updated_at = datetime.utcnow()
     
     # Add audit note

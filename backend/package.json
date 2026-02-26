@@ -1,6 +1,7 @@
 {
   "devDependencies": {
-    "@types/jquery": "^3.5.33"
+    "@types/jquery": "^3.5.33",
+    "supabase": "^2.75.2"
   },
   "dependencies": {
     "openai": "^6.10.0"

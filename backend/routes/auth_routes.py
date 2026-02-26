@@ -645,3 +645,102 @@ def check_company():
     except Exception as e:
         print(f"❌ Check company error: {e}")
         return jsonify({'error': str(e)}), 500
+
+# ============================================================
+# NEW SCHEMA - Using EmployeeMaster and UserMaster
+# ============================================================
+
+@auth_bp.route('/new-login', methods=['POST'])
+def new_login():
+    """
+    Login using new schema (UserMaster/EmployeeMaster)
+    
+    POST /api/auth/new-login
+    {
+        "user_name": "admin",
+        "password": "password123"
+    }
+    """
+    data = request.get_json()
+    
+    if not data or 'user_name' not in data or 'password' not in data:
+        return jsonify({'error': 'user_name and password required'}), 400
+    
+    # Authenticate
+    from repositories import UserRepository
+    user_repo = UserRepository()
+    user = user_repo.authenticate(data['user_name'], data['password'])
+    
+    if not user:
+        return jsonify({'error': 'Invalid credentials'}), 401
+    
+    # Check if user has employee
+    if not user.employee:
+        return jsonify({'error': 'User account not properly configured'}), 500
+    
+    # Generate JWT token
+    from config import Config
+    token = user.generate_jwt_token(Config.SECRET_KEY)
+    
+    return jsonify({
+        'message': 'Login successful',
+        'token': token,
+        'user': user.to_dict()
+    }), 200
+
+
+@auth_bp.route('/new-register', methods=['POST'])
+def new_register():
+    """
+    Register new employee and user account
+    
+    POST /api/auth/new-register
+    {
+        "tenant_id": 1,
+        "employee_name": "John Doe",
+        "email": "john@example.com",
+        "phone": "555-0123",
+        "user_name": "johndoe",
+        "password": "password123"
+    }
+    """
+    data = request.get_json()
+    
+    required_fields = ['tenant_id', 'employee_name', 'email', 'user_name', 'password']
+    if not all(field in data for field in required_fields):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    try:
+        # Set tenant context
+        from flask import g
+        g.tenant_id = data['tenant_id']
+        
+        # Create employee
+        from services import EmployeeService
+        employee_service = EmployeeService()
+        employee = employee_service.create_employee(
+            employee_name=data['employee_name'],
+            email=data['email'],
+            phone=data.get('phone'),
+            designation_id=data.get('designation_id')
+        )
+        
+        # Create user account
+        user = employee_service.create_user_account(
+            employee_id=employee.employee_id,
+            user_name=data['user_name'],
+            password=data['password']
+        )
+        
+        # Generate token
+        from config import Config
+        token = user.generate_jwt_token(Config.SECRET_KEY)
+        
+        return jsonify({
+            'message': 'Registration successful',
+            'token': token,
+            'user': user.to_dict()
+        }), 201
+        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400

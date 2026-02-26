@@ -294,7 +294,7 @@ class StageMaster(db.Model):
             'preceding_stage_id': self.preceding_stage_id,
             'stage_type': self.stage_type,
             'stage_type_name': self.get_stage_type_name(),
-            'next_stage_ids': [s.stage_id for s in self.next_stages] if self.next_stages else []
+            'next_stage_ids': [s.stage_id for s in self.next_stages.all()] if self.next_stages else []
         }
     
     def get_stage_type_name(self):
