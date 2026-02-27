@@ -1,81 +1,70 @@
-"""
-Authentication Middleware
-Verifies JWT tokens and loads user information
-"""
-
 from functools import wraps
-from flask import request, g, jsonify
-import jwt
 from typing import Optional
-from models import UserMaster
+
+import jwt
+from flask import current_app, g, jsonify, request
+
+from database import db
+from models import EmployeeMaster, TenantMaster, UserMaster
 
 
 def get_current_user() -> Optional[UserMaster]:
-    """
-    Get current authenticated user from Flask g context
-    
-    Returns:
-        UserMaster instance or None
-    """
-    return getattr(g, 'current_user', None)
+    return getattr(g, "current_user", None)
+
+
+def get_current_employee() -> Optional[EmployeeMaster]:
+    return getattr(g, "current_employee", None)
+
+
+def _resolve_user_from_token(token: str):
+    """Returns (user, employee, tenant, None) on success or (None, None, None, (response, status)) on failure."""
+    try:
+        payload = jwt.decode(token, current_app.config["SECRET_KEY"], algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return None, None, None, (jsonify({"error": "Token expired", "message": "Please log in again"}), 401)
+    except jwt.InvalidTokenError:
+        return None, None, None, (jsonify({"error": "Invalid token", "message": "Authentication token is invalid"}), 401)
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        return None, None, None, (jsonify({"error": "Invalid token", "message": "Token is missing user_id claim"}), 401)
+
+    user = db.session.get(UserMaster, user_id)
+    if not user:
+        return None, None, None, (jsonify({"error": "Invalid token", "message": "User not found"}), 401)
+
+    if not user.employee_id:
+        return None, None, None, (jsonify({"error": "Account misconfigured", "message": "User has no linked employee record"}), 403)
+
+    employee = db.session.get(EmployeeMaster, user.employee_id)
+    if not employee:
+        return None, None, None, (jsonify({"error": "Account misconfigured", "message": "Employee record not found"}), 403)
+
+    tenant = db.session.get(TenantMaster, employee.tenant_id)
+    if not tenant or not tenant.is_active:
+        return None, None, None, (jsonify({"error": "Tenant inactive", "message": "Your organisation's account is inactive"}), 403)
+
+    return user, employee, tenant, None
 
 
 def auth_required(f):
-    """
-    Decorator to require authentication
-    
-    Verifies JWT token and loads user into g.current_user
-    
-    Usage:
-        @app.route('/api/profile')
-        @auth_required
-        def get_profile():
-            user = get_current_user()
-            return jsonify(user.to_dict())
-    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Get token from Authorization header
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            return jsonify({
-                'error': 'Missing token',
-                'message': 'Authorization header with Bearer token required'
-            }), 401
-        
-        token = auth_header.split(' ')[1]
-        
-        try:
-            from flask import current_app
-            user = UserMaster.verify_jwt_token(token, current_app.config['SECRET_KEY'])
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Missing token", "message": "Authorization header with Bearer token required"}), 401
 
-            
-            if user is None:
-                return jsonify({
-                    'error': 'Invalid token',
-                    'message': 'User not found or account inactive'
-                }), 401
-            
-            # Load user into context
-            g.current_user = user
-            g.user_id = user.user_id
-            
-            # Load employee and tenant_id
-            if user.employee:
-                g.employee_id = user.employee.employee_id
-                g.tenant_id = user.employee.tenant_id
-            
-            return f(*args, **kwargs)
-            
-        except jwt.ExpiredSignatureError:
-            return jsonify({
-                'error': 'Token expired',
-                'message': 'Please log in again'
-            }), 401
-        except jwt.InvalidTokenError:
-            return jsonify({
-                'error': 'Invalid token',
-                'message': 'Authentication token is invalid'
-            }), 401
-    
+        token = auth_header.split(" ", 1)[1]
+        user, employee, tenant, err = _resolve_user_from_token(token)
+        if err is not None:
+            return err
+
+        g.current_user     = user
+        g.current_employee = employee
+        g.user_id          = user.user_id
+        g.employee_id      = employee.employee_id
+        g.tenant_id        = employee.tenant_id
+
+        return f(*args, **kwargs)
+
     return decorated_function

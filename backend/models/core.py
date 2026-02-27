@@ -154,6 +154,29 @@ class EmployeeMaster(db.Model):
     def __repr__(self):
         return f'<EmployeeMaster {self.employee_id}: {self.employee_name}>'
 
+    def get_roles(self) -> list:
+        """Get list of role IDs from the comma-separated role_ids field"""
+        if not self.role_ids:
+            return []
+        try:
+            return [int(rid.strip()) for rid in self.role_ids.split(',') if rid.strip()]
+        except (ValueError, AttributeError):
+            return []
+    
+    def add_role(self, role_id: int) -> None:
+        """Add a role ID to the comma-separated role_ids field"""
+        current_roles = self.get_roles()
+        if role_id not in current_roles:
+            current_roles.append(role_id)
+            self.role_ids = ','.join(map(str, current_roles))
+    
+    def remove_role(self, role_id: int) -> None:
+        """Remove a role ID from the comma-separated role_ids field"""
+        current_roles = self.get_roles()
+        if role_id in current_roles:
+            current_roles.remove(role_id)
+            self.role_ids = ','.join(map(str, current_roles)) if current_roles else None
+    
     def to_dict(self):
         return {
             'employee_id': self.employee_id,

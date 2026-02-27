@@ -5,7 +5,7 @@ Handles permission and role database operations
 
 from models import (
     PermissionCatalog, RoleMaster, RolePermissionMapping,
-    ModuleMaster, SubscriptionPlans, SubscriptionModuleMapping
+    ModuleMaster, SubscriptionPlan, SubscriptionModuleMapping
 )
 from .base_repository import BaseRepository
 from typing import List, Optional

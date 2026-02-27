@@ -1,99 +1,64 @@
-"""
-Tenant Context Middleware
-Extracts tenant_id from JWT and injects into Flask g context
-"""
-
 from functools import wraps
-from flask import request, g, jsonify
-import jwt
 from typing import Optional
-from models import UserMaster
 
+import jwt
+from flask import current_app, g, jsonify, request
+
+from database import db
+from models import EmployeeMaster, UserMaster
+
+_PUBLIC_ENDPOINTS = frozenset({"login", "register", "health", "static"})
 
 
 def get_current_tenant_id() -> Optional[int]:
-    """
-    Get current tenant_id from Flask g context
-    
-    Returns:
-        tenant_id or None if not set
-    """
-    return getattr(g, 'tenant_id', None)
+    return getattr(g, "tenant_id", None)
 
 
-def inject_tenant_context():
-    """
-    Extract tenant_id from JWT token and inject into Flask g context
-    
-    This should be called BEFORE processing any request that needs tenant isolation.
-    Typically used as a before_request handler.
-    
-    Usage in app.py:
-        @app.before_request
-        def before_request():
-            inject_tenant_context()
-    """
-    # Skip for OPTIONS requests (CORS preflight)
-    if request.method == 'OPTIONS':
+def inject_tenant_context() -> None:
+    if request.method == "OPTIONS" or request.endpoint in _PUBLIC_ENDPOINTS:
         return
-    
-    # Skip for certain public endpoints
-    public_endpoints = ['login', 'register', 'health', 'static']
-    if request.endpoint in public_endpoints:
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
         return
-    
-    # Get token from Authorization header
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        # No token provided - might be public endpoint
-        return
-    
-    token = auth_header.split(' ')[1]
-    
+
+    token = auth_header.split(" ", 1)[1]
+
     try:
-        # Decode JWT, commented out cuz error during testing
-        # from config import Config
-        # payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+        payload = jwt.decode(token, current_app.config["SECRET_KEY"], algorithms=["HS256"])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return
 
-        from flask import current_app
-        payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+    user_id     = payload.get("user_id")
+    tenant_id   = payload.get("tenant_id")
+    employee_id = payload.get("employee_id")
 
-        
-        # Extract tenant_id
-        tenant_id = payload.get('tenant_id')
-        if tenant_id:
-            g.tenant_id = tenant_id
-            g.user_id = payload.get('user_id')
-            g.employee_id = payload.get('employee_id')
-            
-    except jwt.ExpiredSignatureError:
-        # Token expired - let auth_required handle it
-        pass
-    except jwt.InvalidTokenError:
-        # Invalid token - let auth_required handle it
-        pass
+    if tenant_id:
+        g.tenant_id   = tenant_id
+        g.user_id     = user_id
+        g.employee_id = employee_id
+        return
+
+    if not user_id:
+        return
+
+    user = db.session.get(UserMaster, user_id)
+    if not user or not user.employee_id:
+        return
+
+    employee = db.session.get(EmployeeMaster, user.employee_id)
+    if not employee:
+        return
+
+    g.tenant_id   = employee.tenant_id
+    g.user_id     = user.user_id
+    g.employee_id = employee.employee_id
 
 
 def tenant_required(f):
-    """
-    Decorator to ensure tenant_id is present in request context
-    
-    Usage:
-        @app.route('/api/clients')
-        @tenant_required
-        def get_clients():
-            tenant_id = get_current_tenant_id()
-            # ... fetch clients for tenant
-    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return jsonify({
-                'error': 'Tenant context not found',
-                'message': 'Invalid or missing authentication token'
-            }), 401
-        
+        if get_current_tenant_id() is None:
+            return jsonify({"error": "Tenant context not found", "message": "Invalid or missing authentication token"}), 401
         return f(*args, **kwargs)
-    
     return decorated_function
