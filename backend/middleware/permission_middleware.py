@@ -13,21 +13,23 @@ def permission_required(permission_code: str):
     """
     Decorator to require a specific permission
     
+    This decorator includes authentication check internally.
+    It can be used alone or with @auth_required (no harm in using both).
+    
     Args:
         permission_code: Permission code (e.g., 'client.create')
     
     Usage:
         @app.route('/api/clients', methods=['POST'])
-        @auth_required
-        @permission_required('client.create')
+        @permission_required('client.create')  # Handles auth internally
         def create_client():
             # User has 'client.create' permission
             pass
     """
     def decorator(f):
         @wraps(f)
-        @auth_required  # Ensure user is authenticated first
         def decorated_function(*args, **kwargs):
+            # Check authentication inline (avoids redundant @auth_required when used together)
             user = get_current_user()
             if user is None:
                 return jsonify({

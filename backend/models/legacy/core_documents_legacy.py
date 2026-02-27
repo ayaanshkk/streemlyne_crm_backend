@@ -7,7 +7,6 @@ are now defined in core_documents.py to avoid table name conflicts.
 Import those from the main models package instead.
 """
 
-import uuid
 import sys
 import os
 from datetime import datetime

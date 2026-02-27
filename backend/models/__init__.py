@@ -13,7 +13,7 @@
 # - core.py: Clients, opportunities, projects, employees, users (NEW - StreemLyne_MT)
 # - masters.py: Reference data (countries, currencies, etc.) (NEW - StreemLyne_MT)
 # - core_proposals.py: Proposals and invoices (NEW - StreemLyne_MT)
-# - core_documents.py: Documents, activities, chat (NEW/legacy mix)
+# - core_documents.py: Documents, activities, chat (app-level, no base DDL equivalent)
 # - modules/: Industry-specific modules (education, interior_design)
 # - legacy/: Legacy models for backward compatibility only
 #
@@ -212,7 +212,7 @@ __all__ = [
     'InvoiceMaster',
     'InvoiceDetails',
     
-    # Document & Activity Models
+    # Document & Activity Models (app-level, created via migration)
     'Activity',
     'OpportunityNote',
     'DocumentTemplate',
@@ -252,11 +252,11 @@ if INTERIOR_MODULE_AVAILABLE:
 
 def is_module_available(module_name: str) -> bool:
     """
-    Check if a module is available
-    
+    Check if a module is available.
+
     Args:
         module_name: 'education', 'interior_design', or 'legacy'
-    
+
     Returns:
         bool: True if module is available
     """
@@ -271,8 +271,8 @@ def is_module_available(module_name: str) -> bool:
 
 def get_available_modules() -> list:
     """
-    Get list of available modules
-    
+    Get list of available optional modules.
+
     Returns:
         list: List of available module names
     """
@@ -288,36 +288,44 @@ def get_available_modules() -> list:
 
 def get_new_schema_models() -> list:
     """
-    Get list of models using the new StreemLyne_MT schema
-    
+    Get list of models using the new StreemLyne_MT schema.
+    Includes both DDL-defined tables and app-level tables created via migration.
+
     Returns:
         list: List of model class names using new schema
     """
     return [
-        # Tenancy
+        # Tenancy (StreemLyne_MT DDL)
         'TenantMaster', 'SubscriptionPlan', 'ModuleMaster',
         'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
-        
-        # Core
+
+        # Core (StreemLyne_MT DDL)
         'ClientMaster', 'ClientInteractions', 'EmployeeMaster', 'UserMaster',
         'UserRoleMapping', 'CustomerAuth', 'CustomerPasswordReset',
-        'OpportunityDetails', 'ProjectDetails', 'CaseDocuments', 
+        'OpportunityDetails', 'ProjectDetails', 'CaseDocuments',
         'CustomerDocuments', 'EnergyContractMaster',
-        
-        # Masters
+
+        # Masters (StreemLyne_MT DDL)
         'CountryMaster', 'CurrencyMaster', 'DesignationMaster',
         'ServicesMaster', 'UOMMaster', 'StageMaster', 'SupplierMaster',
         'RoleMaster', 'PermissionCatalog', 'RolePermissionMapping',
-        
-        # Proposals
+
+        # Proposals (StreemLyne_MT DDL)
         'ProposalMaster', 'ProposalDetails', 'InvoiceMaster', 'InvoiceDetails',
+
+        # Documents/Activities (app-level — NOT in base DDL, require migration)
+        'Activity', 'OpportunityNote', 'DocumentTemplate', 'FormSubmission',
+        'CustomerFormData', 'DataImport', 'AuditLog', 'VersionedSnapshot',
+        'ChatConversation', 'ChatMessage', 'ChatHistory',
     ]
 
 
 def get_legacy_schema_models() -> list:
     """
-    Get list of models using the legacy/default schema
-    
+    Get list of models using the legacy/default schema (UUIDs, no StreemLyne_MT prefix).
+    These live in models/legacy/ and are kept only for backward compatibility.
+    Remove entries from this list as routes are migrated to new schema models.
+
     Returns:
         list: List of model class names using legacy schema
     """
@@ -326,14 +334,11 @@ def get_legacy_schema_models() -> list:
         'Tenant', 'User', 'LoginAttempt', 'Session',
         'Customer', 'Opportunity', 'Job',
         'Team', 'TeamMember', 'Salesperson', 'Assignment',
-        
+
         # Legacy Proposals
         'Product', 'ProductCategory', 'Proposal', 'ProposalItem',
         'Invoice', 'InvoiceLineItem', 'Payment',
-        
-        # Legacy Documents
-        'OpportunityDocument', 'Activity', 'OpportunityNote',
-        'DocumentTemplate', 'FormSubmission', 'CustomerFormData',
-        'DataImport', 'AuditLog', 'VersionedSnapshot',
-        'ChatConversation', 'ChatMessage', 'ChatHistory',
+
+        # Legacy Documents (only OpportunityDocument — no new-schema equivalent yet)
+        'OpportunityDocument',
     ]

@@ -54,7 +54,7 @@ class TenantMaster(db.Model):
     tenant_contact_name = db.Column(db.String(255))
     
     # Dates
-    onboarding_date = db.Column(db.Date)
+    onboarding_Date = db.Column(db.Date)
     
     # Status
     is_active = db.Column(db.Boolean, default=True)
@@ -78,7 +78,7 @@ class TenantMaster(db.Model):
             'tenant_id': self.tenant_id,
             'tenant_company_name': self.tenant_company_name,
             'tenant_contact_name': self.tenant_contact_name,
-            'onboarding_date': self.onboarding_date.isoformat() if self.onboarding_date else None,
+            'onboarding_Date': self.onboarding_Date.isoformat() if self.onboarding_Date else None,
             'is_active': self.is_active,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None

@@ -46,10 +46,6 @@ def auth_required(f):
         token = auth_header.split(' ')[1]
         
         try:
-            # Verify token, commented otu error durign testing
-            # from config import Config
-            # user = UserMaster.verify_jwt_token(token, Config.SECRET_KEY)
-
             from flask import current_app
             user = UserMaster.verify_jwt_token(token, current_app.config['SECRET_KEY'])
 

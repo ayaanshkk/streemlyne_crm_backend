@@ -5,19 +5,15 @@ Handles documents, activities, notes, templates, forms, and audit logs
 
 SCHEMA: StreemLyne_MT
 
-MAJOR CHANGES FROM OLD SCHEMA:
-- All tables now use StreemLyne_MT schema
-- UUID tenant/customer/opportunity IDs → SmallInteger references
-- Added proper foreign key relationships to new schema tables
-- Removed legacy table references
+NOTE: The tables defined here (activities, opportunity_notes, audit_logs, etc.)
+are application-level tables that do not appear in the base schema DDL.
+They must be created via Alembic migration or db.create_all().
 """
 
-import uuid
 import sys
 import os
 from datetime import datetime
 
-# Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import db
@@ -28,47 +24,30 @@ from database import db
 # ============================================================
 
 class Activity(db.Model):
-    """
-    Activities and tasks for opportunities
-    
-    SCHEMA: StreemLyne_MT.activities
-    
-    MIGRATION NOTE:
-    - Old: UUID tenant_id, opportunity_id references
-    - New: SmallInteger tenant_id, opportunity_id references to StreemLyne_MT
-    """
+    """SCHEMA: StreemLyne_MT.activities"""
     __tablename__ = 'activities'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
-    
-    # Activity Details
     activity_type = db.Column(db.String(50), nullable=False)  # meeting, call, email, task
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text)
-    
-    # Schedule
     scheduled_date = db.Column(db.DateTime)
     completed_date = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='Scheduled')  # Scheduled, Completed, Cancelled
-    
-    # Assignment
     assigned_to = db.Column(db.String(200))
     created_by = db.Column(db.String(200))
-    
-    # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='activities')
     opportunity = db.relationship('OpportunityDetails', backref='activities')
 
     def __repr__(self):
         return f'<Activity {self.title}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -92,30 +71,24 @@ class Activity(db.Model):
 # ============================================================
 
 class OpportunityNote(db.Model):
-    """
-    Notes for opportunities
-    
-    SCHEMA: StreemLyne_MT.opportunity_notes
-    """
+    """SCHEMA: StreemLyne_MT.opportunity_notes"""
     __tablename__ = 'opportunity_notes'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
-    
     content = db.Column(db.Text, nullable=False)
     note_type = db.Column(db.String(50), default='general')
     author = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='opportunity_notes')
     opportunity = db.relationship('OpportunityDetails', backref='notes')
 
     def __repr__(self):
         return f'<OpportunityNote {self.id}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -133,31 +106,24 @@ class OpportunityNote(db.Model):
 # ============================================================
 
 class DocumentTemplate(db.Model):
-    """
-    Document templates library
-    
-    SCHEMA: StreemLyne_MT.document_templates
-    """
+    """SCHEMA: StreemLyne_MT.document_templates"""
     __tablename__ = 'document_templates'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    
     name = db.Column(db.String(120), nullable=False)
-    template_type = db.Column(db.String(50), nullable=False)  # Invoice, Receipt, Proposal, Contract, etc.
+    template_type = db.Column(db.String(50), nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
     merge_fields = db.Column(db.JSON)
-    
     uploaded_by = db.Column(db.String(200))
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='document_templates')
 
     def __repr__(self):
         return f'<DocumentTemplate {self.name}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -176,31 +142,25 @@ class DocumentTemplate(db.Model):
 # ============================================================
 
 class FormSubmission(db.Model):
-    """
-    Form submissions from external sources
-    
-    SCHEMA: StreemLyne_MT.form_submissions
-    """
+    """SCHEMA: StreemLyne_MT.form_submissions"""
     __tablename__ = 'form_submissions'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=True, index=True)
     client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
-    
     form_data = db.Column(db.Text, nullable=False)
     source = db.Column(db.String(100))
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
     processed = db.Column(db.Boolean, default=False)
     processed_at = db.Column(db.DateTime)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='form_submissions')
     client = db.relationship('ClientMaster', backref='form_submissions')
 
     def __repr__(self):
         return f'<FormSubmission {self.id}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -219,29 +179,23 @@ class FormSubmission(db.Model):
 # ============================================================
 
 class CustomerFormData(db.Model):
-    """
-    Customer-specific form data
-    
-    SCHEMA: StreemLyne_MT.customer_form_data
-    """
+    """SCHEMA: StreemLyne_MT.customer_form_data"""
     __tablename__ = 'customer_form_data'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=True, index=True)
     client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
-    
     form_data = db.Column(db.Text, nullable=False)
     token_used = db.Column(db.String(64), nullable=False)
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='customer_form_data')
     client = db.relationship('ClientMaster', backref='form_data')
 
     def __repr__(self):
         return f'<CustomerFormData {self.id} for Client {self.client_id}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -258,34 +212,27 @@ class CustomerFormData(db.Model):
 # ============================================================
 
 class DataImport(db.Model):
-    """
-    Track bulk data imports
-    
-    SCHEMA: StreemLyne_MT.data_imports
-    """
+    """SCHEMA: StreemLyne_MT.data_imports"""
     __tablename__ = 'data_imports'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=True, index=True)
-    
     filename = db.Column(db.String(255), nullable=False)
     import_type = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default='processing')
     records_processed = db.Column(db.Integer, default=0)
     records_failed = db.Column(db.Integer, default=0)
     error_log = db.Column(db.Text)
-    
     imported_by = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='data_imports')
 
     def __repr__(self):
         return f'<DataImport {self.filename} ({self.status})>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -307,34 +254,26 @@ class DataImport(db.Model):
 # ============================================================
 
 class AuditLog(db.Model):
-    """
-    Audit trail for all entity changes
-    
-    SCHEMA: StreemLyne_MT.audit_logs
-    """
+    """SCHEMA: StreemLyne_MT.audit_logs"""
     __tablename__ = 'audit_logs'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=True, index=True)
-    
     entity_type = db.Column(db.String(120), nullable=False)
     entity_id = db.Column(db.SmallInteger, nullable=False)
     action = db.Column(db.String(20), nullable=False)  # create, update, delete
-    
     changed_by = db.Column(db.String(200))
     changed_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
     change_summary = db.Column(db.JSON)
     previous_snapshot = db.Column(db.JSON)
     new_snapshot = db.Column(db.JSON)
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='audit_logs')
 
     def __repr__(self):
         return f'<AuditLog {self.entity_type} {self.entity_id} {self.action}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -355,32 +294,25 @@ class AuditLog(db.Model):
 # ============================================================
 
 class VersionedSnapshot(db.Model):
-    """
-    Version history for entities
-    
-    SCHEMA: StreemLyne_MT.versioned_snapshots
-    """
+    """SCHEMA: StreemLyne_MT.versioned_snapshots"""
     __tablename__ = 'versioned_snapshots'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=True, index=True)
-    
     entity_type = db.Column(db.String(120), nullable=False)
     entity_id = db.Column(db.SmallInteger, nullable=False)
     version_number = db.Column(db.Integer, nullable=False)
     reason = db.Column(db.String(255))
     snapshot = db.Column(db.JSON, nullable=False)
-    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.String(200))
 
-    # Relationships
     tenant = db.relationship('TenantMaster', backref='versioned_snapshots')
 
     def __repr__(self):
         return f'<VersionedSnapshot {self.entity_type} v{self.version_number}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -400,34 +332,26 @@ class VersionedSnapshot(db.Model):
 # ============================================================
 
 class ChatConversation(db.Model):
-    """
-    Chat conversations with AI assistant
-    
-    SCHEMA: StreemLyne_MT.chat_conversations
-    """
+    """SCHEMA: StreemLyne_MT.chat_conversations"""
     __tablename__ = 'chat_conversations'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     user_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.User_Master.user_id'), nullable=False, index=True)
-    
-    # Conversation Metadata
     title = db.Column(db.String(255), default='New Conversation')
     session_id = db.Column(db.String(100), nullable=False, index=True)
-    
-    # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='chat_conversations')
     user = db.relationship('UserMaster', backref='chat_conversations')
+    # cascade delete-orphan: deleting a conversation deletes its messages
     messages = db.relationship('ChatMessage', back_populates='conversation', lazy=True, cascade='all, delete-orphan')
-    
+
     def __repr__(self):
         return f'<ChatConversation {self.id}: {self.title}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -437,7 +361,8 @@ class ChatConversation(db.Model):
             'session_id': self.session_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'message_count': self.messages.count() if self.messages else 0
+            # FIX: messages is not a dynamic relationship — len() not .count()
+            'message_count': len(self.messages) if self.messages else 0
         }
 
 
@@ -446,38 +371,27 @@ class ChatConversation(db.Model):
 # ============================================================
 
 class ChatMessage(db.Model):
-    """
-    Individual messages within conversations
-    
-    SCHEMA: StreemLyne_MT.chat_messages
-    """
+    """SCHEMA: StreemLyne_MT.chat_messages"""
     __tablename__ = 'chat_messages'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     user_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.User_Master.user_id'), nullable=False, index=True)
     conversation_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.chat_conversations.id'), nullable=False, index=True)
-    
-    # Message Content
     role = db.Column(db.String(20), nullable=False)  # 'user' or 'assistant'
     content = db.Column(db.Text, nullable=False)
-    
-    # Tool Usage (for AI function calls)
-    function_calls = db.Column(db.JSON)  # Store tool calls made by assistant
-    tool_results = db.Column(db.JSON)    # Store results from tools
-    
-    # Timestamp
+    function_calls = db.Column(db.JSON)
+    tool_results = db.Column(db.JSON)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='chat_messages')
     user = db.relationship('UserMaster', backref='chat_messages')
     conversation = db.relationship('ChatConversation', back_populates='messages')
-    
+
     def __repr__(self):
         return f'<ChatMessage {self.id}: {self.role}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -491,41 +405,30 @@ class ChatMessage(db.Model):
 
 
 # ============================================================
-# CHAT HISTORY (Simplified version)
+# CHAT HISTORY (Simplified blob storage)
 # ============================================================
 
 class ChatHistory(db.Model):
-    """
-    Simple chat history storage as JSON blobs
-    
-    SCHEMA: StreemLyne_MT.chat_history
-    """
+    """SCHEMA: StreemLyne_MT.chat_history"""
     __tablename__ = 'chat_history'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
     user_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.User_Master.user_id'), nullable=False, index=True)
-    
-    # Store entire chat as JSON
     session_id = db.Column(db.String(100), nullable=False, index=True)
-    messages = db.Column(db.JSON, nullable=False)  # Array of {role, content, timestamp}
-    
-    # Metadata
+    messages = db.Column(db.JSON, nullable=False)
     title = db.Column(db.String(255))
-    context = db.Column(db.JSON)  # Store context like client_id, project_id, etc.
-    
-    # Timestamps
+    context = db.Column(db.JSON)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='chat_history')
     user = db.relationship('UserMaster', backref='chat_history')
-    
+
     def __repr__(self):
         return f'<ChatHistory {self.id} - Session: {self.session_id}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,

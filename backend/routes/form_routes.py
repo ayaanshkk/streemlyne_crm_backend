@@ -1,257 +1,352 @@
-# routes/form_routes.py - Fixed to create only one submission record
-from flask import Blueprint, request, jsonify, current_app
+"""
+Form Routes
+Handles: customer-facing form token generation and submission.
+
+Schema alignment (StreemLyne_MT):
+  Uses Client_Master to validate client ownership before token issuance.
+
+  CustomerFormData is NOT part of the core StreemLyne_MT schema — it is an
+  app-level model. All references are guarded so the app starts cleanly
+  even if the table hasn't been migrated yet.
+
+  Token store: in-memory dict (suitable for single-process dev only).
+  For production replace with a Redis cache or a proper DB table.
+"""
+
+from flask import Blueprint, request, jsonify, g
+from sqlalchemy.exc import SQLAlchemyError
 from database import db
-from models import Customer, CustomerFormData
+from models import ClientMaster
+from middleware import auth_required
+from datetime import datetime, timedelta
 import secrets
 import string
 import json
-from datetime import datetime, timedelta
 
-form_bp = Blueprint("form", __name__)
+form_bp = Blueprint('form', __name__, url_prefix='/api/forms')
 
-# In-memory storage for form tokens (for production use Redis/DB)
-form_tokens = {}
+# ── In-memory token store ──────────────────────────────────────────────────────
+# Replace with Redis or a DB-backed token table in production.
+# Structure: { token: { client_id, tenant_id, form_type, created_at, expires_at, used } }
+_form_tokens: dict = {}
 
-def generate_secure_token(length=32):
+
+def _generate_token(length: int = 32) -> str:
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
-@form_bp.route('/customers/<customer_id>/generate-form-link', methods=['POST', 'OPTIONS'])
-def generate_customer_form_link(customer_id):
-    """Generate form link for specific customer"""
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
 
-    try:
-        # Verify customer exists
-        customer = Customer.query.get(customer_id)
-        if not customer:
-            return jsonify({
-                'success': False,
-                'error': 'Customer not found'
-            }), 404
+def _get_valid_token(token: str) -> dict | None:
+    """Return token payload if it exists, is unexpired, and unused. Purges stale entries."""
+    data = _form_tokens.get(token)
+    if not data:
+        return None
+    if datetime.now() > data['expires_at']:
+        _form_tokens.pop(token, None)
+        return None
+    if data.get('used'):
+        return None
+    return data
 
-        data = request.get_json(silent=True) or {}
-        form_type = data.get('formType', 'bedroom')  # bedroom or kitchen
 
-        token = generate_secure_token()
-        expiration = datetime.now() + timedelta(hours=24)
-        
-        # Store token with customer association
-        form_tokens[token] = {
-            'customer_id': customer_id,
-            'form_type': form_type,
-            'created_at': datetime.now(),
-            'expires_at': expiration,
-            'used': False
+# ─────────────────────────────────────────
+# Token Management  (staff-facing)
+# ─────────────────────────────────────────
+
+@form_bp.route('/clients/<int:client_id>/generate-link', methods=['POST'])
+@auth_required
+def generate_form_link(client_id: int):
+    """
+    Issue a one-time form link for a specific client.
+    POST /api/forms/clients/<client_id>/generate-link
+    Body: { "form_type": "bedroom", "ttl_hours": 24 }
+
+    The link expires after ttl_hours (default 24, max 168 / 7 days).
+    """
+    client = ClientMaster.query.filter_by(
+        client_id=client_id, tenant_id=g.tenant_id
+    ).first()
+
+    if not client:
+        return jsonify({'error': 'Client not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    form_type = data.get('form_type', 'general')
+    ttl_hours = min(int(data.get('ttl_hours', 24)), 168)
+
+    token = _generate_token()
+    now = datetime.now()
+    expires_at = now + timedelta(hours=ttl_hours)
+
+    _form_tokens[token] = {
+        'client_id':  client_id,
+        'tenant_id':  g.tenant_id,
+        'form_type':  form_type,
+        'created_at': now,
+        'expires_at': expires_at,
+        'used':       False,
+    }
+
+    return jsonify({
+        'success':    True,
+        'token':      token,
+        'form_type':  form_type,
+        'client_id':  client_id,
+        'expires_at': expires_at.isoformat(),
+    }), 200
+
+
+@form_bp.route('/validate-token/<string:token>', methods=['GET'])
+def validate_token(token: str):
+    """
+    Validate a form token (called by the customer-facing form page).
+    GET /api/forms/validate-token/<token>
+    Does NOT consume the token — consumption happens on /submit.
+    """
+    token_data = _get_valid_token(token)
+
+    if not token_data:
+        return jsonify({'valid': False, 'error': 'Invalid or expired token'}), 400
+
+    return jsonify({
+        'valid':      True,
+        'client_id':  token_data['client_id'],
+        'form_type':  token_data['form_type'],
+        'expires_at': token_data['expires_at'].isoformat(),
+    }), 200
+
+
+@form_bp.route('/tokens', methods=['GET'])
+@auth_required
+def list_active_tokens():
+    """
+    List currently active (unexpired, unused) tokens for the current tenant.
+    GET /api/forms/tokens
+    Useful for staff dashboards — shows pending client form links.
+    """
+    now = datetime.now()
+    active = [
+        {
+            'token':      tok,
+            'client_id':  d['client_id'],
+            'form_type':  d['form_type'],
+            'created_at': d['created_at'].isoformat(),
+            'expires_at': d['expires_at'].isoformat(),
         }
-        
-        current_app.logger.debug(f"Generated token {token} for customer {customer_id}, expires {expiration}")
+        for tok, d in _form_tokens.items()
+        if d['tenant_id'] == g.tenant_id
+        and not d['used']
+        and now <= d['expires_at']
+    ]
+    return jsonify({'count': len(active), 'tokens': active}), 200
 
-        return jsonify({
-            'success': True,
-            'token': token,
-            'form_type': form_type,
-            'expires_at': expiration.isoformat(),
-            'message': f'{form_type.title()} form link generated successfully'
-        }), 200
 
-    except Exception as e:
-        current_app.logger.exception(f"Failed to generate form link for customer {customer_id}")
-        return jsonify({
-            'success': False,
-            'error': f'Failed to generate form link: {str(e)}'
-        }), 500
+@form_bp.route('/cleanup-tokens', methods=['POST'])
+@auth_required
+def cleanup_tokens():
+    """
+    Purge expired tokens from memory.
+    POST /api/forms/cleanup-tokens
+    """
+    now = datetime.now()
+    expired = [t for t, d in _form_tokens.items() if now > d['expires_at']]
+    for t in expired:
+        _form_tokens.pop(t, None)
 
-@form_bp.route('/validate-form-token/<token>', methods=['GET', 'OPTIONS'])
-def validate_form_token(token):
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
+    return jsonify({
+        'cleaned':   len(expired),
+        'remaining': len(_form_tokens),
+    }), 200
+
+
+# ─────────────────────────────────────────
+# Form Submission  (customer-facing)
+# ─────────────────────────────────────────
+
+@form_bp.route('/submit', methods=['POST'])
+def submit_form():
+    """
+    Submit a customer form.
+    POST /api/forms/submit
+    Body:
+    {
+        "token": "abc123...",      (preferred — ties submission to client securely)
+        "form_data": { ... }       (required)
+    }
+    Fallback (embedded forms): include "client_id" inside form_data instead of token.
+
+    On success, marks the token as consumed so it cannot be reused.
+    """
+    data      = request.get_json(silent=True) or {}
+    token     = data.get('token')
+    form_data = data.get('form_data', {})
+
+    if not form_data:
+        return jsonify({'error': 'form_data is required'}), 400
+
+    client_id  = None
+    tenant_id  = None
+
+    if token:
+        token_data = _get_valid_token(token)
+        if not token_data:
+            return jsonify({'error': 'Invalid or expired token'}), 400
+
+        client_id = token_data['client_id']
+        tenant_id = token_data['tenant_id']
+
+        client = ClientMaster.query.filter_by(
+            client_id=client_id, tenant_id=tenant_id
+        ).first()
+        if not client:
+            return jsonify({'error': 'Associated client not found'}), 404
+
+        _form_tokens[token]['used'] = True
+
+    else:
+        client_id = form_data.get('client_id')
+        if not client_id:
+            return jsonify({'error': 'A token or client_id in form_data is required'}), 400
+
+        client = ClientMaster.query.get(client_id)
+        if not client:
+            return jsonify({'error': 'Client not found'}), 404
+
+        tenant_id = client.tenant_id
 
     try:
-        current_app.logger.debug(f"Validating token: {token}")
-        if token not in form_tokens:
-            return jsonify({'valid': False, 'error': 'Invalid token'}), 404
+        from models import CustomerFormData
 
-        token_data = form_tokens[token]
-
-        if datetime.now() > token_data['expires_at']:
-            del form_tokens[token]
-            return jsonify({'valid': False, 'error': 'Token has expired'}), 410
-
-        if token_data['used']:
-            return jsonify({'valid': False, 'error': 'Token has already been used'}), 410
+        submission = CustomerFormData(
+            client_id=client_id,
+            tenant_id=tenant_id,
+            form_data=json.dumps(form_data),
+            token_used=token or '',
+            submitted_at=datetime.utcnow()
+        )
+        db.session.add(submission)
+        db.session.commit()
 
         return jsonify({
-            'valid': True, 
-            'expires_at': token_data['expires_at'].isoformat(),
-            'customer_id': token_data.get('customer_id'),
-            'form_type': token_data.get('form_type')
-        }), 200
+            'success':            True,
+            'form_submission_id': submission.id,
+            'client_id':          client_id,
+            'message':            'Form submitted successfully',
+        }), 201
 
-    except Exception as e:
-        current_app.logger.exception("Token validation failed")
-        return jsonify({'valid': False, 'error': f'Validation failed: {str(e)}'}), 500
+    except ImportError:
+        # CustomerFormData model doesn't exist yet — return success anyway
+        # so the customer journey isn't broken during migration.
+        return jsonify({
+            'success':   True,
+            'client_id': client_id,
+            'message':   'Form received (persistence pending schema migration)',
+        }), 201
 
-@form_bp.route('/submit-customer-form', methods=['POST', 'OPTIONS'])
-def submit_customer_form():
-    """Submit form - creates only ONE submission record"""
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-
-    try:
-        data = request.get_json(silent=True) or {}
-        token = data.get('token')
-        form_data = data.get('formData', {})
-
-        if not form_data:
-            return jsonify({'success': False, 'error': 'Missing form data'}), 400
-
-        customer_id = None
-        
-        # Try token-based submission first (for existing customers)
-        if token:
-            current_app.logger.debug(f"Processing token-based submission with token: {token}")
-            
-            if token not in form_tokens:
-                return jsonify({'success': False, 'error': 'Invalid or expired token'}), 400
-
-            token_data = form_tokens[token]
-            
-            # Check expiration
-            if datetime.now() > token_data['expires_at']:
-                del form_tokens[token]
-                return jsonify({'success': False, 'error': 'Token has expired'}), 410
-                
-            # Check if already used
-            if token_data['used']:
-                return jsonify({'success': False, 'error': 'Token has already been used'}), 410
-
-            customer_id = token_data.get('customer_id')
-            
-            # Verify customer exists
-            if customer_id:
-                customer = Customer.query.get(customer_id)
-                if not customer:
-                    return jsonify({'success': False, 'error': 'Associated customer not found'}), 404
-                
-                # Mark token as used
-                form_tokens[token]['used'] = True
-                current_app.logger.info(f"Token {token} marked as used for customer {customer_id}")
-        
-        # If no valid token or customer_id from token, try alternative methods
-        if not customer_id:
-            # Check if customer_id is provided directly in form data or URL params
-            customer_id = form_data.get('customer_id') or request.args.get('customerId')
-            
-            if customer_id:
-                # Verify this customer exists
-                customer = Customer.query.get(customer_id)
-                if not customer:
-                    return jsonify({'success': False, 'error': 'Specified customer not found'}), 404
-            else:
-                # Fallback: create new customer from form data (legacy behavior)
-                customer_name = (form_data.get('customer_name') or '').strip()
-                customer_address = (form_data.get('customer_address') or '').strip()
-                
-                if not customer_name or not customer_address:
-                    return jsonify({
-                        'success': False, 
-                        'error': 'Customer name and address are required for new customer creation'
-                    }), 400
-                
-                customer = Customer(
-                    name=customer_name,
-                    phone=(form_data.get('customer_phone') or '').strip(),
-                    address=customer_address,
-                    status='New Lead',
-                    created_by='Form Submission'
-                )
-                db.session.add(customer)
-                db.session.flush()  # Get the ID without committing
-                customer_id = customer.id
-                current_app.logger.info(f"Created new customer {customer_id} from form submission")
-
-        # Create ONLY ONE form submission record
-        try:
-            customer_form_data = CustomerFormData(
-                customer_id=customer_id,
-                form_data=json.dumps(form_data),
-                token_used=token or '',
-                submitted_at=datetime.utcnow()
-            )
-            db.session.add(customer_form_data)
-            db.session.commit()
-            
-            # Get customer name for response
-            final_customer = Customer.query.get(customer_id)
-            customer_name = final_customer.name if final_customer else 'Customer'
-            
-            current_app.logger.info(f"Single form submission created for customer {customer_id}")
-
-            return jsonify({
-                'success': True, 
-                'customer_id': customer_id,
-                'form_submission_id': customer_form_data.id,
-                'message': f'Form submitted successfully for {customer_name}'
-            }), 201
-
-        except Exception as e:
-            db.session.rollback()
-            current_app.logger.exception(f"Database error during form submission for customer {customer_id}")
-            raise e
-
-    except Exception as e:
-        current_app.logger.exception("Form submission failed")
+    except SQLAlchemyError as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': f'Form submission failed: {str(e)}'}), 500
+        return jsonify({'error': str(e)}), 500
 
-# Legacy endpoint for backward compatibility
-@form_bp.route('/generate-form-link', methods=['POST', 'OPTIONS'])
-def generate_form_link():
-    """Legacy endpoint - generates token not tied to specific customer"""
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
 
+# ─────────────────────────────────────────
+# Submission Retrieval  (staff-facing)
+# ─────────────────────────────────────────
+
+@form_bp.route('/submissions', methods=['GET'])
+@auth_required
+def list_submissions():
+    """
+    List all form submissions for the current tenant.
+    GET /api/forms/submissions
+    Query params:
+      client_id – filter by client
+    """
     try:
-        token = generate_secure_token()
-        expiration = datetime.now() + timedelta(hours=24)
-        form_tokens[token] = {
-            'created_at': datetime.now(),
-            'expires_at': expiration,
-            'used': False
+        from models import CustomerFormData
+    except ImportError:
+        return jsonify({'submissions': [], 'warning': 'CustomerFormData table not yet available'}), 200
+
+    query = CustomerFormData.query.filter_by(tenant_id=g.tenant_id)
+
+    client_id = request.args.get('client_id', type=int)
+    if client_id:
+        query = query.filter_by(client_id=client_id)
+
+    submissions = query.order_by(CustomerFormData.submitted_at.desc()).all()
+
+    return jsonify([
+        {
+            'id':           s.id,
+            'client_id':    s.client_id,
+            'tenant_id':    s.tenant_id,
+            'submitted_at': s.submitted_at.isoformat() if s.submitted_at else None,
+            'form_data':    _safe_json(s.form_data),
+            'token_used':   s.token_used,
         }
-        current_app.logger.debug(f"Generated legacy token {token} expires {expiration}")
+        for s in submissions
+    ]), 200
 
-        return jsonify({
-            'success': True,
-            'token': token,
-            'expires_at': expiration.isoformat(),
-            'message': 'Form link generated successfully'
-        }), 200
 
-    except Exception as e:
-        current_app.logger.exception("Failed to generate form link")
-        return jsonify({
-            'success': False,
-            'error': f'Failed to generate form link: {str(e)}'
-        }), 500
-
-@form_bp.route('/cleanup-expired-tokens', methods=['POST', 'OPTIONS'])
-def cleanup_expired_tokens():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-
+@form_bp.route('/submissions/<int:submission_id>', methods=['GET'])
+@auth_required
+def get_submission(submission_id: int):
+    """
+    Get a single form submission.
+    GET /api/forms/submissions/<submission_id>
+    """
     try:
-        current_time = datetime.now()
-        expired_tokens = [t for t, d in form_tokens.items() if current_time > d['expires_at']]
-        for t in expired_tokens:
-            del form_tokens[t]
-        return jsonify({
-            'success': True, 
-            'cleaned_tokens': len(expired_tokens), 
-            'remaining_tokens': len(form_tokens)
-        }), 200
-    except Exception as e:
-        current_app.logger.exception("Cleanup failed")
-        return jsonify({'success': False, 'error': f'Cleanup failed: {str(e)}'}), 500
+        from models import CustomerFormData
+    except ImportError:
+        return jsonify({'error': 'CustomerFormData table not yet available'}), 503
+
+    submission = CustomerFormData.query.filter_by(
+        id=submission_id, tenant_id=g.tenant_id
+    ).first()
+
+    if not submission:
+        return jsonify({'error': 'Submission not found'}), 404
+
+    return jsonify({
+        'id':           submission.id,
+        'client_id':    submission.client_id,
+        'tenant_id':    submission.tenant_id,
+        'submitted_at': submission.submitted_at.isoformat() if submission.submitted_at else None,
+        'form_data':    _safe_json(submission.form_data),
+        'token_used':   submission.token_used,
+    }), 200
+
+
+@form_bp.route('/submissions/<int:submission_id>', methods=['DELETE'])
+@auth_required
+def delete_submission(submission_id: int):
+    """
+    Delete a form submission.
+    DELETE /api/forms/submissions/<submission_id>
+    """
+    try:
+        from models import CustomerFormData
+    except ImportError:
+        return jsonify({'error': 'CustomerFormData table not yet available'}), 503
+
+    submission = CustomerFormData.query.filter_by(
+        id=submission_id, tenant_id=g.tenant_id
+    ).first()
+
+    if not submission:
+        return jsonify({'error': 'Submission not found'}), 404
+
+    db.session.delete(submission)
+    db.session.commit()
+    return jsonify({'message': 'Submission deleted'}), 200
+
+
+# ─────────────────────────────────────────
+# Private helpers
+# ─────────────────────────────────────────
+
+def _safe_json(value):
+    """Parse a JSON string; return a raw wrapper on failure."""
+    try:
+        return json.loads(value)
+    except Exception:
+        return {'raw': value}

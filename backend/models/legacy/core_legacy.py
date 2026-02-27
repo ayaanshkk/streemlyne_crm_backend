@@ -1,4 +1,4 @@
-# C:\streemlyne_crm_backend\backend\models\core.py
+# C:\streemlyne_crm_backend\backend\models\legacy\core_legacy.py
 import json
 import uuid
 import secrets
@@ -364,8 +364,8 @@ class Customer(db.Model):
     tenant = db.relationship('Tenant', back_populates='customers')
     opportunities = db.relationship('Opportunity', back_populates='customer', lazy=True, cascade='all, delete-orphan')
     proposals = db.relationship('Proposal', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    form_data = db.relationship('CustomerFormData', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    form_submissions = db.relationship('FormSubmission', back_populates='customer', lazy=True)
+    form_data = db.relationship('CustomerFormData', viewonly=True, lazy=True)
+    form_submissions = db.relationship('FormSubmission', viewonly=True, lazy=True)
     assignments = db.relationship('Assignment', backref='customer_rel', lazy=True, passive_deletes='all')
 
     def update_stage_from_opportunity(self):
@@ -449,8 +449,8 @@ class Opportunity(db.Model):
     proposal = db.relationship('Proposal', foreign_keys=[proposal_id], back_populates='opportunity', uselist=False)
     salesperson = db.relationship('Salesperson', foreign_keys=[salesperson_id])
     documents = db.relationship('OpportunityDocument', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    activities = db.relationship('Activity', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
-    notes_list = db.relationship('OpportunityNote', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
+    activities = db.relationship('Activity', viewonly=True, lazy=True)
+    notes_list = db.relationship('OpportunityNote', viewonly=True, lazy=True)
     invoices = db.relationship('Invoice', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
     payments = db.relationship('Payment', back_populates='opportunity', lazy=True, cascade='all, delete-orphan')
     assignments = db.relationship('Assignment', backref='opportunity_rel', lazy=True, passive_deletes='all')
@@ -720,199 +720,3 @@ class Assignment(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'tenant_id': self.tenant_id,
         }
-    
-# ============================================================
-# NEW SCHEMA ALIGNMENT - Employee & User Management
-# ============================================================
-
-class EmployeeMaster(db.Model):
-    """
-    Employee management aligned with new schema
-    Replaces/extends old User model for employee data
-    """
-    __tablename__ = 'employee_master'
-    
-    employee_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id = db.Column(db.BigInteger, db.ForeignKey('tenant_master.tenant_id'), nullable=False, index=True)
-    
-    # Personal Information
-    employee_name = db.Column(db.String(255), nullable=False)
-    employee_designation_id = db.Column(db.SmallInteger, db.ForeignKey('designation_master.designation_id'))
-    phone = db.Column(db.String(50))
-    email = db.Column(db.String(255), index=True)
-    date_of_birth = db.Column(db.Date)
-    date_of_joining = db.Column(db.Date)
-    
-    # Identification
-    id_type = db.Column(db.String(50))
-    id_number = db.Column(db.String(100))
-    
-    # Role Assignment (will be refactored to proper M2M later)
-    role_ids = db.Column(db.String(255))  # Comma-separated role IDs
-    
-    # Commission
-    commission_percentage = db.Column(db.Float)
-    
-    # Timestamps
-    created_on = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, server_default=db.func.now())
-    updated_on = db.Column(db.DateTime, onupdate=datetime.utcnow)
-    
-    # Relationships
-    # tenant = db.relationship('TenantMaster', backref=db.backref('employees', lazy='dynamic'))
-    designation = db.relationship('DesignationMaster', backref=db.backref('employees', lazy='dynamic'))
-    user = db.relationship('UserMaster', back_populates='employee', uselist=False)
-
-    __table_args__ = (
-        db.UniqueConstraint('tenant_id', 'email', name='uq_employee_email_per_tenant'),
-    )
-    
-    def __repr__(self):
-        return f'<EmployeeMaster {self.employee_name}>'
-    
-    def get_roles(self):
-        """Parse role_ids string into list of integers"""
-        if not self.role_ids:
-            return []
-        return [int(rid) for rid in self.role_ids.split(',') if rid.strip()]
-    
-    def add_role(self, role_id: int):
-        """Add a role to this employee"""
-        roles = self.get_roles()
-        if role_id not in roles:
-            roles.append(role_id)
-            self.role_ids = ','.join(str(r) for r in roles)
-    
-    def remove_role(self, role_id: int):
-        """Remove a role from this employee"""
-        roles = self.get_roles()
-        if role_id in roles:
-            roles.remove(role_id)
-            self.role_ids = ','.join(str(r) for r in roles) if roles else None
-    
-    def to_dict(self):
-        return {
-            'employee_id': self.employee_id,
-            'tenant_id': self.tenant_id,
-            'employee_name': self.employee_name,
-            'designation_id': self.employee_designation_id,
-            'designation_name': self.designation.designation_description if self.designation else None,
-            'phone': self.phone,
-            'email': self.email,
-            'date_of_birth': self.date_of_birth.isoformat() if self.date_of_birth else None,
-            'date_of_joining': self.date_of_joining.isoformat() if self.date_of_joining else None,
-            'commission_percentage': self.commission_percentage,
-            'roles': self.get_roles(),
-            'created_on': self.created_on.isoformat() if self.created_on else None
-        }
-
-
-class UserMaster(db.Model):
-    """
-    User authentication aligned with new schema
-    Links to EmployeeMaster for user profile data
-    """
-    __tablename__ = 'user_master'
-    
-    user_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    employee_id = db.Column(db.SmallInteger, db.ForeignKey('employee_master.employee_id'), unique=True)
-    
-    # Authentication
-    user_name = db.Column(db.String(255), nullable=False, unique=True, index=True)
-    password = db.Column(db.String(255), nullable=False)
-    
-    # Timestamps
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, server_default=db.func.now())
-    updated_at = db.Column(db.Date, onupdate=datetime.utcnow)
-    
-    # Relationships
-    employee = db.relationship('EmployeeMaster', back_populates='user')
-    
-    def __repr__(self):
-        return f'<UserMaster {self.user_name}>'
-    
-    def set_password(self, password: str) -> None:
-        """Hash and set password"""
-        from werkzeug.security import generate_password_hash
-        self.password = generate_password_hash(password)
-    
-    def check_password(self, password: str) -> bool:
-        """Verify password"""
-        from werkzeug.security import check_password_hash
-        return check_password_hash(self.password, password)
-    
-    def generate_jwt_token(self, secret_key: str, expires_days: int = 7) -> str:
-        """Generate JWT token for authentication"""
-        import jwt
-        from datetime import timedelta
-        
-        payload = {
-            'user_id': self.user_id,
-            'employee_id': self.employee_id,
-            'user_name': self.user_name,
-            'tenant_id': self.employee.tenant_id if self.employee else None,
-            'exp': datetime.utcnow() + timedelta(days=expires_days),
-            'iat': datetime.utcnow(),
-        }
-        return jwt.encode(payload, secret_key, algorithm='HS256')
-    
-    @staticmethod
-    def verify_jwt_token(token: str, secret_key: str):
-        """Verify JWT token and return user"""
-        import jwt
-        try:
-            payload = jwt.decode(token, secret_key, algorithms=['HS256'])
-            user = UserMaster.query.get(payload['user_id'])
-            return user
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return None
-    
-    def to_dict(self):
-        return {
-            'user_id': self.user_id,
-            'employee_id': self.employee_id,
-            'user_name': self.user_name,
-            'employee_name': self.employee.employee_name if self.employee else None,
-            'email': self.employee.email if self.employee else None,
-            'tenant_id': self.employee.tenant_id if self.employee else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
-
-
-# ============================================================
-# CLIENT INTERACTIONS (for Developer B)
-# ============================================================
-
-# class ClientInteractions(db.Model):
-#     """
-#     Track interactions with clients
-#     Developer A creates this for Developer B to use
-#     """
-#     __tablename__ = 'client_interactions'
-    
-#     interaction_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-#     client_id = db.Column(db.SmallInteger, db.ForeignKey('Client_Master.client_id'), nullable=False)
-    
-#     # Interaction Details
-#     contact_date = db.Column(db.Date)
-#     contact_method = db.Column(db.SmallInteger)  # 1=Phone, 2=Email, 3=Meeting, etc.
-#     notes = db.Column(db.String)
-#     next_steps = db.Column(db.String)
-#     reminder_date = db.Column(db.Date)
-    
-#     # Timestamp
-#     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, server_default=db.func.now())
-    
-#     def __repr__(self):
-#         return f'<ClientInteractions {self.interaction_id}>'
-    
-#     def to_dict(self):
-#         return {
-#             'interaction_id': self.interaction_id,
-#             'client_id': self.client_id,
-#             'contact_date': self.contact_date.isoformat() if self.contact_date else None,
-#             'contact_method': self.contact_method,
-#             'notes': self.notes,
-#             'next_steps': self.next_steps,
-#             'reminder_date': self.reminder_date.isoformat() if self.reminder_date else None,
-#             'created_at': self.created_at.isoformat() if self.created_at else None
-#         }

@@ -1,6 +1,6 @@
-# models/legacy/__init__.py
+# C:\streemlyne_crm_backend\backend\models\legacy\__init__.py
 """
-Legacy System A models — UUID-based, Stripe-integrated, being deprecated.
+Legacy System A models — UUID-based, being deprecated.
 Do NOT import from here for new features.
 Remove each export as its corresponding route is migrated to System B.
 Target: empty this file before production launch.
@@ -32,8 +32,8 @@ from .core_legacy import (
 )
 
 from .core_proposals_legacy import (
-    Product,
     ProductCategory,
+    Product,
     Proposal,
     ProposalItem,
     Invoice,
@@ -45,8 +45,8 @@ from .core_documents_legacy import (
     OpportunityDocument,
 )
 
-# Note: Activity, OpportunityNote, DocumentTemplate, etc. are defined 
-# in core_documents_legacy.py but NOT imported here to avoid table name 
+# NOTE: Activity, OpportunityNote, DocumentTemplate, etc. are defined
+# in core_documents_legacy.py but NOT imported here to avoid table name
 # conflicts with the new core_documents.py models.
 #
 # If you need these legacy models, import directly:
@@ -63,8 +63,10 @@ __all__ = [
     'DOCUMENT_TEMPLATE_TYPE_ENUM', 'PAYMENT_METHOD_ENUM',
     'AUDIT_ACTION_ENUM', 'ASSIGNMENT_TYPE_ENUM',
     # Financials
-    'Product', 'ProductCategory', 'Proposal', 'ProposalItem',
-    'Invoice', 'InvoiceLineItem', 'Payment',
+    'ProductCategory', 'Product',
+    'Proposal', 'ProposalItem',
+    'Invoice', 'InvoiceLineItem',
+    'Payment',
     # Documents
     'OpportunityDocument',
 ]

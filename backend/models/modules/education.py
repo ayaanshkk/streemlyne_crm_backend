@@ -4,20 +4,12 @@ Education Module Models for StreemLyne CRM
 Handles test results, certificates, training batches, and PTI forms
 
 SCHEMA: StreemLyne_MT
-
-MAJOR CHANGES FROM OLD SCHEMA:
-- All tables now use StreemLyne_MT schema
-- UUID tenant/customer/user IDs → SmallInteger references
-- Added proper foreign key relationships to new schema tables
-- Removed legacy table references
 """
 
-import uuid
 import sys
 import os
 from datetime import datetime
 
-# Add parent directory to path (go up 2 levels: modules/ -> models/ -> backend/)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from database import db
@@ -30,57 +22,43 @@ from database import db
 class TestResult(db.Model):
     """
     AI-powered test grading results
-    Stores student test performance with question-by-question breakdown
-    
+
     SCHEMA: StreemLyne_MT.education_test_results
-    
-    MIGRATION NOTE:
-    - Old: UUID tenant_id, user_id (legacy), customer_id (legacy)
-    - New: SmallInteger tenant_id, employee_id (instructor), client_id (student)
     """
     __tablename__ = 'education_test_results'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)  # Instructor who graded
-    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))  # Student
-    
-    # Participant Information
+    employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+
     participant_name = db.Column(db.String(255), nullable=False)
     company = db.Column(db.String(255))
     date = db.Column(db.String(100))
     place = db.Column(db.String(255))
-    test_type = db.Column(db.String(100))  # Pre-test, Post-test, Final Exam
-    
-    # Test Details
-    mhe_type = db.Column(db.String(50), nullable=False)  # BOPT, FORKLIFT, REACH_TRUCK, STACKER
+    test_type = db.Column(db.String(100))
+    mhe_type = db.Column(db.String(50), nullable=False)
     total_marks_obtained = db.Column(db.Integer, nullable=False)
     total_marks = db.Column(db.Integer, nullable=False)
     percentage = db.Column(db.Float, nullable=False)
-    grade = db.Column(db.String(20), nullable=False)  # Pass/Fail
-    
-    # Test Data (JSON)
-    answers_json = db.Column(db.Text)  # Student's answers
-    details_json = db.Column(db.Text)  # Question-by-question breakdown
-    image_base64 = db.Column(db.Text)  # Base64 encoded image of test paper
-    
-    # Timestamps
+    grade = db.Column(db.String(20), nullable=False)
+    answers_json = db.Column(db.Text)
+    details_json = db.Column(db.Text)
+    image_base64 = db.Column(db.Text)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='education_test_results')
     instructor = db.relationship('EmployeeMaster', backref='graded_test_results')
     client = db.relationship('ClientMaster', backref='test_results')
-    
+
     def __repr__(self):
-        return f"<TestResult {self.id} - {self.participant_name} - {self.mhe_type} - {self.grade}>"
-    
+        return f'<TestResult {self.id} - {self.participant_name} - {self.mhe_type} - {self.grade}>'
+
     def to_dict(self):
-        """Convert test result to dictionary"""
         import json
-        
         return {
             'id': self.id,
             'tenant_id': self.tenant_id,
@@ -112,47 +90,39 @@ class TestResult(db.Model):
 class Certificate(db.Model):
     """
     Certificate tracking for training completion
-    Manages certificate generation, dispatch, and validity
-    
+
     SCHEMA: StreemLyne_MT.education_certificates
     """
     __tablename__ = 'education_certificates'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))  # Student
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
     test_result_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.education_test_results.id'))
-    
-    # Certificate Details
+
     certificate_number = db.Column(db.String(100), unique=True)
-    certificate_type = db.Column(db.String(100))  # Training Completion, PTI, Safety, etc.
+    certificate_type = db.Column(db.String(100))
     issue_date = db.Column(db.DateTime)
     valid_until = db.Column(db.DateTime)
-    
-    # Status Tracking
-    status = db.Column(db.String(50))  # Created, Dispatched, Received
+    status = db.Column(db.String(50))
     dispatch_date = db.Column(db.DateTime)
-    dispatch_method = db.Column(db.String(50))  # Email, Courier, In-person
+    dispatch_method = db.Column(db.String(50))
     recipient = db.Column(db.String(255))
     tracking_number = db.Column(db.String(100))
-    
-    # Certificate Data
-    certificate_data = db.Column(db.JSON)  # Student info, course details, marks
-    certificate_url = db.Column(db.String(500))  # PDF storage location
-    
-    # Audit
+    certificate_data = db.Column(db.JSON)
+    certificate_url = db.Column(db.String(500))
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='education_certificates')
     client = db.relationship('ClientMaster', backref='certificates')
     test_result = db.relationship('TestResult', backref='certificates')
-    
+
     def __repr__(self):
         return f'<Certificate {self.certificate_number} - {self.status}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -183,52 +153,38 @@ class Certificate(db.Model):
 class TrainingBatch(db.Model):
     """
     Training batch management for group training sessions
-    Tracks participants, schedule, and batch capacity
-    
+
     SCHEMA: StreemLyne_MT.education_training_batches
     """
     __tablename__ = 'education_training_batches'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    
-    # Batch Info
+
     batch_number = db.Column(db.String(100), unique=True)
     batch_name = db.Column(db.String(255))
-    course_type = db.Column(db.String(100))  # Forklift, Reach Truck, BOPT, Stacker
-    
-    # Schedule
+    course_type = db.Column(db.String(100))
     start_date = db.Column(db.DateTime)
     end_date = db.Column(db.DateTime)
     duration_days = db.Column(db.Integer)
-    
-    # Capacity
     max_participants = db.Column(db.Integer)
     enrolled_count = db.Column(db.Integer, default=0)
-    
-    # Instructor & Venue
     instructor_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
     venue = db.Column(db.String(255))
     venue_address = db.Column(db.Text)
-    
-    # Status
-    status = db.Column(db.String(50))  # Scheduled, Ongoing, Completed, Cancelled
-    
-    # Batch Data (participants list, materials needed, etc.)
+    status = db.Column(db.String(50))
     batch_data = db.Column(db.JSON)
-    
-    # Audit
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='education_training_batches')
     instructor = db.relationship('EmployeeMaster', backref='training_batches')
-    
+
     def __repr__(self):
         return f'<TrainingBatch {self.batch_number} - {self.status}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -253,54 +209,44 @@ class TrainingBatch(db.Model):
 
 
 # ============================================================
-# PTI FORMS (Practical Training Instructor)
+# PTI FORMS
 # ============================================================
 
 class PTIForm(db.Model):
     """
     Practical Training Instructor forms
-    Records practical training assessment and instructor sign-off
-    
+
     SCHEMA: StreemLyne_MT.education_pti_forms
     """
     __tablename__ = 'education_pti_forms'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-    
+
     id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tenant_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))  # Student
-    
-    # PTI Details
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+
     pti_number = db.Column(db.String(100), unique=True)
     participant_name = db.Column(db.String(255))
     company = db.Column(db.String(255))
-    equipment_type = db.Column(db.String(100))  # MHE type
-    
-    # Training Records
+    equipment_type = db.Column(db.String(100))
     training_date = db.Column(db.DateTime)
     training_hours = db.Column(db.Float)
-    practical_assessment = db.Column(db.JSON)  # Checklist items with pass/fail
-    
-    # Instructor Sign-off
+    practical_assessment = db.Column(db.JSON)
     instructor_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
-    instructor_signature = db.Column(db.Text)  # Base64 signature image
+    instructor_signature = db.Column(db.Text)
     sign_off_date = db.Column(db.DateTime)
-    
-    # Status
-    status = db.Column(db.String(50))  # Draft, Approved, Archived
-    
-    # Audit
+    status = db.Column(db.String(50))
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
+
     tenant = db.relationship('TenantMaster', backref='education_pti_forms')
     client = db.relationship('ClientMaster', backref='pti_forms')
     instructor = db.relationship('EmployeeMaster', backref='pti_forms')
-    
+
     def __repr__(self):
         return f'<PTIForm {self.pti_number} - {self.status}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
