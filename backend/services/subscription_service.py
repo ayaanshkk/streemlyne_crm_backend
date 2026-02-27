@@ -4,7 +4,7 @@ Business logic for subscription management
 """
 
 from repositories import TenantRepository, PermissionRepository
-from models import TenantSubscription, SubscriptionPlans
+from models import TenantSubscription, SubscriptionPlan
 from typing import Optional, List, Dict
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
@@ -21,11 +21,11 @@ class SubscriptionService:
         """Get tenant's active subscription"""
         return self.tenant_repo.get_active_subscription(tenant_id)
     
-    def get_subscription_plan(self, subscription_id: int) -> Optional[SubscriptionPlans]:
+    def get_subscription_plan(self, subscription_id: int) -> Optional[SubscriptionPlan]:
         """Get subscription plan details"""
-        return self.tenant_repo.session.query(SubscriptionPlans).get(subscription_id)
+        return self.tenant_repo.session.query(SubscriptionPlan).get(subscription_id)
     
-    def get_all_plans(self) -> List[SubscriptionPlans]:
+    def get_all_plans(self) -> List[SubscriptionPlan]:
         """Get all available subscription plans"""
         return self.permission_repo.get_active_subscription_plans()
     

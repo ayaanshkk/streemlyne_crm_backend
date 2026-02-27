@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import db
 from models import (
-    ModuleMaster, SubscriptionPlans, SubscriptionModuleMapping,
+    ModuleMaster, SubscriptionPlan, SubscriptionModuleMapping,
     PermissionCatalog, RoleMaster, RolePermissionMapping,
     CurrencyMaster
 )
@@ -127,12 +127,12 @@ def seed_subscription_plans():
     ]
     
     for plan_data in plans:
-        existing = SubscriptionPlans.query.filter_by(
+        existing = SubscriptionPlan.query.filter_by(
             subscription_code=plan_data['subscription_code']
         ).first()
         
         if not existing:
-            plan = SubscriptionPlans(**plan_data)
+            plan = SubscriptionPlan(**plan_data)
             db.session.add(plan)
             print(f"✓ Added subscription plan: {plan_data['subscription_name']}")
     
@@ -143,9 +143,9 @@ def seed_subscription_plans():
 def seed_subscription_modules():
     """Map modules to subscription plans"""
     # Get plans
-    basic = SubscriptionPlans.query.filter_by(subscription_code='BASIC').first()
-    professional = SubscriptionPlans.query.filter_by(subscription_code='PROFESSIONAL').first()
-    enterprise = SubscriptionPlans.query.filter_by(subscription_code='ENTERPRISE').first()
+    basic = SubscriptionPlan.query.filter_by(subscription_code='BASIC').first()
+    professional = SubscriptionPlan.query.filter_by(subscription_code='PROFESSIONAL').first()
+    enterprise = SubscriptionPlan.query.filter_by(subscription_code='ENTERPRISE').first()
     
     if not (basic and professional and enterprise):
         print("✗ Subscription plans not found")

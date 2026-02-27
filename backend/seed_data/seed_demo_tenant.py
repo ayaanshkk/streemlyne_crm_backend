@@ -12,9 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import db
 from models import (
     TenantMaster, EmployeeMaster, UserMaster,
-    DesignationMaster, SubscriptionPlans
+    DesignationMaster
 )
-from flask import g
 
 
 def seed_demo_tenant():
@@ -33,7 +32,7 @@ def seed_demo_tenant():
             tenant = TenantMaster(
                 tenant_company_name='Demo Company',
                 tenant_contact_name='John Demo',
-                onboarding_date=date.today(),
+                onboarding_Date=date.today(),
                 is_active=True
             )
             db.session.add(tenant)

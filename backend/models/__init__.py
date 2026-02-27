@@ -7,7 +7,7 @@
 # SCHEMA STRUCTURE:
 # - StreemLyne_MT: Main schema for new normalized tables (NEW)
 # - Default schema: Legacy tables for backward compatibility (OLD)
-#
+#      
 # MODEL ORGANIZATION:
 # - tenancy.py: Tenant, subscriptions, modules (NEW - StreemLyne_MT)
 # - core.py: Clients, opportunities, projects, employees, users (NEW - StreemLyne_MT)
@@ -18,7 +18,6 @@
 # - legacy/: Legacy models for backward compatibility only
 #
 # ============================================================
-
 
 # ============================================================
 # TENANCY MODELS - Multi-tenant Architecture
@@ -32,6 +31,9 @@ from .tenancy import (
     TenantModuleMapping,
     TenantSubscription,
 )
+
+# Alias for backward compatibility (matches SQL table name Subscription_Plans)
+SubscriptionPlans = SubscriptionPlan
 
 
 # ============================================================
@@ -175,6 +177,7 @@ __all__ = [
     # Tenancy Models (NEW - StreemLyne_MT schema)
     'TenantMaster',
     'SubscriptionPlan',
+    'SubscriptionPlans',  # Alias for backward compatibility
     'ModuleMaster',
     'SubscriptionModuleMapping',
     'TenantModuleMapping',

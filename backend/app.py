@@ -13,9 +13,6 @@ load_dotenv()
 def create_app(test_config=None):
     app = Flask(__name__)
 
-    # ─────────────────────────────────────────
-    # Configuration
-    # ─────────────────────────────────────────
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-fallback-secret-key')
 
     CORS(
@@ -38,9 +35,6 @@ def create_app(test_config=None):
             h['Access-Control-Max-Age'] = '3600'
             return response
 
-    # ─────────────────────────────────────────
-    # Database
-    # ─────────────────────────────────────────
     if test_config:
         app.config.update(test_config)
     else:
@@ -60,9 +54,6 @@ def create_app(test_config=None):
     init_db(app)
     Migrate(app, db)
 
-    # ─────────────────────────────────────────
-    # Models  (StreemLyne_MT schema)
-    # ─────────────────────────────────────────
     print("📦 Loading models...")
 
     from models import (
@@ -75,7 +66,7 @@ def create_app(test_config=None):
         CustomerPasswordReset,
 
         # Subscription & Modules
-        SubscriptionPlans,
+        SubscriptionPlan,
         TenantSubscription,
         ModuleMaster,
         TenantModuleMapping,
@@ -119,7 +110,6 @@ def create_app(test_config=None):
         ChatMessage,
     )
 
-    # Optional specialty modules
     from models import DRAWING_MODULE_AVAILABLE
     if DRAWING_MODULE_AVAILABLE:
         print("   ✅ Drawing Analyser module loaded")
@@ -129,27 +119,24 @@ def create_app(test_config=None):
 
     print("✅ All models loaded")
 
-    # ─────────────────────────────────────────
-    # Blueprints
-    # ─────────────────────────────────────────
     print("📋 Registering blueprints...")
 
-    from routes.auth_routes         import auth_bp          # /api/auth
-    from routes.tenant_routes       import tenant_bp        # /api/tenant
-    from routes.subscription_routes import subscription_bp  # /api/subscriptions
-    from routes.client_routes       import client_bp        # /api/clients
-    from routes.employee_routes     import employee_bp      # /api/employees
-    from routes.role_routes         import role_bp          # /api/roles
-    from routes.opportunity_routes  import opportunity_bp   # /api/opportunities
-    from routes.project_routes      import project_bp       # /api/projects
-    from routes.contract_routes     import contract_bp      # /api/contracts
-    from routes.proposal_routes     import proposal_bp      # /api/proposals
-    from routes.invoice_routes      import invoice_bp       # /api/invoices
-    from routes.document_routes     import document_bp      # /api/documents
-    from routes.master_routes       import master_bp        # /api/master
-    from routes.form_routes         import form_bp          # /api/forms
-    from routes.chat_routes         import chat_bp          # /api/chat
-    from routes.core_routes         import core_bp          # /
+    from routes.auth_routes         import auth_bp
+    from routes.tenant_routes       import tenant_bp
+    from routes.subscription_routes import subscription_bp
+    from routes.client_routes       import client_bp
+    from routes.employee_routes     import employee_bp
+    from routes.role_routes         import role_bp
+    from routes.opportunity_routes  import opportunity_bp
+    from routes.project_routes      import project_bp
+    from routes.contract_routes     import contract_bp
+    from routes.proposal_routes     import proposal_bp
+    from routes.invoice_routes      import invoice_bp
+    from routes.document_routes     import document_bp
+    from routes.master_routes       import master_bp
+    from routes.form_routes         import form_bp
+    from routes.chat_routes         import chat_bp
+    from routes.core_routes         import core_bp
 
     blueprints = [
         auth_bp, tenant_bp, subscription_bp,
@@ -160,7 +147,7 @@ def create_app(test_config=None):
     ]
 
     if DRAWING_MODULE_AVAILABLE:
-        from routes.drawing_analyser import drawing_bp      # /api/drawing-analyser
+        from routes.drawing_analyser import drawing_bp
         blueprints.append(drawing_bp)
 
     for bp in blueprints:
@@ -168,9 +155,6 @@ def create_app(test_config=None):
 
     print("✅ All blueprints registered")
 
-    # ─────────────────────────────────────────
-    # Startup summary
-    # ─────────────────────────────────────────
     print("\n" + "=" * 60)
     print("🚀 StreemLyne CRM Backend Starting...")
     print("=" * 60)
@@ -186,9 +170,6 @@ def create_app(test_config=None):
     return app
 
 
-# ─────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────
 app = create_app()
 
 if __name__ == '__main__':

@@ -42,7 +42,8 @@ class ClientMaster(db.Model):
     country = db.relationship('CountryMaster', backref='clients')
     default_currency = db.relationship('CurrencyMaster', backref='default_currency_clients')
     opportunities = db.relationship('OpportunityDetails', back_populates='client', lazy='dynamic')
-    projects = db.relationship('ClientInteractions', back_populates='client', lazy='dynamic')
+    interactions = db.relationship('ClientInteractions', back_populates='client', lazy='dynamic')
+    projects = db.relationship('ProjectDetails', back_populates='client', lazy='dynamic')
     proposals = db.relationship('ProposalMaster', back_populates='client', lazy='dynamic')
     invoices = db.relationship('InvoiceMaster', back_populates='client', lazy='dynamic')
     customer_auths = db.relationship('CustomerAuth', back_populates='client', lazy='dynamic')
@@ -413,7 +414,7 @@ class ProjectDetails(db.Model):
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     project_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id = db.Column(db.SmallInteger, nullable=False)
+    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
     opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
     employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
     project_title = db.Column(db.String(255), nullable=False)
@@ -426,6 +427,7 @@ class ProjectDetails(db.Model):
     created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
 
+    client = db.relationship('ClientMaster', back_populates='projects')
     opportunity = db.relationship('OpportunityDetails', back_populates='projects')
     employee = db.relationship('EmployeeMaster', back_populates='managed_projects')
     energy_contracts = db.relationship('EnergyContractMaster', back_populates='project', lazy='dynamic')

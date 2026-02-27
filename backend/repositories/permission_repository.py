@@ -89,7 +89,6 @@ class PermissionRepository:
     
     def add_permission_to_role(self, role_id: int, permission_id: int) -> bool:
         """Add a permission to a role"""
-        # Check if already exists
         existing = self.session.query(RolePermissionMapping).filter(
             RolePermissionMapping.role_id == role_id,
             RolePermissionMapping.permission_id == permission_id
@@ -133,17 +132,14 @@ class PermissionRepository:
         if not user or not user.employee:
             return False
         
-        # Get user's roles
         role_ids = user.employee.get_roles()
         if not role_ids:
             return False
         
-        # Get permission
         permission = self.get_permission_by_code(permission_code)
         if not permission:
             return False
         
-        # Check if any of user's roles have this permission
         mapping = self.session.query(RolePermissionMapping).filter(
             RolePermissionMapping.role_id.in_(role_ids),
             RolePermissionMapping.permission_id == permission.permission_id
@@ -175,20 +171,20 @@ class PermissionRepository:
     # SUBSCRIPTION PLANS
     # ============================================================
     
-    def get_all_subscription_plans(self) -> List[SubscriptionPlans]:
+    def get_all_subscription_plans(self) -> List[SubscriptionPlan]:
         """Get all subscription plans"""
-        return self.session.query(SubscriptionPlans).all()
+        return self.session.query(SubscriptionPlan).all()
     
-    def get_active_subscription_plans(self) -> List[SubscriptionPlans]:
+    def get_active_subscription_plans(self) -> List[SubscriptionPlan]:
         """Get all active subscription plans"""
-        return self.session.query(SubscriptionPlans).filter(
-            SubscriptionPlans.is_active == True
+        return self.session.query(SubscriptionPlan).filter(
+            SubscriptionPlan.is_active == True
         ).all()
     
-    def get_subscription_by_code(self, subscription_code: str) -> Optional[SubscriptionPlans]:
+    def get_subscription_by_code(self, subscription_code: str) -> Optional[SubscriptionPlan]:
         """Get subscription plan by code"""
-        return self.session.query(SubscriptionPlans).filter(
-            SubscriptionPlans.subscription_code == subscription_code
+        return self.session.query(SubscriptionPlan).filter(
+            SubscriptionPlan.subscription_code == subscription_code
         ).first()
     
     def get_subscription_modules(self, subscription_id: int) -> List[ModuleMaster]:
