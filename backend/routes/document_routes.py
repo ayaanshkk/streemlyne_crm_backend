@@ -12,13 +12,18 @@ Schema alignment (StreemLyne_MT):
   Customer_Documents:
     id (PK), client_id (NOT NULL), opportunity_id (nullable),
     file_url (text, NOT NULL), file_name (text, NOT NULL), uploaded_at
+
+Tenant scoping:
+  Case_Documents    — has tenant_id directly; all queries filter on g.tenant_id ✅ (unchanged)
+  Customer_Documents — no tenant_id column; scope via:
+    client_id → Client_Master.tenant_id
 """
 
 from flask import Blueprint, request, jsonify, g, send_file, current_app, abort
 from werkzeug.utils import secure_filename
 from sqlalchemy.exc import IntegrityError
 from database import db
-from models import CaseDocuments, CustomerDocuments
+from models import CaseDocuments, CustomerDocuments, ClientMaster
 from middleware import auth_required, permission_required
 import os
 import uuid
@@ -61,6 +66,7 @@ def _try_remove(path: str) -> None:
 
 # ─────────────────────────────────────────
 # Case Documents  (staff-facing)
+# Already correctly scoped via Case_Documents.tenant_id — no changes needed.
 # ─────────────────────────────────────────
 
 @document_bp.route('/case', methods=['GET'])
@@ -206,35 +212,51 @@ def download_case_document(filename: str):
 @auth_required
 def list_customer_documents():
     """
-    List documents uploaded by customers.
+    List documents uploaded by customers, scoped to the current tenant.
     GET /api/documents/customer
     Query params:
       client_id      – filter by client
       opportunity_id – filter by opportunity
+
+    Tenant isolation: CustomerDocuments has no tenant_id column.
+    Scope via: client_id → Client_Master.tenant_id
     """
-    query = CustomerDocuments.query
+    # Subquery: client_ids that belong to the current tenant
+    tenant_client_ids = (
+        db.session.query(ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+        .subquery()
+    )
+
+    query = CustomerDocuments.query.filter(
+        CustomerDocuments.client_id.in_(tenant_client_ids)
+    )
 
     client_id      = request.args.get('client_id',      type=int)
     opportunity_id = request.args.get('opportunity_id', type=int)
 
     if client_id:
-        query = query.filter_by(client_id=client_id)
+        query = query.filter(CustomerDocuments.client_id == client_id)
     if opportunity_id:
-        query = query.filter_by(opportunity_id=opportunity_id)
+        query = query.filter(CustomerDocuments.opportunity_id == opportunity_id)
 
     docs = query.order_by(CustomerDocuments.uploaded_at.desc()).all()
     return jsonify([_customer_doc_dict(d) for d in docs]), 200
 
 
 @document_bp.route('/customer', methods=['POST'])
+@auth_required
+@permission_required('document.upload')
 def upload_customer_document():
     """
-    Allow a customer to upload a document (no staff JWT required).
+    Upload a customer document (requires staff JWT).
     POST /api/documents/customer   (multipart/form-data)
     Fields:
       file            (required)
-      client_id       (required, FK → Client_Master)
+      client_id       (required, FK → Client_Master — must belong to current tenant)
       opportunity_id  (optional, FK → Opportunity_Details)
+
+    Previously unauthenticated — @auth_required and tenant ownership check added.
     """
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
@@ -250,6 +272,13 @@ def upload_customer_document():
     client_id = request.form.get('client_id', type=int)
     if not client_id:
         return jsonify({'error': 'client_id is required'}), 400
+
+    # Validate client_id belongs to current tenant
+    client = ClientMaster.query.filter_by(
+        client_id=client_id, tenant_id=g.tenant_id
+    ).first()
+    if not client:
+        return jsonify({'error': 'Invalid client_id — not found for this tenant'}), 400
 
     opportunity_id = request.form.get('opportunity_id', type=int)
 
@@ -284,8 +313,20 @@ def delete_customer_document(doc_id: int):
     """
     Delete a customer-uploaded document and its stored file.
     DELETE /api/documents/customer/<doc_id>
+
+    Tenant isolation: join through Client_Master to verify ownership before deleting.
+    Replaces unscoped query.get() which allowed cross-tenant deletion.
     """
-    doc = CustomerDocuments.query.get(doc_id)
+    # Subquery: client_ids that belong to the current tenant
+    tenant_client_ids = (
+        db.session.query(ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+        .subquery()
+    )
+    doc = CustomerDocuments.query.filter(
+        CustomerDocuments.id == doc_id,
+        CustomerDocuments.client_id.in_(tenant_client_ids)
+    ).first()
     if not doc:
         abort(404, description='Document not found')
 

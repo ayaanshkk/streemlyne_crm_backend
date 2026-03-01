@@ -17,12 +17,20 @@ Schema alignment (StreemLyne_MT):
     service_id (FK→Services_Master, NOT NULL),
     quantity (real, NOT NULL), uom_id (FK→UOM_Master, NOT NULL),
     created_at, updated_at
+
+Tenant scoping:
+  Invoice_Master has no tenant_id column. Scoping is done via:
+    - client_id  → Client_Master.tenant_id  (when client_id is set)
+    - project_id → Project_Details.client_id → Client_Master.tenant_id  (fallback)
+  Both paths are checked together so invoices with only a project_id (no client_id)
+  are still correctly isolated.
 """
 
 from flask import Blueprint, request, jsonify, g, abort
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from database import db
-from models import InvoiceMaster, InvoiceDetails
+from models import InvoiceMaster, InvoiceDetails, ClientMaster, ProjectDetails
 from middleware import auth_required, permission_required
 from datetime import datetime
 
@@ -37,22 +45,46 @@ invoice_bp = Blueprint('invoice', __name__, url_prefix='/api/invoices')
 @auth_required
 def list_invoices():
     """
-    List invoices with optional filters.
+    List invoices scoped to the current tenant.
     GET /api/invoices
     Query params: client_id, project_id, proposal_id
+
+    Tenant isolation: Invoice_Master has no tenant_id. Scope via:
+      client_id IN (Client_Master where tenant_id = g.tenant_id)
+      OR project_id IN (Project_Details joined to Client_Master where tenant_id = g.tenant_id)
     """
-    query = InvoiceMaster.query
+    # Subquery: client_ids that belong to the current tenant
+    tenant_client_ids = (
+        db.session.query(ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+        .subquery()
+    )
+
+    # Subquery: project_ids whose client belongs to the current tenant
+    tenant_project_ids = (
+        db.session.query(ProjectDetails.project_id)
+        .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+        .subquery()
+    )
+
+    query = InvoiceMaster.query.filter(
+        or_(
+            InvoiceMaster.client_id.in_(tenant_client_ids),
+            InvoiceMaster.project_id.in_(tenant_project_ids),
+        )
+    )
 
     client_id   = request.args.get('client_id',   type=int)
     project_id  = request.args.get('project_id',  type=int)
     proposal_id = request.args.get('proposal_id', type=int)
 
     if client_id:
-        query = query.filter_by(client_id=client_id)
+        query = query.filter(InvoiceMaster.client_id == client_id)
     if project_id:
-        query = query.filter_by(project_id=project_id)
+        query = query.filter(InvoiceMaster.project_id == project_id)
     if proposal_id:
-        query = query.filter_by(proposal_id=proposal_id)
+        query = query.filter(InvoiceMaster.proposal_id == proposal_id)
 
     invoices = query.order_by(InvoiceMaster.created_at.desc()).all()
     return jsonify([_invoice_dict(i, include_details=False) for i in invoices]), 200
@@ -67,11 +99,11 @@ def create_invoice():
     POST /api/invoices
     Body:
     {
-        "invoice_number": "INV-2025-001",  (required, must be unique)
+        "invoice_number": "INV-2025-001",  (required, must be unique within tenant)
         "tax_id": 1,                        (required)
         "total_amount": 10000.00,           (required)
-        "client_id": 5,                     (optional FK → Client_Master)
-        "project_id": 8,                    (optional FK → Project_Details)
+        "client_id": 5,                     (optional FK → Client_Master — must belong to tenant)
+        "project_id": 8,                    (optional FK → Project_Details — must belong to tenant)
         "proposal_id": 2,                   (optional FK → Proposal_Master)
         "billing_remarks": "Net 30",
         "currency_id": 1,
@@ -90,6 +122,32 @@ def create_invoice():
     if missing:
         return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
 
+    # Validate FK ownership — client_id must belong to current tenant
+    client_id = data.get('client_id')
+    if client_id:
+        client = (
+            ClientMaster.query
+            .filter_by(client_id=client_id, tenant_id=g.tenant_id)
+            .first()
+        )
+        if not client:
+            return jsonify({'error': 'Invalid client_id — not found for this tenant'}), 400
+
+    # Validate FK ownership — project_id must belong to current tenant (via Client_Master)
+    project_id = data.get('project_id')
+    if project_id:
+        project = (
+            ProjectDetails.query
+            .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+            .filter(
+                ProjectDetails.project_id == project_id,
+                ClientMaster.tenant_id == g.tenant_id,
+            )
+            .first()
+        )
+        if not project:
+            return jsonify({'error': 'Invalid project_id — not found for this tenant'}), 400
+
     # Validate detail lines before writing anything
     for idx, item in enumerate(data.get('details', [])):
         if not item.get('service_id') or item.get('quantity') is None or not item.get('uom_id'):
@@ -98,8 +156,8 @@ def create_invoice():
             }), 400
 
     invoice = InvoiceMaster(
-        client_id=data.get('client_id'),
-        project_id=data.get('project_id'),
+        client_id=client_id,
+        project_id=project_id,
         proposal_id=data.get('proposal_id'),
         invoice_number=data['invoice_number'],
         billing_remarks=data.get('billing_remarks'),
@@ -128,10 +186,9 @@ def create_invoice():
 
     except IntegrityError as e:
         db.session.rollback()
-        # invoice_number unique violation or bad FK reference
         if 'invoice_number' in str(e.orig).lower():
             return jsonify({'error': 'Invoice number already exists'}), 409
-        return jsonify({'error': 'Invalid foreign key reference — check client_id, project_id, proposal_id, service_id, or uom_id'}), 409
+        return jsonify({'error': 'Invalid foreign key reference — check proposal_id, service_id, or uom_id'}), 409
 
     return jsonify(_invoice_dict(invoice, include_details=True)), 201
 
@@ -168,10 +225,27 @@ def update_invoice(invoice_id: int):
             setattr(invoice, field, data[field])
 
     if 'invoice_number' in data and data['invoice_number'] != invoice.invoice_number:
-        if InvoiceMaster.query.filter(
+        # Uniqueness check scoped to current tenant — prevents cross-tenant false collisions
+        tenant_client_ids = (
+            db.session.query(ClientMaster.client_id)
+            .filter(ClientMaster.tenant_id == g.tenant_id)
+            .subquery()
+        )
+        tenant_project_ids = (
+            db.session.query(ProjectDetails.project_id)
+            .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+            .filter(ClientMaster.tenant_id == g.tenant_id)
+            .subquery()
+        )
+        conflict = InvoiceMaster.query.filter(
             InvoiceMaster.invoice_number == data['invoice_number'],
-            InvoiceMaster.invoice_id != invoice_id
-        ).first():
+            InvoiceMaster.invoice_id != invoice_id,
+            or_(
+                InvoiceMaster.client_id.in_(tenant_client_ids),
+                InvoiceMaster.project_id.in_(tenant_project_ids),
+            )
+        ).first()
+        if conflict:
             return jsonify({'error': 'Invoice number already in use'}), 409
         invoice.invoice_number = data['invoice_number']
 
@@ -317,7 +391,28 @@ def remove_detail_line(invoice_id: int, detail_id: int):
 # ─────────────────────────────────────────
 
 def _get_or_404(invoice_id: int) -> InvoiceMaster:
-    invoice = InvoiceMaster.query.get(invoice_id)
+    """
+    Fetch an invoice by PK and verify it belongs to the current tenant.
+    Tenant check: client_id or project_id must trace back to g.tenant_id via Client_Master.
+    """
+    tenant_client_ids = (
+        db.session.query(ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+        .subquery()
+    )
+    tenant_project_ids = (
+        db.session.query(ProjectDetails.project_id)
+        .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+        .subquery()
+    )
+    invoice = InvoiceMaster.query.filter(
+        InvoiceMaster.invoice_id == invoice_id,
+        or_(
+            InvoiceMaster.client_id.in_(tenant_client_ids),
+            InvoiceMaster.project_id.in_(tenant_project_ids),
+        )
+    ).first()
     if not invoice:
         abort(404, description='Invoice not found')
     return invoice

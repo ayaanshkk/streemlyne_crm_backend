@@ -244,7 +244,7 @@ def customer_register():
     if CustomerAuth.query.filter_by(email=email).first():
         return jsonify({'error': 'Email is already registered'}), 409
 
-    # Validate FK → Client_Master
+    # Validate FK → Client_Master (also confirms client belongs to the stated tenant)
     from models import ClientMaster
     client = ClientMaster.query.filter_by(
         client_id=data['client_id'],
@@ -346,7 +346,8 @@ def customer_reset_password():
     if not reset or reset.expires_at < datetime.utcnow():
         return jsonify({'error': 'Invalid or expired token'}), 400
 
-    customer_user: CustomerAuth = CustomerAuth.query.get(reset.customer_user_id)
+    # FIX: .query.get() is deprecated in SQLAlchemy 2.x — use db.session.get()
+    customer_user: CustomerAuth = db.session.get(CustomerAuth, reset.customer_user_id)
     if not customer_user:
         return jsonify({'error': 'Account not found'}), 404
 

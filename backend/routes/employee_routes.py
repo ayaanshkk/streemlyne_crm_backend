@@ -252,7 +252,8 @@ def update_designation(designation_id: int):
     PUT /api/employees/designations/<designation_id>
     Body: { "designation_description": "Lead Engineer" }
     """
-    designation = DesignationMaster.query.get(designation_id)
+    # FIXED: replaced deprecated DesignationMaster.query.get() with db.session.get()
+    designation = db.session.get(DesignationMaster, designation_id)
     if not designation:
         abort(404, description='Designation not found')
 
@@ -282,7 +283,8 @@ def delete_designation(designation_id: int):
     DELETE /api/employees/designations/<designation_id>
     Returns 409 if any Employee_Master row references this designation.
     """
-    designation = DesignationMaster.query.get(designation_id)
+    # FIXED: replaced deprecated DesignationMaster.query.get() with db.session.get()
+    designation = db.session.get(DesignationMaster, designation_id)
     if not designation:
         abort(404, description='Designation not found')
 
@@ -345,7 +347,6 @@ def _employee_dict(e: EmployeeMaster) -> dict:
         'created_on':           e.created_on.isoformat()  if e.created_on  else None,
         'updated_on':           e.updated_on.isoformat()  if e.updated_on  else None,
     }
-
 
 def _designation_dict(d: DesignationMaster) -> dict:
     return {

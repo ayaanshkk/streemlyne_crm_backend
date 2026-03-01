@@ -24,6 +24,11 @@ NOTE:
   Project_Details in the new schema; they are stored in Misc_Col1 as JSON
   so no data is lost. If you add dedicated columns later, update _misc_from_project
   and the create/update handlers accordingly.
+
+Tenant scoping:
+  Project_Details has no tenant_id column.
+  client_id is NOT NULL → join path: Client_Master.tenant_id
+  Pipeline endpoints (OpportunityDetails) already filter on tenant_id directly. ✅
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -155,7 +160,7 @@ def _build_misc(data: dict, existing: dict | None = None) -> dict:
 @auth_required
 def get_jobs():
     """
-    List jobs (projects) with optional filters.
+    List jobs (projects) scoped to the current tenant.
     GET /api/jobs
     Query params:
       ref          – match job_reference stored in Misc_Col1 JSON
@@ -164,8 +169,14 @@ def get_jobs():
       priority     – partial match on misc priority value
       account_manager – partial match
       from_date / to_date – filter by project end_date (was due_date)
+
+    Tenant isolation: join through Client_Master.tenant_id (client_id is NOT NULL).
     """
-    query = ProjectDetails.query
+    query = (
+        ProjectDetails.query
+        .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == g.tenant_id)
+    )
 
     customer_id     = request.args.get('customer_id',     type=int)
     employee_id     = request.args.get('employee_id',     type=int)
@@ -174,11 +185,11 @@ def get_jobs():
     to_date_str     = request.args.get('to_date')
 
     if customer_id:
-        query = query.filter_by(client_id=customer_id)
+        query = query.filter(ProjectDetails.client_id == customer_id)
     if employee_id:
-        query = query.filter_by(employee_id=employee_id)
+        query = query.filter(ProjectDetails.employee_id == employee_id)
     if opportunity_id:
-        query = query.filter_by(opportunity_id=opportunity_id)
+        query = query.filter(ProjectDetails.opportunity_id == opportunity_id)
 
     # Misc_Col1 is a varchar JSON blob — use ILIKE for loose filtering
     ref = request.args.get('ref')
@@ -229,7 +240,7 @@ def create_job():
     POST /api/jobs
     Body:
     {
-        "customer_id": 5,              (required, maps to client_id)
+        "customer_id": 5,              (required, maps to client_id — must belong to tenant)
         "opportunity_id": 12,          (required, FK → Opportunity_Details)
         "employee_id": 3,              (required, FK → Employee_Master)
         "title": "Kitchen Refit",      (required, also accepted as project_title)
@@ -265,10 +276,12 @@ def create_job():
     if missing:
         return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
 
-    # Validate client exists
-    client = ClientMaster.query.get(client_id)
+    # Validate client exists AND belongs to the current tenant
+    client = ClientMaster.query.filter_by(
+        client_id=client_id, tenant_id=g.tenant_id
+    ).first()
     if not client:
-        return jsonify({'error': 'Invalid customer_id — client not found'}), 400
+        return jsonify({'error': 'Invalid customer_id — not found for this tenant'}), 400
 
     misc = _build_misc(data)
     if not misc.get('job_reference'):
@@ -365,6 +378,7 @@ def delete_job(job_id: int):
 
 # ─────────────────────────────────────────
 # Pipeline  (replaces old Customer.stage view)
+# Already correctly scoped via OpportunityDetails.tenant_id — no changes needed.
 # ─────────────────────────────────────────
 
 @job_bp.route('/pipeline-opportunities', methods=['GET'])
@@ -457,7 +471,7 @@ def update_pipeline_opportunity_stage(opportunity_id: int):
     if stage_id is None:
         return jsonify({'error': 'stage_id is required'}), 400
 
-    stage = StageMaster.query.get(int(stage_id))
+    stage = db.session.get(StageMaster, int(stage_id))
     if not stage:
         return jsonify({'error': f'stage_id {stage_id} does not exist in Stage_Master'}), 400
 
@@ -497,7 +511,20 @@ def update_pipeline_opportunity_stage(opportunity_id: int):
 # ─────────────────────────────────────────
 
 def _get_or_404(job_id: int) -> ProjectDetails:
-    project = ProjectDetails.query.get(job_id)
+    """
+    Fetch a project by PK and verify it belongs to the current tenant.
+    Tenant check: join through Client_Master.tenant_id (client_id is NOT NULL).
+    Replaces unscoped query.get().
+    """
+    project = (
+        ProjectDetails.query
+        .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+        .filter(
+            ProjectDetails.project_id == job_id,
+            ClientMaster.tenant_id == g.tenant_id,
+        )
+        .first()
+    )
     if not project:
         abort(404, description='Job not found')
     return project

@@ -137,13 +137,16 @@ def create_app(test_config=None):
     from routes.form_routes         import form_bp
     from routes.chat_routes         import chat_bp
     from routes.core_routes         import core_bp
-
+    from routes.customer_routes     import customer_bp
+    from routes.job_routes          import job_bp
+    
     blueprints = [
         auth_bp, tenant_bp, subscription_bp,
         client_bp, employee_bp, role_bp,
         opportunity_bp, project_bp, contract_bp,
         proposal_bp, invoice_bp, document_bp,
-        master_bp, form_bp, chat_bp, core_bp,
+        master_bp, form_bp, chat_bp, core_bp, 
+        customer_bp, job_bp,
     ]
 
     if DRAWING_MODULE_AVAILABLE:

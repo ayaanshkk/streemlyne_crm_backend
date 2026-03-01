@@ -296,6 +296,15 @@ class UserMaster(db.Model):
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password, password)
+    
+    def generate_jwt_token(self, secret_key: str) -> str:
+        """Return a signed JWT for this staff user."""
+        from services.auth_service import generate_staff_token
+        return generate_staff_token(
+            user_id=self.user_id,
+            employee_id=self.employee_id,
+            secret_key=secret_key,
+        )
 
     def to_dict(self):
         return {
@@ -376,6 +385,16 @@ class CustomerAuth(db.Model):
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
 
+    def generate_jwt_token(self, secret_key: str) -> str:
+        """Return a signed JWT for this customer portal user."""
+        from services.auth_service import generate_customer_token
+        return generate_customer_token(
+            customer_user_id=self.customer_user_id,
+            client_id=self.client_id,
+            tenant_id=self.tenant_id,
+            secret_key=secret_key,
+        )
+    
     def to_dict(self):
         return {
             'customer_user_id': self.customer_user_id,

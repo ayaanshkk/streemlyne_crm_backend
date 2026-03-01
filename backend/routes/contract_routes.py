@@ -10,12 +10,17 @@ Schema alignment (StreemLyne_MT):
     terms_of_sale (NOT NULL), service_id (FK→Services_Master, NOT NULL),
     unit_rate real (NOT NULL), currency_id (FK→Currency_Master, nullable),
     document_details, created_at, updated_at, mpan_number
+
+Tenant scoping:
+  Energy_Contract_Master has no tenant_id column.
+  employee_id is NOT NULL → join path: Employee_Master.tenant_id
+  All reads/writes go through this join to guarantee tenant isolation.
 """
 
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db
-from models import EnergyContractMaster
+from models import EnergyContractMaster, EmployeeMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
 
@@ -30,15 +35,21 @@ contract_bp = Blueprint('contract', __name__, url_prefix='/api/contracts')
 @auth_required
 def list_contracts():
     """
-    List energy contracts with optional filters.
+    List energy contracts scoped to the current tenant.
     GET /api/contracts
     Query params:
       project_id  – filter by project
       employee_id – filter by employee
       supplier_id – filter by supplier
       service_id  – filter by service
+
+    Tenant isolation: join through Employee_Master.tenant_id (employee_id is NOT NULL).
     """
-    query = EnergyContractMaster.query
+    query = (
+        EnergyContractMaster.query
+        .join(EmployeeMaster, EnergyContractMaster.employee_id == EmployeeMaster.employee_id)
+        .filter(EmployeeMaster.tenant_id == g.tenant_id)
+    )
 
     project_id  = request.args.get('project_id',  type=int)
     employee_id = request.args.get('employee_id', type=int)
@@ -46,13 +57,13 @@ def list_contracts():
     service_id  = request.args.get('service_id',  type=int)
 
     if project_id:
-        query = query.filter_by(project_id=project_id)
+        query = query.filter(EnergyContractMaster.project_id == project_id)
     if employee_id:
-        query = query.filter_by(employee_id=employee_id)
+        query = query.filter(EnergyContractMaster.employee_id == employee_id)
     if supplier_id:
-        query = query.filter_by(supplier_id=supplier_id)
+        query = query.filter(EnergyContractMaster.supplier_id == supplier_id)
     if service_id:
-        query = query.filter_by(service_id=service_id)
+        query = query.filter(EnergyContractMaster.service_id == service_id)
 
     contracts = query.order_by(EnergyContractMaster.created_at.desc()).all()
     return jsonify([_contract_dict(c) for c in contracts]), 200
@@ -67,7 +78,7 @@ def create_contract():
     POST /api/contracts
     Body:
     {
-        "employee_id": 3,                (required, FK → Employee_Master)
+        "employee_id": 3,                (required, FK → Employee_Master — must belong to tenant)
         "supplier_id": 2,                (required, FK → Supplier_Master)
         "service_id": 5,                 (required, FK → Services_Master)
         "contract_start_date": "2025-07-01",  (required)
@@ -90,6 +101,14 @@ def create_contract():
     missing = [f for f in required if data.get(f) is None]
     if missing:
         return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
+
+    # Validate employee_id belongs to current tenant before writing
+    employee = EmployeeMaster.query.filter_by(
+        employee_id=data['employee_id'],
+        tenant_id=g.tenant_id
+    ).first()
+    if not employee:
+        return jsonify({'error': 'Invalid employee_id — not found for this tenant'}), 400
 
     start = _parse_date(data['contract_start_date'])
     end   = _parse_date(data['contract_end_date'])
@@ -115,9 +134,9 @@ def create_contract():
     try:
         db.session.add(contract)
         db.session.commit()
-    except IntegrityError as e:
+    except IntegrityError:
         db.session.rollback()
-        return jsonify({'error': 'Invalid foreign key reference — check employee_id, supplier_id, service_id, project_id'}), 409
+        return jsonify({'error': 'Invalid foreign key reference — check supplier_id, service_id, project_id'}), 409
 
     return jsonify(_contract_dict(contract)), 201
 
@@ -201,7 +220,20 @@ def delete_contract(contract_id: int):
 # ─────────────────────────────────────────
 
 def _get_or_404(contract_id: int) -> EnergyContractMaster:
-    contract = EnergyContractMaster.query.get(contract_id)
+    """
+    Fetch a contract by PK and verify it belongs to the current tenant.
+    Tenant check: join through Employee_Master.tenant_id (employee_id is NOT NULL).
+    Replaces deprecated query.get() with a scoped first().
+    """
+    contract = (
+        EnergyContractMaster.query
+        .join(EmployeeMaster, EnergyContractMaster.employee_id == EmployeeMaster.employee_id)
+        .filter(
+            EnergyContractMaster.energy_contract_master_id == contract_id,
+            EmployeeMaster.tenant_id == g.tenant_id,
+        )
+        .first()
+    )
     if not contract:
         abort(404, description='Contract not found')
     return contract

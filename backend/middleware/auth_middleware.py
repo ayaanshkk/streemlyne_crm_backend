@@ -1,3 +1,4 @@
+# middleware/auth_middleware.py
 from functools import wraps
 from typing import Optional
 
@@ -17,13 +18,21 @@ def get_current_employee() -> Optional[EmployeeMaster]:
 
 
 def _resolve_user_from_token(token: str):
-    """Returns (user, employee, tenant, None) on success or (None, None, None, (response, status)) on failure."""
+    """
+    Returns (user, employee, tenant, None) on success.
+    Returns (None, None, None, (response, status)) on any failure.
+    """
     try:
         payload = jwt.decode(token, current_app.config["SECRET_KEY"], algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         return None, None, None, (jsonify({"error": "Token expired", "message": "Please log in again"}), 401)
     except jwt.InvalidTokenError:
         return None, None, None, (jsonify({"error": "Invalid token", "message": "Authentication token is invalid"}), 401)
+
+    # Explicit type guard — rejects customer tokens cleanly rather than
+    # falling through to a confusing "user not found" error.
+    if payload.get("type") != "staff":
+        return None, None, None, (jsonify({"error": "Invalid token", "message": "Staff token required"}), 401)
 
     user_id = payload.get("user_id")
     if not user_id:
@@ -41,7 +50,10 @@ def _resolve_user_from_token(token: str):
         return None, None, None, (jsonify({"error": "Account misconfigured", "message": "Employee record not found"}), 403)
 
     tenant = db.session.get(TenantMaster, employee.tenant_id)
-    if not tenant or not tenant.is_active:
+
+    # FIX: Tenant_Master.is_active has no NOT NULL constraint in DDL — it can be NULL.
+    # Treat NULL as inactive to fail safe. Only explicitly True passes.
+    if not tenant or tenant.is_active is not True:
         return None, None, None, (jsonify({"error": "Tenant inactive", "message": "Your organisation's account is inactive"}), 403)
 
     return user, employee, tenant, None
@@ -63,7 +75,7 @@ def auth_required(f):
         g.current_employee = employee
         g.user_id          = user.user_id
         g.employee_id      = employee.employee_id
-        g.tenant_id        = employee.tenant_id
+        g.tenant_id        = employee.tenant_id   # BigInteger — safe for all filter comparisons
 
         return f(*args, **kwargs)
 

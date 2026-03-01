@@ -206,8 +206,7 @@ def update_stage(opportunity_id: int):
     if not data.get('stage_id'):
         return jsonify({'error': 'stage_id is required'}), 400
 
-    # Validate the target stage exists
-    stage = StageMaster.query.get(int(data['stage_id']))
+    stage = db.session.get(StageMaster, int(data['stage_id']))
     if not stage:
         return jsonify({'error': f'stage_id {data["stage_id"]} does not exist'}), 400
 
@@ -364,7 +363,7 @@ def update_stage_record(stage_id: int):
     Update a stage.
     PUT /api/opportunities/stages/<stage_id>
     """
-    stage = StageMaster.query.get(stage_id)
+    stage = db.session.get(StageMaster, stage_id)
     if not stage:
         abort(404, description='Stage not found')
 
@@ -391,7 +390,7 @@ def delete_stage(stage_id: int):
     DELETE /api/opportunities/stages/<stage_id>
     Returns 409 if any opportunity is still using this stage.
     """
-    stage = StageMaster.query.get(stage_id)
+    stage = db.session.get(StageMaster, stage_id)
     if not stage:
         abort(404, description='Stage not found')
 
