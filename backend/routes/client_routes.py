@@ -12,6 +12,14 @@ Schema alignment (StreemLyne_MT):
   Client_Interactions:
     interaction_id (PK), client_id (FK→Client_Master), contact_date,
     contact_method (smallint), notes, next_steps, reminder_date, created_at
+
+MULTI-TENANT ALIGNMENT:
+  - Tenant_Master (tenant_id): Companies using the application
+  - Client_Master (client_id): Customers created by each tenant  
+  - Customer_Auth: User authentication (handled in auth_routes.py)
+  
+NOTE: This file includes legacy field aliases for backwards compatibility
+with the deprecated customer_routes.py. All CRUD operations are unified here.
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -61,31 +69,39 @@ def create_client():
     POST /api/clients
     Body:
     {
-        "client_company_name": "Acme Ltd",       (required)
-        "client_contact_name": "John Smith",
-        "client_email": "john@acme.com",
-        "client_phone": "555-0100",
+        "client_company_name": "Acme Ltd",       (required; also accepted as "name")
+        "client_contact_name": "John Smith",     (also accepted as "contact_name")
+        "client_email": "john@acme.com",         (also accepted as "email")
+        "client_phone": "555-0100",              (also accepted as "phone")
         "address": "1 High Street",
-        "post_code": "SW1A 1AA",
+        "post_code": "SW1A 1AA",                 (also accepted as "postcode")
         "country_id": 1,
         "default_currency_id": 1,
         "client_website": "https://acme.com"
     }
+    Accepts both canonical schema names and legacy field names for backwards compatibility.
     """
     data = request.get_json() or {}
 
-    name = (data.get('client_company_name') or '').strip()
+    name = (
+        data.get('client_company_name')
+        or data.get('name')
+        or ''
+    ).strip()
+
     if not name:
         return jsonify({'error': 'client_company_name is required'}), 400
 
     client = ClientMaster(
         tenant_id=g.tenant_id,
         client_company_name=name,
-        client_contact_name=data.get('client_contact_name'),
-        client_email=(data.get('client_email') or '').lower().strip() or None,
-        client_phone=data.get('client_phone'),
+        client_contact_name=data.get('client_contact_name') or data.get('contact_name'),
+        client_email=(
+            (data.get('client_email') or data.get('email') or '').lower().strip() or None
+        ),
+        client_phone=data.get('client_phone') or data.get('phone'),
         address=data.get('address'),
-        post_code=data.get('post_code'),
+        post_code=data.get('post_code') or data.get('postcode'),
         country_id=data.get('country_id'),
         default_currency_id=data.get('default_currency_id'),
         client_website=data.get('client_website')
@@ -105,7 +121,7 @@ def create_client():
 @auth_required
 def get_client(client_id: int):
     """
-    Retrieve a single client with their interaction history and open opportunities.
+    Retrieve a single client with their interaction history, opportunities, and form submissions.
     GET /api/clients/<client_id>
     """
     client = _get_or_404(client_id)
@@ -126,6 +142,34 @@ def get_client(client_id: int):
         .all()
     )
 
+    # CustomerFormData is an app-level model outside the core schema.
+    # Guarded import so the app still starts when the table doesn't exist yet.
+    form_submissions = []
+    try:
+        from models import CustomerFormData
+        import json as _json
+        entries = (
+            CustomerFormData.query
+            .filter_by(client_id=client.client_id, tenant_id=g.tenant_id)
+            .order_by(CustomerFormData.submitted_at.desc())
+            .all()
+        )
+        for f in entries:
+            try:
+                parsed = _json.loads(f.form_data)
+            except Exception:
+                parsed = {'raw': f.form_data}
+            form_submissions.append({
+                'id':           f.id,
+                'client_id':    f.client_id,
+                'token_used':   f.token_used,
+                'submitted_at': f.submitted_at.isoformat() if f.submitted_at else None,
+                'form_data':    parsed,
+                'source':       'web_form',
+            })
+    except ImportError:
+        pass
+
     result = _client_dict(client)
     result['interactions'] = [_interaction_dict(i) for i in interactions]
     result['opportunities'] = [
@@ -143,6 +187,7 @@ def get_client(client_id: int):
         }
         for o in opportunities
     ]
+    result['form_submissions'] = form_submissions
 
     return jsonify(result), 200
 
@@ -154,24 +199,29 @@ def update_client(client_id: int):
     """
     Update a client record.
     PUT /api/clients/<client_id>
+    Accepts both canonical schema names and legacy field names for backwards compatibility.
     """
     client = _get_or_404(client_id)
     data = request.get_json() or {}
 
-    updatable = [
-        'client_company_name',
-        'client_contact_name',
-        'client_email',
-        'client_phone',
-        'address',
-        'post_code',
-        'country_id',
-        'default_currency_id',
-        'client_website',
+    # Each tuple: (model_attr, list_of_accepted_keys_in_priority_order)
+    field_map = [
+        ('client_company_name', ['client_company_name', 'name']),
+        ('client_contact_name', ['client_contact_name', 'contact_name']),
+        ('client_email',        ['client_email', 'email']),
+        ('client_phone',        ['client_phone', 'phone']),
+        ('address',             ['address']),
+        ('post_code',           ['post_code', 'postcode']),
+        ('country_id',          ['country_id']),
+        ('default_currency_id', ['default_currency_id']),
+        ('client_website',      ['client_website']),
     ]
-    for field in updatable:
-        if field in data:
-            setattr(client, field, data[field])
+
+    for attr, keys in field_map:
+        for key in keys:
+            if key in data and data[key] is not None:
+                setattr(client, attr, data[key])
+                break
 
     try:
         db.session.commit()
@@ -348,7 +398,12 @@ def _parse_date(value):
 
 
 def _client_dict(c: ClientMaster) -> dict:
+    """
+    Returns both canonical schema names and legacy aliases so existing
+    front-end code keeps working without changes.
+    """
     return {
+        # Canonical schema fields
         'client_id':            c.client_id,
         'tenant_id':            c.tenant_id,
         'client_company_name':  c.client_company_name,
@@ -361,6 +416,12 @@ def _client_dict(c: ClientMaster) -> dict:
         'default_currency_id':  c.default_currency_id,
         'client_website':       c.client_website,
         'created_at':           c.created_at.isoformat() if c.created_at else None,
+        # Legacy aliases (kept for front-end backwards compatibility)
+        'id':       c.client_id,
+        'name':     c.client_company_name,
+        'email':    c.client_email,
+        'phone':    c.client_phone,
+        'postcode': c.post_code,
     }
 
 

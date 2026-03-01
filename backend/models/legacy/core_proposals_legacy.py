@@ -1,19 +1,16 @@
-# C:\streemlyne_crm_backend\backend\models\legacy\core_proposals_legacy.py
 """
 Legacy Proposal and Invoice Models — Default Schema (No StreemLyne_MT prefix)
 
-IMPORTANT: These are LEGACY models kept for backward compatibility with
-existing routes that have not yet been migrated to the new schema.
-
-DO NOT use these for new development.
+IMPORTANT: These are LEGACY models kept for backward compatibility only.
+DO NOT use them for new development.
 
 New equivalents:
-  Proposal      → ProposalMaster   (StreemLyne_MT.Proposal_Master)
-  ProposalItem  → ProposalDetails  (StreemLyne_MT.Proposal_Details)
-  Invoice       → InvoiceMaster    (StreemLyne_MT.Invoice_Master)
-  InvoiceLineItem → InvoiceDetails (StreemLyne_MT.Invoice_Details)
-  Product/ProductCategory → ServicesMaster (StreemLyne_MT.Services_Master)
-  Payment       → No direct equivalent yet (app-level concern)
+  Proposal        → ProposalMaster   (StreemLyne_MT.Proposal_Master)
+  ProposalItem    → ProposalDetails  (StreemLyne_MT.Proposal_Details)
+  Invoice         → InvoiceMaster    (StreemLyne_MT.Invoice_Master)
+  InvoiceLineItem → InvoiceDetails   (StreemLyne_MT.Invoice_Details)
+  Product / ProductCategory → ServicesMaster (StreemLyne_MT.Services_Master)
+  Payment         → No direct equivalent yet (application-level concern)
 """
 
 import sys
@@ -28,12 +25,26 @@ if parent_dir not in sys.path:
 from database import db
 
 
+__all__ = [
+    'ProductCategory',
+    'Product',
+    'Proposal',
+    'ProposalItem',
+    'Invoice',
+    'InvoiceLineItem',
+    'Payment',
+]
+
+
 # ============================================================
 # PRODUCT CATALOG (LEGACY)
 # ============================================================
 
 class ProductCategory(db.Model):
-    """Legacy product categories. New equivalent: ServicesMaster (tenant-scoped)."""
+    """
+    Legacy product category groupings.
+    New equivalent: tenant-scoped ServicesMaster rows with matching service_code prefixes.
+    """
     __tablename__ = 'product_categories'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -51,7 +62,10 @@ class ProductCategory(db.Model):
 
 
 class Product(db.Model):
-    """Legacy product catalog. New equivalent: ServicesMaster."""
+    """
+    Legacy product / SKU catalogue.
+    New equivalent: ServicesMaster (StreemLyne_MT.Services_Master)
+    """
     __tablename__ = 'products'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -83,7 +97,10 @@ class Product(db.Model):
 # ============================================================
 
 class Proposal(db.Model):
-    """Legacy proposal model. New equivalent: ProposalMaster."""
+    """
+    Legacy proposal / quote header.
+    New equivalent: ProposalMaster (StreemLyne_MT.Proposal_Master)
+    """
     __tablename__ = 'proposals'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -92,7 +109,7 @@ class Proposal(db.Model):
     reference_number = db.Column(db.String(50), unique=True)
     title = db.Column(db.String(255))
     total = db.Column(db.Numeric(10, 2), nullable=False)
-    status = db.Column(db.String(20), default='Draft')
+    status = db.Column(db.String(20), default='Draft')  # Draft | Sent | Accepted | Rejected
     valid_until = db.Column(db.Date)
     notes = db.Column(db.Text)
     custom_data = db.Column(db.JSON, default=dict)
@@ -100,7 +117,9 @@ class Proposal(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     customer = db.relationship('Customer', back_populates='proposals')
-    items = db.relationship('ProposalItem', back_populates='proposal', lazy=True, cascade='all, delete-orphan')
+    items = db.relationship(
+        'ProposalItem', back_populates='proposal', lazy=True, cascade='all, delete-orphan'
+    )
     opportunity = db.relationship('Opportunity', back_populates='proposal', uselist=False)
 
     def __repr__(self):
@@ -108,7 +127,10 @@ class Proposal(db.Model):
 
 
 class ProposalItem(db.Model):
-    """Legacy proposal line items. New equivalent: ProposalDetails."""
+    """
+    Legacy proposal line items.
+    New equivalent: ProposalDetails (StreemLyne_MT.Proposal_Details)
+    """
     __tablename__ = 'proposal_items'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -138,14 +160,22 @@ class ProposalItem(db.Model):
 # ============================================================
 
 class Invoice(db.Model):
-    """Legacy invoice model. New equivalent: InvoiceMaster."""
+    """
+    Legacy invoice header.
+    New equivalent: InvoiceMaster (StreemLyne_MT.Invoice_Master)
+
+    FIX: amount_due, amount_paid, and balance are @property computed fields.
+    They were correct in the original but are annotated here for clarity —
+    do NOT add corresponding db.Column definitions or SQLAlchemy will raise
+    a mapper conflict.
+    """
     __tablename__ = 'invoices'
 
     id = db.Column(db.Integer, primary_key=True)
     tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
     invoice_number = db.Column(db.String(50), unique=True, nullable=False)
-    status = db.Column(db.String(20), default='Draft')
+    status = db.Column(db.String(20), default='Draft')  # Draft | Sent | Paid | Void
     due_date = db.Column(db.Date)
     paid_date = db.Column(db.Date)
     custom_data = db.Column(db.JSON, default=dict)
@@ -153,28 +183,33 @@ class Invoice(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     opportunity = db.relationship('Opportunity', back_populates='invoices')
-    line_items = db.relationship('InvoiceLineItem', back_populates='invoice', lazy=True, cascade='all, delete-orphan')
+    line_items = db.relationship(
+        'InvoiceLineItem', back_populates='invoice', lazy=True, cascade='all, delete-orphan'
+    )
     payments = db.relationship('Payment', back_populates='invoice', lazy=True)
     tenant = db.relationship('Tenant')
 
     @property
     def amount_due(self):
-        return sum([(li.quantity or 0) * (li.unit_price or 0) for li in self.line_items])
+        return sum((li.quantity or 0) * float(li.unit_price or 0) for li in self.line_items)
 
     @property
     def amount_paid(self):
-        return sum([p.amount or 0 for p in self.payments if p.cleared])
+        return sum(float(p.amount or 0) for p in self.payments if p.cleared)
 
     @property
     def balance(self):
-        return (self.amount_due or 0) - (self.amount_paid or 0)
+        return self.amount_due - self.amount_paid
 
     def __repr__(self):
         return f'<Invoice {self.invoice_number}>'
 
 
 class InvoiceLineItem(db.Model):
-    """Legacy invoice line items. New equivalent: InvoiceDetails."""
+    """
+    Legacy invoice line items.
+    New equivalent: InvoiceDetails (StreemLyne_MT.Invoice_Details)
+    """
     __tablename__ = 'invoice_line_items'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -187,6 +222,10 @@ class InvoiceLineItem(db.Model):
 
     invoice = db.relationship('Invoice', back_populates='line_items')
 
+    @property
+    def line_total(self):
+        return (self.quantity or 0) * float(self.unit_price or 0)
+
     def __repr__(self):
         return f'<InvoiceLineItem {self.description}>'
 
@@ -196,7 +235,11 @@ class InvoiceLineItem(db.Model):
 # ============================================================
 
 class Payment(db.Model):
-    """Legacy payment records. No direct new-schema equivalent yet."""
+    """
+    Legacy payment records.
+    No direct new-schema equivalent yet — retained until a
+    Payment_Master table is added to the StreemLyne_MT schema.
+    """
     __tablename__ = 'payments'
 
     id = db.Column(db.Integer, primary_key=True)

@@ -1,43 +1,52 @@
-# C:\streemlyne_crm_backend\backend\models\legacy\core_documents_legacy.py
 """
-Legacy Document Models - Only OpportunityDocument remains unique
+Legacy Document Models — Default Schema (No StreemLyne_MT prefix)
 
-NOTE: Activity, OpportunityNote, DocumentTemplate, FormSubmission, etc.
-are now defined in core_documents.py to avoid table name conflicts.
-Import those from the main models package instead.
+Only OpportunityDocument remains unique to this file.
+All other legacy document models (Activity, OpportunityNote, etc.) were
+consolidated into core_documents.py to eliminate table-name conflicts.
+
+If you need the old versions, see models/legacy/core_legacy.py.
 """
 
 import sys
 import os
 from datetime import datetime
 
-# Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import db
 
 
+__all__ = ['OpportunityDocument']
+
+
 # ============================================================
-# OPPORTUNITY DOCUMENTS (Legacy - unique to this file)
+# OPPORTUNITY DOCUMENTS (Legacy)
 # ============================================================
 
 class OpportunityDocument(db.Model):
-    """Documents attached to opportunities (Legacy model)"""
+    """
+    Files attached to legacy Opportunity records.
+    New equivalent: CaseDocuments (StreemLyne_MT.Case_Documents)
+
+    NOTE: This model remains in the legacy schema because CaseDocuments
+    uses client_id + opportunity_id FKs to the new schema tables, while
+    this model references the legacy UUID-based opportunities table.
+    Migrate outstanding rows to CaseDocuments before retiring this model.
+    """
     __tablename__ = 'opportunity_documents'
 
     id = db.Column(db.Integer, primary_key=True)
     tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
     opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id'), nullable=False)
-    
-    # File Info
+
     filename = db.Column(db.String(255), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
-    file_size = db.Column(db.Integer)
+    file_size = db.Column(db.Integer)            # Bytes
     mime_type = db.Column(db.String(100))
     category = db.Column(db.String(50))
-    
-    # Audit
+
     uploaded_by = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -47,7 +56,7 @@ class OpportunityDocument(db.Model):
 
     def __repr__(self):
         return f'<OpportunityDocument {self.filename}>'
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -60,24 +69,5 @@ class OpportunityDocument(db.Model):
             'mime_type': self.mime_type,
             'category': self.category,
             'uploaded_by': self.uploaded_by,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
-
-
-# ============================================================
-# NOTE: The following models are now defined in core_documents.py
-# to avoid table name conflicts. They are imported by legacy/__init__.py
-# from core_documents for backward compatibility:
-# 
-# - Activity
-# - OpportunityNote
-# - DocumentTemplate
-# - FormSubmission
-# - CustomerFormData
-# - DataImport
-# - AuditLog
-# - VersionedSnapshot
-# - ChatConversation
-# - ChatMessage
-# - ChatHistory
-# ============================================================

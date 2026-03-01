@@ -1,6 +1,11 @@
 """
-Customer Routes
-Handles: ClientMaster CRUD + legacy compatibility aliases.
+DEPRECATED - Customer Routes
+
+THIS FILE IS DEPRECATED. All functionality has been moved to client_routes.py.
+
+Legacy route handlers for backwards compatibility. Use /api/clients instead.
+
+Handles: ClientMaster CRUD (legacy compatibility aliases).
 
 Schema alignment (StreemLyne_MT):
   Client_Master:
@@ -22,6 +27,11 @@ NOTE — stage management:
   (via stage_id FK → Stage_Master). The /customers/<id>/stage endpoint is
   retained for backwards compatibility but now correctly updates the linked
   opportunity's stage_id instead of a non-existent column.
+
+MIGRATION GUIDE:
+  - Replace /api/customers with /api/clients
+  - Replace /api/customers/<id>/stage with PATCH /api/opportunities/<opportunity_id>/stage
+  - Customer_Auth operations remain in /api/auth (unchanged)
 """
 
 from flask import Blueprint, request, jsonify, g, abort
