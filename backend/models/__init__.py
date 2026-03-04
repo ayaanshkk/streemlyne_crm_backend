@@ -1,20 +1,37 @@
 """
-Models Package
-Exports all database models for the StreemLyne CRM
+models/__init__.py  —  StreemLyne CRM Model Registry
+
+SCHEMA STRUCTURE:
+    StreemLyne_MT  — All tables (DDL-defined + app-level via migration)
+    legacy/        — Old UUID-based tables kept for backward compatibility only
+
+IMPORT ORDER (respects SQLAlchemy mapper dependency resolution):
+    1. tenancy          — TenantMaster must exist before any FK that references it
+    2. masters          — Lookup/reference tables (no FK to business models)
+    3. core             — Core business models (Client, Employee, Opportunity, etc.)
+    4. core_proposals   — Proposal + Invoice (depend on Client, Project, Services)
+    5. core_documents   — Activities, Chat, Audit (depend on most of the above)
+
+NOTE: The education and interior_design modules have been archived.
+      Backup copies are in: models/_backup_modules/
+      Do NOT re-import them here without restoring the module files first.
 """
 
-# ============================================================
-# NEW SCHEMA - Tenancy Models
-# ============================================================
+# ── 1. Tenancy ────────────────────────────────────────────────────────────────
 from .tenancy import (
     TenantMaster,
+    SubscriptionPlan,
+    ModuleMaster,
+    SubscriptionModuleMapping,
     TenantModuleMapping,
-    TenantSubscription
+    TenantSubscription,
 )
 
-# ============================================================
-# NEW SCHEMA - Master Data Models
-# ============================================================
+# Backward-compatibility alias matching the SQL table name Subscription_Plans
+SubscriptionPlans = SubscriptionPlan
+
+
+# ── 2. Masters / Lookup Tables ───────────────────────────────────────────────
 from .masters import (
     CountryMaster,
     CurrencyMaster,
@@ -22,73 +39,41 @@ from .masters import (
     ServicesMaster,
     UOMMaster,
     StageMaster,
-    SupplierMaster
-)
-
-# ============================================================
-# NEW SCHEMA - System Configuration Models
-# ============================================================
-from .system import (
-    ModuleMaster,
-    SubscriptionPlans,
-    SubscriptionModuleMapping,
-    PermissionCatalog,
+    SupplierMaster,
     RoleMaster,
-    RolePermissionMapping
+    PermissionCatalog,
+    RolePermissionMapping,
 )
 
-# ============================================================
-# CORE MODELS - OLD + NEW
-# ============================================================
+
+# ── 3. Core Business Models ──────────────────────────────────────────────────
 from .core import (
-    # OLD MODELS (keep for backward compatibility)
-    Tenant,
-    User,
-    LoginAttempt,
-    Session,
-    Customer,
-    Opportunity,
-    Job,
-    Team,
-    TeamMember,
-    Salesperson,
-    Assignment,
-    
-    # NEW MODELS (aligned with new schema)
+    ClientMaster,
+    ClientInteractions,
     EmployeeMaster,
     UserMaster,
-    
-    # Enums
-    STAGE_ENUM,
-    CONTACT_MADE_ENUM,
-    PREFERRED_CONTACT_ENUM,
-    DOCUMENT_TEMPLATE_TYPE_ENUM,
-    PAYMENT_METHOD_ENUM,
-    AUDIT_ACTION_ENUM,
-    ASSIGNMENT_TYPE_ENUM,
-    
-    # Utilities
-    generate_job_reference
+    UserRoleMapping,
+    CustomerAuth,
+    CustomerPasswordReset,
+    OpportunityDetails,
+    ProjectDetails,
+    CaseDocuments,
+    CustomerDocuments,
+    EnergyContractMaster,
 )
 
-# ============================================================
-# PROPOSALS & FINANCIAL (keep existing)
-# ============================================================
+
+# ── 4. Proposals & Invoices ──────────────────────────────────────────────────
 from .core_proposals import (
-    Product,
-    ProductCategory,
-    Proposal,
-    ProposalItem,
-    Invoice,
-    InvoiceLineItem,
-    Payment
+    ProposalMaster,
+    ProposalDetails,
+    InvoiceMaster,
+    InvoiceDetails,
 )
 
-# ============================================================
-# DOCUMENTS & ACTIVITIES (keep existing)
-# ============================================================
+
+# ── 5. Documents, Chat & Audit ───────────────────────────────────────────────
 from .core_documents import (
-    OpportunityDocument,
     Activity,
     OpportunityNote,
     DocumentTemplate,
@@ -99,60 +84,35 @@ from .core_documents import (
     VersionedSnapshot,
     ChatConversation,
     ChatMessage,
-    ChatHistory
+    ChatHistory,
 )
 
-# ============================================================
-# MODULE MODELS - Optional (Industry-Specific)
-# ============================================================
-try:
-    from .modules.education import (
-        TestResult,
-        Certificate,
-        TrainingBatch,
-        PTIForm
-    )
-    EDUCATION_MODULE_AVAILABLE = True
-except ImportError:
-    EDUCATION_MODULE_AVAILABLE = False
-    TestResult = None
-    Certificate = None
-    TrainingBatch = None
-    PTIForm = None
 
-try:
-    from .modules.interior_design import (
-        Project,
-        KitchenChecklist,
-        BedroomChecklist,
-        MaterialOrder,
-        CuttingList,
-        ApplianceCatalog,
-        DrawingDocument,
-        Drawing
-    )
-    INTERIOR_MODULE_AVAILABLE = True
-except ImportError:
-    INTERIOR_MODULE_AVAILABLE = False
-    Project = None
-    KitchenChecklist = None
-    BedroomChecklist = None
-    MaterialOrder = None
-    CuttingList = None
-    ApplianceCatalog = None
-    DrawingDocument = None
-    Drawing = None
+# ── Module availability flags ─────────────────────────────────────────────────
+# Education and interior_design modules are archived — always False.
+# Update these when modules are restored.
+EDUCATION_MODULE_AVAILABLE = False
+INTERIOR_MODULE_AVAILABLE = False
+# Alias kept so any existing code referencing DRAWING_MODULE_AVAILABLE doesn't
+# crash with ImportError (maps to the same archived module flag).
+DRAWING_MODULE_AVAILABLE = False
 
-# ============================================================
-# EXPORT ALL
-# ============================================================
+# Legacy models live in models/legacy/ — import directly in routes that need them.
+LEGACY_MODELS_AVAILABLE = True
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 __all__ = [
-    # Tenancy
+    # Tenancy (StreemLyne_MT DDL)
     'TenantMaster',
+    'SubscriptionPlan',
+    'SubscriptionPlans',
+    'ModuleMaster',
+    'SubscriptionModuleMapping',
     'TenantModuleMapping',
     'TenantSubscription',
-    
-    # Master Data
+
+    # Masters (StreemLyne_MT DDL)
     'CountryMaster',
     'CurrencyMaster',
     'DesignationMaster',
@@ -160,52 +120,31 @@ __all__ = [
     'UOMMaster',
     'StageMaster',
     'SupplierMaster',
-    
-    # System Configuration
-    'ModuleMaster',
-    'SubscriptionPlans',
-    'SubscriptionModuleMapping',
-    'PermissionCatalog',
     'RoleMaster',
+    'PermissionCatalog',
     'RolePermissionMapping',
-    
-    # Core - OLD (backward compatibility)
-    'Tenant',
-    'User',
-    'LoginAttempt',
-    'Session',
-    'Customer',
-    'Opportunity',
-    'Job',
-    'Team',
-    'TeamMember',
-    'Salesperson',
-    'Assignment',
-    
-    # Core - NEW
+
+    # Core (StreemLyne_MT DDL)
+    'ClientMaster',
+    'ClientInteractions',
     'EmployeeMaster',
     'UserMaster',
-    
-    # Enums
-    'STAGE_ENUM',
-    'CONTACT_MADE_ENUM',
-    'PREFERRED_CONTACT_ENUM',
-    'DOCUMENT_TEMPLATE_TYPE_ENUM',
-    'PAYMENT_METHOD_ENUM',
-    'AUDIT_ACTION_ENUM',
-    'ASSIGNMENT_TYPE_ENUM',
-    
-    # Financial
-    'Product',
-    'ProductCategory',
-    'Proposal',
-    'ProposalItem',
-    'Invoice',
-    'InvoiceLineItem',
-    'Payment',
-    
-    # Documents
-    'OpportunityDocument',
+    'UserRoleMapping',
+    'CustomerAuth',
+    'CustomerPasswordReset',
+    'OpportunityDetails',
+    'ProjectDetails',
+    'CaseDocuments',
+    'CustomerDocuments',
+    'EnergyContractMaster',
+
+    # Proposals & Invoices (StreemLyne_MT DDL)
+    'ProposalMaster',
+    'ProposalDetails',
+    'InvoiceMaster',
+    'InvoiceDetails',
+
+    # Documents, Chat & Audit (app-level — require Alembic migration)
     'Activity',
     'OpportunityNote',
     'DocumentTemplate',
@@ -217,41 +156,91 @@ __all__ = [
     'ChatConversation',
     'ChatMessage',
     'ChatHistory',
-    
-    # Utilities
-    'generate_job_reference',
-    
-    # Module flags
+
+    # Module availability flags
     'EDUCATION_MODULE_AVAILABLE',
     'INTERIOR_MODULE_AVAILABLE',
+    'DRAWING_MODULE_AVAILABLE',
+    'LEGACY_MODELS_AVAILABLE',
 ]
 
-# Add module models to exports if available
-if EDUCATION_MODULE_AVAILABLE:
-    __all__.extend(['TestResult', 'Certificate', 'TrainingBatch', 'PTIForm'])
 
-if INTERIOR_MODULE_AVAILABLE:
-    __all__.extend([
-        'Project', 'KitchenChecklist', 'BedroomChecklist',
-        'MaterialOrder', 'CuttingList', 'ApplianceCatalog',
-        'DrawingDocument', 'Drawing'
-    ])
-
+# ── Helper Functions ──────────────────────────────────────────────────────────
 
 def is_module_available(module_name: str) -> bool:
-    """Check if a module is available"""
-    if module_name == 'education':
-        return EDUCATION_MODULE_AVAILABLE
-    elif module_name == 'interior_design':
-        return INTERIOR_MODULE_AVAILABLE
-    return False
+    """
+    Check whether an optional module is currently active.
+
+    Args:
+        module_name: 'education' | 'interior_design' | 'legacy'
+
+    Returns:
+        bool — False for education and interior_design (both archived)
+    """
+    return {
+        'education': EDUCATION_MODULE_AVAILABLE,
+        'interior_design': INTERIOR_MODULE_AVAILABLE,
+        'legacy': LEGACY_MODELS_AVAILABLE,
+    }.get(module_name, False)
 
 
 def get_available_modules() -> list:
-    """Get list of available module names"""
+    """
+    Return names of all optional modules that are currently active.
+
+    Returns:
+        list[str]
+    """
     modules = []
-    if EDUCATION_MODULE_AVAILABLE:
-        modules.append('education')
-    if INTERIOR_MODULE_AVAILABLE:
-        modules.append('interior_design')
+    if LEGACY_MODELS_AVAILABLE:
+        modules.append('legacy')
     return modules
+
+
+def get_new_schema_models() -> list:
+    """
+    Return class names of all models in the StreemLyne_MT schema.
+    Includes both DDL-defined tables and app-level tables created via migration.
+
+    Returns:
+        list[str]
+    """
+    return [
+        # Tenancy
+        'TenantMaster', 'SubscriptionPlan', 'ModuleMaster',
+        'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
+        # Masters
+        'CountryMaster', 'CurrencyMaster', 'DesignationMaster',
+        'ServicesMaster', 'UOMMaster', 'StageMaster', 'SupplierMaster',
+        'RoleMaster', 'PermissionCatalog', 'RolePermissionMapping',
+        # Core
+        'ClientMaster', 'ClientInteractions', 'EmployeeMaster', 'UserMaster',
+        'UserRoleMapping', 'CustomerAuth', 'CustomerPasswordReset',
+        'OpportunityDetails', 'ProjectDetails', 'CaseDocuments',
+        'CustomerDocuments', 'EnergyContractMaster',
+        # Proposals & Invoices
+        'ProposalMaster', 'ProposalDetails', 'InvoiceMaster', 'InvoiceDetails',
+        # Documents / Chat / Audit (app-level — require Alembic migration)
+        'Activity', 'OpportunityNote', 'DocumentTemplate', 'FormSubmission',
+        'CustomerFormData', 'DataImport', 'AuditLog', 'VersionedSnapshot',
+        'ChatConversation', 'ChatMessage', 'ChatHistory',
+    ]
+
+
+def get_legacy_schema_models() -> list:
+    """
+    Return class names of models in the legacy/default schema (UUIDs).
+    These live in models/legacy/ and exist only for backward compatibility.
+    Remove entries as routes are migrated to new schema models.
+
+    Returns:
+        list[str]
+    """
+    return [
+        'Tenant', 'User', 'LoginAttempt', 'Session',
+        'Customer', 'Opportunity', 'Job',
+        'Team', 'TeamMember', 'Salesperson', 'Assignment',
+        'Product', 'ProductCategory', 'Proposal', 'ProposalItem',
+        'Invoice', 'InvoiceLineItem', 'Payment',
+        'OpportunityDocument',
+    ]

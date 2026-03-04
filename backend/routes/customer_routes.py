@@ -1,284 +1,343 @@
-# routes/customer_routes.py
-from flask import Blueprint, request, jsonify, g
+"""
+DEPRECATED - Customer Routes
+
+THIS FILE IS DEPRECATED. All functionality has been moved to client_routes.py.
+
+Legacy route handlers for backwards compatibility. Use /api/clients instead.
+
+Handles: ClientMaster CRUD (legacy compatibility aliases).
+
+Schema alignment (StreemLyne_MT):
+  Client_Master:
+    client_id, tenant_id, client_company_name, client_contact_name,
+    address, country_id, post_code, client_phone, client_email,
+    client_website, default_currency_id, created_at
+
+IMPORTANT — removed routes:
+  The old /customers route had two conflicting POST handlers registered on the
+  same path. These have been merged into a single handler here.
+
+IMPORTANT — CustomerFormData:
+  CustomerFormData is not part of the core StreemLyne_MT schema.
+  It is treated as an app-level model. References are kept but guarded so the
+  app still starts if the model/table is absent.
+
+NOTE — stage management:
+  Client_Master has no `stage` column. Stage belongs to Opportunity_Details
+  (via stage_id FK → Stage_Master). The /customers/<id>/stage endpoint is
+  retained for backwards compatibility but now correctly updates the linked
+  opportunity's stage_id instead of a non-existent column.
+
+MIGRATION GUIDE:
+  - Replace /api/customers with /api/clients
+  - Replace /api/customers/<id>/stage with PATCH /api/opportunities/<opportunity_id>/stage
+  - Customer_Auth operations remain in /api/auth (unchanged)
+"""
+
+from flask import Blueprint, request, jsonify, g, abort
+from sqlalchemy.exc import IntegrityError
 from database import db
-from models import Customer, CustomerFormData, Opportunity
-import json
-from datetime import datetime
-from tenant_middleware import require_tenant as token_required
+from models import ClientMaster, OpportunityDetails
+from middleware import auth_required, permission_required
 
-customer_bp = Blueprint('customer', __name__)
+customer_bp = Blueprint('customer', __name__, url_prefix='/api/customers')
 
-# ----------------------------------
-# Customer Routes
-# ----------------------------------
 
-@customer_bp.route('/customers', methods=['POST'])
-@token_required
-def create_customer(current_user):
-    """Create new customer with custom data support"""
-    
-    data = request.get_json()
-    
-    # Basic customer info
-    customer = Customer(
-        tenant_id=current_user.tenant_id,
-        name=data['name'],
-        email=data.get('email'),
-        phone=data.get('phone'),
+# ─────────────────────────────────────────
+# Clients – CRUD
+# ─────────────────────────────────────────
+
+@customer_bp.route('', methods=['GET'])
+@auth_required
+def list_customers():
+    """
+    List all clients for the current tenant.
+    GET /api/customers
+    Query params:
+      name – partial match on client_company_name
+    """
+    name_q = request.args.get('name')
+    query = ClientMaster.query.filter_by(tenant_id=g.tenant_id)
+
+    if name_q:
+        query = query.filter(ClientMaster.client_company_name.ilike(f'%{name_q}%'))
+
+    clients = query.order_by(ClientMaster.created_at.desc()).all()
+    return jsonify([_client_dict(c) for c in clients]), 200
+
+
+@customer_bp.route('', methods=['POST'])
+@auth_required
+@permission_required('client.create')
+def create_customer():
+    """
+    Create a new client.
+    POST /api/customers
+    Body:
+    {
+        "client_company_name": "Acme Ltd",   (required; also accepted as "name")
+        "client_contact_name": "John Smith", (also accepted as "contact_name")
+        "client_email":  "john@acme.com",    (also accepted as "email")
+        "client_phone":  "555-0100",         (also accepted as "phone")
+        "address":       "1 High Street",
+        "post_code":     "SW1A 1AA",         (also accepted as "postcode")
+        "country_id":    1,
+        "default_currency_id": 1,
+        "client_website": "https://acme.com"
+    }
+    Accepts legacy field aliases so existing front-end callers keep working.
+    """
+    data = request.get_json() or {}
+
+    name = (
+        data.get('client_company_name')
+        or data.get('name')
+        or ''
+    ).strip()
+
+    if not name:
+        return jsonify({'error': 'client_company_name is required'}), 400
+
+    client = ClientMaster(
+        tenant_id=g.tenant_id,
+        client_company_name=name,
+        client_contact_name=data.get('client_contact_name') or data.get('contact_name'),
+        client_email=(
+            (data.get('client_email') or data.get('email') or '').lower().strip() or None
+        ),
+        client_phone=data.get('client_phone') or data.get('phone'),
         address=data.get('address'),
-        stage=data.get('stage', 'Prospect'),
+        post_code=data.get('post_code') or data.get('postcode'),
+        country_id=data.get('country_id'),
+        default_currency_id=data.get('default_currency_id'),
+        client_website=data.get('client_website'),
     )
-    
-    # 🎯 NEW: Store industry-specific data in custom_data
-    if 'custom_data' in data:
-        customer.custom_data = data['custom_data']
-        # Example: {'mhe_type': 'Forklift', 'batch_size': 10}
-    
-    db.session.add(customer)
-    db.session.commit()
-    
-    return jsonify(customer.to_dict()), 201
 
-@customer_bp.route('/customers', methods=['GET', 'POST'])
-@token_required
-def handle_customers():
-    if request.method == 'POST':
-        data = request.json
-        
-        # Validate required fields
-        if not data.get('name'):
-            return jsonify({'error': 'Customer name is required'}), 400
-        
-        # Convert empty string to None for enum field
-        preferred_contact = data.get('preferred_contact_method')
-        if preferred_contact == '':
-            preferred_contact = None
-        
-        customer = Customer(
-            tenant_id=g.tenant_id,  # CRITICAL: Set tenant_id
-            name=data.get('name', ''),
-            company_name=data.get('company_name'),
-            address=data.get('address'),
-            postcode=data.get('postcode'),
-            phone=data.get('phone'),
-            email=data.get('email'),
-            industry=data.get('industry'),
-            company_size=data.get('company_size'),
-            contact_made=data.get('contact_made', 'Unknown'),
-            preferred_contact_method=preferred_contact,
-            marketing_opt_in=data.get('marketing_opt_in', False),
-            stage=data.get('stage', 'Prospect'),
-            salesperson=data.get('salesperson'),
-            notes=data.get('notes'),
-            created_by=g.user.get_full_name(),  # Use authenticated user
-            status=data.get('status', 'active'),
+    try:
+        db.session.add(client)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'A client with these details already exists'}), 409
+
+    return jsonify(_client_dict(client)), 201
+
+
+@customer_bp.route('/<int:customer_id>', methods=['GET'])
+@auth_required
+def get_customer(customer_id: int):
+    """
+    Retrieve a single client with their opportunities and form submissions.
+    GET /api/customers/<customer_id>
+    """
+    client = _get_or_404(customer_id)
+
+    opportunities = (
+        OpportunityDetails.query
+        .filter_by(client_id=client.client_id, tenant_id=g.tenant_id)
+        .filter(OpportunityDetails.deleted_at.is_(None))
+        .order_by(OpportunityDetails.created_at.desc())
+        .all()
+    )
+
+    # CustomerFormData is an app-level model outside the core schema.
+    # Guarded import so the app still starts when the table doesn't exist yet.
+    form_submissions = []
+    try:
+        from models import CustomerFormData
+        import json as _json
+        entries = (
+            CustomerFormData.query
+            .filter_by(client_id=client.client_id, tenant_id=g.tenant_id)
+            .order_by(CustomerFormData.submitted_at.desc())
+            .all()
         )
-        
-        db.session.add(customer)
-        db.session.commit()
-        
-        return jsonify({
-            'id': customer.id,
-            'tenant_id': customer.tenant_id,
-            'name': customer.name,
-            'company_name': customer.company_name,
-            'address': customer.address,
-            'postcode': customer.postcode,
-            'phone': customer.phone,
-            'email': customer.email,
-            'industry': customer.industry,
-            'company_size': customer.company_size,
-            'contact_made': customer.contact_made,
-            'preferred_contact_method': customer.preferred_contact_method,
-            'marketing_opt_in': customer.marketing_opt_in,
-            'stage': customer.stage,
-            'salesperson': customer.salesperson,
-            'notes': customer.notes,
-            'status': customer.status,
-            'created_at': customer.created_at.isoformat() if customer.created_at else None,
-            'updated_at': customer.updated_at.isoformat() if customer.updated_at else None,
-            'created_by': customer.created_by,
-            'updated_by': customer.updated_by,
-            'message': 'Customer created successfully'
-        }), 201
-    
-    # GET all customers - filtered by tenant
-    name_query = request.args.get('name', type=str)
-    
-    query = Customer.query.filter_by(tenant_id=g.tenant_id)  # CRITICAL: Filter by tenant
-    
-    if name_query:
-        query = query.filter(Customer.name.ilike(f"%{name_query}%"))
-    
-    customers = query.order_by(Customer.created_at.desc()).all()
-    
-    return jsonify([
-        {
-            'id': c.id,
-            'name': c.name,
-            'company_name': c.company_name,
-            'address': c.address,
-            'postcode': c.postcode,
-            'phone': c.phone,
-            'email': c.email,
-            'industry': c.industry,
-            'company_size': c.company_size,
-            'contact_made': c.contact_made,
-            'preferred_contact_method': c.preferred_contact_method,
-            'marketing_opt_in': c.marketing_opt_in,
-            'stage': c.stage,
-            'salesperson': c.salesperson,
-            'notes': c.notes,
-            'status': c.status,
-            'created_at': c.created_at.isoformat() if c.created_at else None,
-            'updated_at': c.updated_at.isoformat() if c.updated_at else None,
-            'created_by': c.created_by,
-            'updated_by': c.updated_by,
-        }
-        for c in customers
-    ])
-
-@customer_bp.route('/customers/<string:customer_id>', methods=['GET', 'PUT', 'DELETE'])
-@token_required
-def handle_single_customer(customer_id):
-    # CRITICAL: Filter by both id AND tenant_id for security
-    customer = Customer.query.filter_by(
-        id=customer_id,
-        tenant_id=g.tenant_id
-    ).first()
-    
-    if not customer:
-        return jsonify({'error': 'Customer not found'}), 404
-    
-    if request.method == 'GET':
-        # Fetch form submissions for this customer
-        form_entries = CustomerFormData.query.filter_by(
-            customer_id=customer.id,
-            tenant_id=g.tenant_id  # CRITICAL: Filter by tenant
-        ).order_by(CustomerFormData.submitted_at.desc()).all()
-        
-        form_submissions = []
-        for f in form_entries:
+        for f in entries:
             try:
-                parsed = json.loads(f.form_data)
+                parsed = _json.loads(f.form_data)
             except Exception:
-                parsed = {"raw": f.form_data}
-            
+                parsed = {'raw': f.form_data}
             form_submissions.append({
-                "id": f.id,
-                "token_used": f.token_used,
-                "submitted_at": f.submitted_at.isoformat() if f.submitted_at else None,
-                "form_data": parsed,
-                "source": "web_form"
+                'id':           f.id,
+                'client_id':    f.client_id,
+                'token_used':   f.token_used,
+                'submitted_at': f.submitted_at.isoformat() if f.submitted_at else None,
+                'form_data':    parsed,
+                'source':       'web_form',
             })
+    except ImportError:
+        pass
 
+    result = _client_dict(client)
+    result['opportunities'] = [
+        {
+            'opportunity_id':          o.opportunity_id,
+            'opportunity_title':       o.opportunity_title,
+            'opportunity_description': o.opportunity_description,
+            'stage_id':                o.stage_id,
+            'opportunity_value':       o.opportunity_value,
+            'currency_id':             o.currency_id,
+            'service_id':              o.service_id,
+            'start_date':  o.start_date.isoformat()  if o.start_date  else None,
+            'end_date':    o.end_date.isoformat()    if o.end_date    else None,
+            'created_at':  o.created_at.isoformat()  if o.created_at  else None,
+        }
+        for o in opportunities
+    ]
+    result['form_submissions'] = form_submissions
+    return jsonify(result), 200
+
+
+@customer_bp.route('/<int:customer_id>', methods=['PUT'])
+@auth_required
+@permission_required('client.update')
+def update_customer(customer_id: int):
+    """
+    Update a client record.
+    PUT /api/customers/<customer_id>
+    Accepts both canonical and legacy field names.
+    """
+    client = _get_or_404(customer_id)
+    data = request.get_json() or {}
+
+    # Each tuple: (model_attr, list_of_accepted_keys_in_priority_order)
+    field_map = [
+        ('client_company_name', ['client_company_name', 'name']),
+        ('client_contact_name', ['client_contact_name', 'contact_name']),
+        ('client_email',        ['client_email', 'email']),
+        ('client_phone',        ['client_phone', 'phone']),
+        ('address',             ['address']),
+        ('post_code',           ['post_code', 'postcode']),
+        ('country_id',          ['country_id']),
+        ('default_currency_id', ['default_currency_id']),
+        ('client_website',      ['client_website']),
+    ]
+
+    for attr, keys in field_map:
+        for key in keys:
+            if key in data and data[key] is not None:
+                setattr(client, attr, data[key])
+                break
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Update violates a data constraint'}), 409
+
+    return jsonify({'message': 'Customer updated successfully', 'client': _client_dict(client)}), 200
+
+
+@customer_bp.route('/<int:customer_id>', methods=['DELETE'])
+@auth_required
+@permission_required('client.delete')
+def delete_customer(customer_id: int):
+    """
+    Delete a client.
+    DELETE /api/customers/<customer_id>
+    Returns 409 if the client is referenced by FK-constrained tables
+    (e.g. Opportunity_Details, Customer_Auth).
+    """
+    client = _get_or_404(customer_id)
+
+    try:
+        db.session.delete(client)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
         return jsonify({
-            'id': customer.id,
-            'name': customer.name,
-            'company_name': customer.company_name,
-            'address': customer.address,
-            'postcode': customer.postcode,
-            'phone': customer.phone,
-            'email': customer.email,
-            'industry': customer.industry,
-            'company_size': customer.company_size,
-            'contact_made': customer.contact_made,
-            'preferred_contact_method': customer.preferred_contact_method,
-            'marketing_opt_in': customer.marketing_opt_in,
-            'stage': customer.stage,
-            'salesperson': customer.salesperson,
-            'notes': customer.notes,
-            'status': customer.status,
-            'created_at': customer.created_at.isoformat() if customer.created_at else None,
-            'updated_at': customer.updated_at.isoformat() if customer.updated_at else None,
-            'created_by': customer.created_by,
-            'updated_by': customer.updated_by,
-            'form_submissions': form_submissions,
-            'opportunities': [
-                {
-                    'id': o.id,
-                    'opportunity_name': o.opportunity_name,
-                    'opportunity_reference': o.opportunity_reference,
-                    'stage': o.stage,
-                    'estimated_value': float(o.estimated_value) if o.estimated_value else None,
-                    'probability': o.probability,
-                    'expected_close_date': o.expected_close_date.isoformat() if o.expected_close_date else None,
-                }
-                for o in customer.opportunities
-            ]
-        })
-    
-    elif request.method == 'PUT':
-        data = request.json
-        
-        customer.name = data.get('name', customer.name)
-        customer.company_name = data.get('company_name', customer.company_name)
-        customer.address = data.get('address', customer.address)
-        customer.postcode = data.get('postcode', customer.postcode)
-        customer.phone = data.get('phone', customer.phone)
-        customer.email = data.get('email', customer.email)
-        customer.industry = data.get('industry', customer.industry)
-        customer.company_size = data.get('company_size', customer.company_size)
-        customer.contact_made = data.get('contact_made', customer.contact_made)
-        
-        # Handle preferred_contact_method - convert empty string to None
-        preferred_contact = data.get('preferred_contact_method', customer.preferred_contact_method)
-        if preferred_contact == '':
-            preferred_contact = None
-        customer.preferred_contact_method = preferred_contact
-        
-        customer.marketing_opt_in = data.get('marketing_opt_in', customer.marketing_opt_in)
-        customer.stage = data.get('stage', customer.stage)
-        customer.salesperson = data.get('salesperson', customer.salesperson)
-        customer.notes = data.get('notes', customer.notes)
-        customer.status = data.get('status', customer.status)
-        customer.updated_by = g.user.get_full_name()
-        
-        db.session.commit()
-        return jsonify({'message': 'Customer updated successfully'})
-    
-    elif request.method == 'DELETE':
-        db.session.delete(customer)
-        db.session.commit()
-        return jsonify({'message': 'Customer deleted successfully'})
+            'error': 'Cannot delete client — they are referenced by existing records'
+        }), 409
+
+    return jsonify({'message': 'Customer deleted successfully'}), 200
 
 
-@customer_bp.route('/customers/<string:customer_id>/stage', methods=['PATCH'])
-@token_required
-def update_customer_stage(customer_id):
-    """Update customer stage via drag and drop"""
-    # CRITICAL: Filter by tenant
-    customer = Customer.query.filter_by(
-        id=customer_id,
-        tenant_id=g.tenant_id
-    ).first()
-    
-    if not customer:
-        return jsonify({'error': 'Customer not found'}), 404
-    
-    data = request.json
-    
-    new_stage = data.get('stage')
-    reason = data.get('reason', 'Stage updated via drag and drop')
-    
-    if not new_stage:
-        return jsonify({'error': 'Stage is required'}), 400
-    
-    old_stage = customer.stage
-    customer.stage = new_stage
-    customer.updated_by = g.user.get_full_name()
-    customer.updated_at = datetime.utcnow()
-    
-    # Add audit note
-    note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage}. Reason: {reason}"
-    customer.notes = (customer.notes or '') + note_entry
-    
+# ─────────────────────────────────────────
+# Stage Management  (backwards-compat)
+# ─────────────────────────────────────────
+
+@customer_bp.route('/<int:customer_id>/stage', methods=['PATCH'])
+@auth_required
+@permission_required('client.update')
+def update_customer_stage(customer_id: int):
+    """
+    Update the stage of the most-recent open opportunity for this client.
+    PATCH /api/customers/<customer_id>/stage
+    Body: { "stage_id": 3, "reason": "..." }
+
+    NOTE: Client_Master has no stage column in the new schema.
+    Stage is managed via Opportunity_Details.stage_id → Stage_Master.
+    This endpoint applies the new stage_id to the latest non-deleted opportunity.
+    If no opportunity exists, returns 404.
+    """
+    client = _get_or_404(customer_id)
+    data = request.get_json() or {}
+
+    stage_id = data.get('stage_id')
+    if stage_id is None:
+        return jsonify({'error': 'stage_id is required'}), 400
+
+    opportunity = (
+        OpportunityDetails.query
+        .filter_by(client_id=client.client_id, tenant_id=g.tenant_id)
+        .filter(OpportunityDetails.deleted_at.is_(None))
+        .order_by(OpportunityDetails.created_at.desc())
+        .first()
+    )
+
+    if not opportunity:
+        return jsonify({
+            'error': 'No open opportunity found for this client to update stage on'
+        }), 404
+
+    opportunity.stage_id = int(stage_id)
     db.session.commit()
-    
+
     return jsonify({
         'message': 'Stage updated successfully',
-        'customer_id': customer.id,
-        'old_stage': old_stage,
-        'new_stage': new_stage,
-        'stage_updated': True
+        'customer_id': client.client_id,
+        'opportunity_id': opportunity.opportunity_id,
+        'new_stage_id': opportunity.stage_id,
     }), 200
+
+
+# ─────────────────────────────────────────
+# Private helpers
+# ─────────────────────────────────────────
+
+def _get_or_404(customer_id: int) -> ClientMaster:
+    client = ClientMaster.query.filter_by(
+        client_id=customer_id,
+        tenant_id=g.tenant_id
+    ).first()
+    if not client:
+        abort(404, description='Customer not found')
+    return client
+
+
+def _client_dict(c: ClientMaster) -> dict:
+    """
+    Returns both canonical schema names and legacy aliases so existing
+    front-end code keeps working without changes.
+    """
+    return {
+        # Canonical schema fields
+        'client_id':            c.client_id,
+        'tenant_id':            c.tenant_id,
+        'client_company_name':  c.client_company_name,
+        'client_contact_name':  c.client_contact_name,
+        'client_email':         c.client_email,
+        'client_phone':         c.client_phone,
+        'address':              c.address,
+        'post_code':            c.post_code,
+        'country_id':           c.country_id,
+        'default_currency_id':  c.default_currency_id,
+        'client_website':       c.client_website,
+        'created_at':           c.created_at.isoformat() if c.created_at else None,
+        # Legacy aliases (kept for front-end backwards compatibility)
+        'id':       c.client_id,
+        'name':     c.client_company_name,
+        'email':    c.client_email,
+        'phone':    c.client_phone,
+        'postcode': c.post_code,
+    }

@@ -1,189 +1,181 @@
-# app.py - Updated with new models structure and Flask-Migrate
+# app.py - Refactored for new StreemLyne_MT schema
 
 from flask import Flask, request
 from flask_cors import CORS
 from flask_migrate import Migrate
 import os
-import re
 from database import db, init_db
+from dotenv import load_dotenv
 
-# Load environment variables from .env file
-from dotenv import load_dotenv 
 load_dotenv()
 
 
 def create_app(test_config=None):
     app = Flask(__name__)
-    
-    # --- Configuration ---
+
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-fallback-secret-key')
-    
-    # ✅ CORS Configuration
-    CORS(app,
-         resources={r"/api/*": {"origins": "*"}},
-         supports_credentials=True,
-         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
-         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-         expose_headers=["Content-Type", "Authorization"],
+
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": "*"}},
+        supports_credentials=True,
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        expose_headers=["Content-Type", "Authorization"],
     )
-    
-    # Handle OPTIONS requests explicitly
+
     @app.before_request
     def handle_preflight():
         if request.method == "OPTIONS":
             response = app.make_default_options_response()
-            headers = response.headers
-            headers['Access-Control-Allow-Origin'] = '*'
-            headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-            headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-Tenant-ID'
-            headers['Access-Control-Max-Age'] = '3600'
+            h = response.headers
+            h['Access-Control-Allow-Origin'] = '*'
+            h['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+            h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-Tenant-ID'
+            h['Access-Control-Max-Age'] = '3600'
             return response
-    
-    # --- Database Configuration ---
+
     if test_config:
-        # Test mode: use provided config (SQLite in-memory)
         app.config.update(test_config)
     else:
-        # Production mode: use Supabase PostgreSQL from environment
         database_uri = os.getenv('DATABASE_URL')
         if not database_uri:
-            raise ValueError("DATABASE_URL environment variable not set. Please check your .env file.")
+            raise ValueError("DATABASE_URL environment variable not set.")
         app.config['SQLALCHEMY_DATABASE_URI'] = database_uri
         app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # Upload folder configuration
     basedir = os.path.abspath(os.path.dirname(__file__))
-    app.config['UPLOAD_FOLDER'] = 'uploads'
-    app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+    app.config['UPLOAD_FOLDER'] = os.path.join(basedir, 'uploads')
+    app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
 
-    # Create directories if they don't exist
-    os.makedirs(os.path.join(basedir, app.config['UPLOAD_FOLDER']), exist_ok=True)
-    os.makedirs(os.path.join(basedir, 'generated_pdfs'), exist_ok=True)
-    os.makedirs(os.path.join(basedir, 'generated_excel'), exist_ok=True)
-    
-    # Initialize database
+    for folder in ['uploads', 'generated_pdfs', 'generated_excel']:
+        os.makedirs(os.path.join(basedir, folder), exist_ok=True)
+
     init_db(app)
-    
-    # Initialize Flask-Migrate
-    migrate = Migrate(app, db)
-    
-    # ============================================================
-    # Import all models to ensure they're registered with SQLAlchemy
-    # ============================================================
+    Migrate(app, db)
+
     print("📦 Loading models...")
-    
+
     from models import (
-        # Core Models
-        Tenant, User, LoginAttempt, Session,
-        Customer, Opportunity, Job,
-        Team, TeamMember, Salesperson,
-        Assignment,
-        
-        # Financial Models
-        Product, ProductCategory,
-        Proposal, ProposalItem,
-        Invoice, InvoiceLineItem,
-        Payment,
-        
-        # Document Models
-        OpportunityDocument, Activity, OpportunityNote,
-        DocumentTemplate, FormSubmission, CustomerFormData,
-        DataImport, AuditLog, VersionedSnapshot,
-        
-        # Chat Models
-        ChatConversation, ChatMessage, ChatHistory,
-        
-        # Utilities
-        generate_job_reference,
-        
-        # Module availability flags
-        EDUCATION_MODULE_AVAILABLE,
-        INTERIOR_MODULE_AVAILABLE,
+        # Tenant & Auth
+        TenantMaster,
+        EmployeeMaster,
+        DesignationMaster,
+        UserMaster,
+        CustomerAuth,
+        CustomerPasswordReset,
+
+        # Subscription & Modules
+        SubscriptionPlan,
+        TenantSubscription,
+        ModuleMaster,
+        TenantModuleMapping,
+        SubscriptionModuleMapping,
+
+        # RBAC
+        RoleMaster,
+        RolePermissionMapping,
+        PermissionCatalog,
+        UserRoleMapping,
+
+        # CRM
+        ClientMaster,
+        ClientInteractions,
+        OpportunityDetails,
+        StageMaster,
+        ProjectDetails,
+        EnergyContractMaster,
+
+        # Commercial
+        ServicesMaster,
+        SupplierMaster,
+        ProposalMaster,
+        ProposalDetails,
+        InvoiceMaster,
+        InvoiceDetails,
+        UOMMaster,
+
+        # Documents & Forms
+        CaseDocuments,
+        CustomerDocuments,
+        CustomerFormData,
+
+        # Master data
+        CountryMaster,
+        CurrencyMaster,
+
+        # Chat (application-level, no schema table)
+        ChatHistory,
+        ChatConversation,
+        ChatMessage,
     )
-    
-    if EDUCATION_MODULE_AVAILABLE:
-        print("   ✅ Education module loaded")
-        from models import TestResult, Certificate, TrainingBatch, PTIForm
+
+    from models import DRAWING_MODULE_AVAILABLE
+    if DRAWING_MODULE_AVAILABLE:
+        print("   ✅ Drawing Analyser module loaded")
+        from models import Drawing, CuttingList
     else:
-        print("   ⚠️  Education module not available")
-    
-    if INTERIOR_MODULE_AVAILABLE:
-        print("   ✅ Interior Design module loaded")
-        from models import (
-            Project, KitchenChecklist, BedroomChecklist,
-            MaterialOrder, CuttingList, ApplianceCatalog, DrawingDocument
-        )
-    else:
-        print("   ⚠️  Interior Design module not available")
-    
-    print("✅ All models loaded successfully")
-    
-    # ============================================================
-    # Register Blueprints
-    # ============================================================
+        print("   ⚠️  Drawing Analyser module not available")
+
+    print("✅ All models loaded")
+
     print("📋 Registering blueprints...")
+
+    from routes.auth_routes         import auth_bp
+    from routes.tenant_routes       import tenant_bp
+    from routes.subscription_routes import subscription_bp
+    from routes.client_routes       import client_bp
+    from routes.employee_routes     import employee_bp
+    from routes.role_routes         import role_bp
+    from routes.opportunity_routes  import opportunity_bp
+    from routes.project_routes      import project_bp
+    from routes.contract_routes     import contract_bp
+    from routes.proposal_routes     import proposal_bp
+    from routes.invoice_routes      import invoice_bp
+    from routes.document_routes     import document_bp
+    from routes.master_routes       import master_bp
+    from routes.form_routes         import form_bp
+    from routes.chat_routes         import chat_bp
+    from routes.core_routes         import core_bp
+    from routes.customer_routes     import customer_bp
+    from routes.job_routes          import job_bp
     
-    from routes.job_routes import job_bp
-    from routes.core_routes import core_bp
-    from routes.db_routes import db_bp
-    from routes.auth_routes import auth_bp
-    from routes.form_routes import form_bp
-    from routes.customer_routes import customer_bp
-    from routes.assignment_routes import assignment_bp
-    from routes.chat_routes import chat_bp
-    from routes.tenant_routes import tenant_bp
-    from routes.drawing_analyser import drawing_bp
-    from routes.admin_routes import admin_bp
+    blueprints = [
+        auth_bp, tenant_bp, subscription_bp,
+        client_bp, employee_bp, role_bp,
+        opportunity_bp, project_bp, contract_bp,
+        proposal_bp, invoice_bp, document_bp,
+        master_bp, form_bp, chat_bp, core_bp, 
+        customer_bp, job_bp,
+    ]
 
-    app.register_blueprint(customer_bp)
-    app.register_blueprint(job_bp)
-    app.register_blueprint(core_bp)
-    app.register_blueprint(db_bp)
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(form_bp)
-    app.register_blueprint(assignment_bp)
-    app.register_blueprint(chat_bp)
-    app.register_blueprint(tenant_bp)
-    app.register_blueprint(drawing_bp)
-    app.register_blueprint(admin_bp)
+    if DRAWING_MODULE_AVAILABLE:
+        from routes.drawing_analyser import drawing_bp
+        blueprints.append(drawing_bp)
 
-    print("✅ Drawing Analyser routes registered")
+    for bp in blueprints:
+        app.register_blueprint(bp)
+
     print("✅ All blueprints registered")
-    
-    # ============================================================
-    # Print Configuration Summary
-    # ============================================================
-    print("\n" + "="*60)
+
+    print("\n" + "=" * 60)
     print("🚀 StreemLyne CRM Backend Starting...")
-    print("="*60)
-    print("✅ CORS enabled for: localhost (all ports) and Vercel (*.vercel.app)")
-    if test_config:
-        print("🧪 Database: SQLite (Test Mode)")
-    else:
-        print("✅ Database: Supabase PostgreSQL")
-    print("✅ Multi-tenant: Enabled")
-    print("✅ Industry Templates: Enabled")
-    if EDUCATION_MODULE_AVAILABLE:
-        print("✅ Education Module: Available")
-    if INTERIOR_MODULE_AVAILABLE:
-        print("✅ Interior Design Module: Available")
-    print("="*60 + "\n")
-    
+    print("=" * 60)
+    print(f"{'🧪 Database: SQLite (Test Mode)' if test_config else '✅ Database: Supabase PostgreSQL'}")
+    print("✅ Schema:   StreemLyne_MT")
+    print("✅ CORS:     Enabled (all origins on /api/*)")
+    print("✅ Auth:     JWT — staff (UserMaster) + portal (CustomerAuth)")
+    print("✅ RBAC:     Role_Master / Permission_Catalog")
+    if DRAWING_MODULE_AVAILABLE:
+        print("✅ Module:   Drawing Analyser")
+    print("=" * 60 + "\n")
+
     return app
 
 
-# ============================================================
-# Create Flask App Instance (production)
-# ============================================================
 app = create_app()
 
-
-# ============================================================
-# Main Entry Point
-# ============================================================
 if __name__ == '__main__':
     with app.app_context():
-        print("\n🌐 Backend running on: http://localhost:5000")
-        print("💡 Press CTRL+C to stop\n")
-    
+        print("🌐 Running on http://localhost:5000")
     app.run(debug=True, host='0.0.0.0', port=5000)

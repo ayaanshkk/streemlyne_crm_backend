@@ -18,12 +18,8 @@ from flask import current_app
 
 from alembic import context
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 fileConfig(config.config_file_name)
 logger = logging.getLogger('alembic.env')
 
@@ -32,15 +28,13 @@ logger = logging.getLogger('alembic.env')
 # CRITICAL: Import all models here so Alembic can detect them
 # ============================================================================
 
-# Import all models from models package
-# This ensures autogenerate can detect schema changes
 from models import (
-    # Tenancy models (Dev A)
+    # Tenancy models
     TenantMaster,
     TenantModuleMapping,
     TenantSubscription,
-    
-    # Master data models (Dev A)
+
+    # Master data models
     CountryMaster,
     CurrencyMaster,
     DesignationMaster,
@@ -48,20 +42,20 @@ from models import (
     UOMMaster,
     StageMaster,
     SupplierMaster,
-    
-    # System configuration models (Dev A)
+
+    # System configuration models
     ModuleMaster,
-    SubscriptionPlans,
+    SubscriptionPlan,
     SubscriptionModuleMapping,
     PermissionCatalog,
     RoleMaster,
     RolePermissionMapping,
-    
-    # Core models (Dev A + Dev B)
+
+    # Core models
     EmployeeMaster,
     UserMaster,
-    
-    
+
+
     # Business models (Dev B - uncomment as they're created)
     # ClientMaster,
     # ClientInteractions,
@@ -74,9 +68,6 @@ from models import (
     # EnergyContractMaster,
 )
 
-# Import any module-specific models
-# from models.modules.education import *
-# from models.modules.interior_design import *
 
 # ============================================================================
 # Flask-Migrate helper functions (keep existing)
@@ -85,10 +76,8 @@ from models import (
 def get_engine():
     """Get database engine from Flask-Migrate extension"""
     try:
-        # this works with Flask-SQLAlchemy<3 and Alchemical
         return current_app.extensions['migrate'].db.get_engine()
     except (TypeError, AttributeError):
-        # this works with Flask-SQLAlchemy>=3
         return current_app.extensions['migrate'].db.engine
 
 
@@ -101,17 +90,15 @@ def get_engine_url():
         return str(get_engine().url).replace('%', '%%')
 
 
-# Set database URL for Alembic
 config.set_main_option('sqlalchemy.url', get_engine_url())
 
-# Get database object from Flask-Migrate
 target_db = current_app.extensions['migrate'].db
 
 
 def get_metadata():
     """
     Get metadata from database object
-    
+
     This is where Alembic reads your model definitions to detect changes.
     All imported models above are included in this metadata.
     """
@@ -127,26 +114,14 @@ def get_metadata():
 def run_migrations_offline():
     """
     Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well. By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-    
-    USAGE:
-    ------
     Used when generating SQL scripts without database connection:
     alembic upgrade --sql 1234:5678 > migration.sql
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url, 
-        target_metadata=get_metadata(), 
+        url=url,
+        target_metadata=get_metadata(),
         literal_binds=True,
-        # Supabase/PostgreSQL specific options
         render_as_batch=False,  # PostgreSQL supports transactional DDL
     )
 
@@ -157,20 +132,11 @@ def run_migrations_offline():
 def run_migrations_online():
     """
     Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-    
-    USAGE:
-    ------
     Normal migration execution:
     alembic upgrade head
     flask db upgrade
     """
 
-    # this callback is used to prevent an auto-migration from being generated
-    # when there are no changes to the schema
-    # reference: http://alembic.zzzcomputing.com/en/latest/cookbook.html
     def process_revision_directives(context, revision, directives):
         if getattr(config.cmd_opts, 'autogenerate', False):
             script = directives[0]
@@ -178,24 +144,21 @@ def run_migrations_online():
                 directives[:] = []
                 logger.info('No changes in schema detected.')
 
-    # NEW: filter objects (skip Supabase-internal tables / schemas)
     def include_object(object, name, type_, reflected, compare_to):
         """Only include objects in the public schema, ignore Supabase internal schemas"""
         if type_ == "table":
-            # Skip tables from internal Supabase schemas
             schema = getattr(object, 'schema', None)
             if schema and schema != 'public':
                 return False
-            # Skip specific tables we don't manage
             skip_tables = {
                 # Infrastructure - never touch/remove these
                 'alembic_version',
                 'tenant_domains',
                 'tenant_supabase_config',
-                # Old/unused tables - not sure if we have to remove, keep for now
+                # Old/unused tables
                 'quotes',
                 'quote_line_items',
-                # Dev B tables - not modelled yet, don't drop them, remove them from this list after you implement their models
+                # Dev B tables - not modelled yet, don't drop them
                 'client_master',
                 'client_interactions',
                 'energy_contract_master',
@@ -257,11 +220,8 @@ def run_migrations_online():
         context.configure(
             connection=connection,
             target_metadata=get_metadata(),
-
-            # Supabase/PostgreSQL specific options
-            include_schemas=False,         # ← only include public schema
-            include_object=include_object, # ← filter tables
-
+            include_schemas=False,
+            include_object=include_object,
             **conf_args
         )
 

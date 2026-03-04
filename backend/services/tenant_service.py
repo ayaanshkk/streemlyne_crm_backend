@@ -40,7 +40,7 @@ class TenantService:
         tenant = TenantMaster(
             tenant_company_name=company_name,
             tenant_contact_name=contact_name,
-            onboarding_date=onboarding_date or date.today(),
+            onboarding_Date=onboarding_date or date.today(),
             is_active=True
         )
         self.repo.session.add(tenant)
@@ -149,7 +149,7 @@ class TenantService:
             'tenant_id': tenant_id,
             'company_name': tenant.tenant_company_name,
             'is_active': tenant.is_active,
-            'onboarding_date': tenant.onboarding_date.isoformat() if tenant.onboarding_date else None,
+            'onboarding_date': tenant.onboarding_Date.isoformat() if tenant.onboarding_Date else None,
             'employee_count': employee_count,
             'enabled_modules': len(self.get_tenant_modules(tenant_id)),
             'created_at': tenant.created_at.isoformat() if tenant.created_at else None
