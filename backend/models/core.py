@@ -310,8 +310,16 @@ class UserMaster(db.Model):
         return {
             'user_id': self.user_id,
             'employee_id': self.employee_id,
-            'employee_name': self.employee.employee_name if self.employee else None,
             'user_name': self.user_name,
+            'employee_name': self.employee.employee_name if self.employee else None,
+            'email': self.employee.email if self.employee else None,
+            'first_name': self.employee.employee_name.split()[0] if self.employee and self.employee.employee_name else '',
+            'last_name': ' '.join(self.employee.employee_name.split()[1:]) if self.employee and self.employee.employee_name else '',
+            'full_name': self.employee.employee_name if self.employee else None,
+            'phone': self.employee.phone if self.employee else None,
+            'role': 'user',
+            'is_active': True,
+            'is_verified': True,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
