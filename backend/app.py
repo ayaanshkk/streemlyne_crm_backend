@@ -95,20 +95,29 @@ def create_app(test_config=None):
         InvoiceDetails,
         UOMMaster,
 
+        # Master data  ← TaxMaster and ContactMethodMaster added here
+        # TaxMaster       : referenced by Invoice_Master.tax_id, Proposal_Master.tax_id
+        # ContactMethodMaster : referenced by Client_Interactions.contact_method
+        CountryMaster,
+        CurrencyMaster,
+        TaxMaster,
+        ContactMethodMaster,
+
         # Documents & Forms
         CaseDocuments,
         CustomerDocuments,
         CustomerFormData,
-
-        # Master data
-        CountryMaster,
-        CurrencyMaster,
 
         # Chat (application-level, no schema table)
         ChatHistory,
         ChatConversation,
         ChatMessage,
     )
+
+    # Assignment — application-level scheduling table (not in original schema dump)
+    # Same pattern as Drawing/CuttingList: registered here so SQLAlchemy
+    # includes it in `flask db migrate` and creates the table automatically.
+    from models.assignments import Assignment
 
     from models import DRAWING_MODULE_AVAILABLE
     if DRAWING_MODULE_AVAILABLE:
@@ -121,6 +130,7 @@ def create_app(test_config=None):
 
     print("📋 Registering blueprints...")
 
+    from routes.assignment_routes   import assignment_bp
     from routes.auth_routes         import auth_bp
     from routes.tenant_routes       import tenant_bp
     from routes.subscription_routes import subscription_bp
@@ -138,15 +148,16 @@ def create_app(test_config=None):
     from routes.chat_routes         import chat_bp
     from routes.core_routes         import core_bp
     from routes.customer_routes     import customer_bp
-    from routes.job_routes          import job_bp
-    
+
+
     blueprints = [
         auth_bp, tenant_bp, subscription_bp,
         client_bp, employee_bp, role_bp,
         opportunity_bp, project_bp, contract_bp,
         proposal_bp, invoice_bp, document_bp,
-        master_bp, form_bp, chat_bp, core_bp, 
-        customer_bp, job_bp,
+        master_bp, form_bp, chat_bp, core_bp,
+        customer_bp,
+        assignment_bp,   # ← Schedule feature
     ]
 
     if DRAWING_MODULE_AVAILABLE:
