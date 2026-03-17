@@ -275,15 +275,15 @@ def delete_opportunity(opportunity_id: int):
 @auth_required
 def get_pipeline():
     """
-    Return all active opportunities grouped by stage_id.
+    Return all active opportunities as an array.
     GET /api/opportunities/pipeline
-
+    
     Response shape:
-    {
-        "1": [ { opportunity }, ... ],
-        "2": [ { opportunity }, ... ],
+    [
+        { opportunity },
+        { opportunity },
         ...
-    }
+    ]
     """
     opps = (
         OpportunityDetails.query
@@ -293,12 +293,7 @@ def get_pipeline():
         .all()
     )
 
-    pipeline: dict[str, list] = {}
-    for opp in opps:
-        key = str(opp.stage_id)
-        pipeline.setdefault(key, []).append(_opportunity_dict(opp))
-
-    return jsonify(pipeline), 200
+    return jsonify([_opportunity_dict(opp) for opp in opps]), 200
 
 
 # ─────────────────────────────────────────

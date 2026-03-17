@@ -87,6 +87,17 @@ class UserRepository(BaseRepository):
             UserMaster instance if authentication successful, None otherwise
         """
         user = self.get_by_username(user_name)
-        if user and user.check_password(password):
-            return user
+        if not user:
+            return None
+        
+        # Check if password is stored as hash or plain text
+        if user.password and user.password.startswith('pbkdf2:sha256'):
+            # Password is hashed - use check_password_hash
+            if user.check_password(password):
+                return user
+        else:
+            # Password is plain text - compare directly
+            if user.password == password:
+                return user
+        
         return None
