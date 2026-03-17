@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 def create_app(test_config=None):
     app = Flask(__name__)
 
@@ -134,7 +133,7 @@ def create_app(test_config=None):
     from routes.auth_routes         import auth_bp
     from routes.tenant_routes       import tenant_bp
     from routes.subscription_routes import subscription_bp
-    from routes.client_routes       import client_bp
+    from routes.client_routes       import client_bp        
     from routes.employee_routes     import employee_bp
     from routes.role_routes         import role_bp
     from routes.opportunity_routes  import opportunity_bp
@@ -182,7 +181,6 @@ def create_app(test_config=None):
     print("=" * 60 + "\n")
 
     return app
-
 
 app = create_app()
 
