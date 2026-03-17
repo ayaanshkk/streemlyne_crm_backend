@@ -15,6 +15,13 @@ IMPORTANT — tenant scoping:
   joining through Client_Master (which has tenant_id). The helper
   _get_or_404 performs this join so projects are never accessible
   cross-tenant.
+
+Misc_Col1 usage:
+  Non-schema job fields (job_reference, job_type, priority, assigned_team,
+  primary_contact, salesperson, tags, notes, requirements) are stored as a
+  JSON blob in Misc_Col1. This column is passed through in all responses
+  and accepted in create/update so no data is ever silently dropped.
+  The frontend parseMisc() helper unpacks it on read.
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -44,7 +51,6 @@ def list_projects():
       employee_id    – filter by responsible employee
       opportunity_id – filter by source opportunity
     """
-    # Scope to current tenant through Client_Master
     query = (
         ProjectDetails.query
         .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
@@ -82,7 +88,9 @@ def create_project():
         "employee_id": 3,              (required, FK → Employee_Master)
         "project_description": "...",
         "end_date": "2025-09-30",
-        "address": "1 Industrial Park, London"
+        "address": "1 Industrial Park, London",
+        "misc_col1": "{...}"           (optional JSON string – stores job_reference,
+                                        job_type, priority, tags, notes, etc.)
     }
     """
     data = request.get_json() or {}
@@ -92,7 +100,6 @@ def create_project():
     if missing:
         return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
 
-    # Verify client belongs to current tenant
     client = ClientMaster.query.filter_by(
         client_id=data['client_id'], tenant_id=g.tenant_id
     ).first()
@@ -103,6 +110,9 @@ def create_project():
     if not start:
         return jsonify({'error': 'Invalid start_date — expected YYYY-MM-DD'}), 400
 
+    # Accept misc_col1 (frontend key) or Misc_Col1 (schema key)
+    misc_col1 = data.get('misc_col1') or data.get('Misc_Col1') or None
+
     project = ProjectDetails(
         client_id=data['client_id'],
         opportunity_id=data['opportunity_id'],
@@ -111,7 +121,8 @@ def create_project():
         start_date=start,
         end_date=_parse_date(data.get('end_date')),
         employee_id=data['employee_id'],
-        address=data.get('address')
+        address=data.get('address'),
+        Misc_Col1=misc_col1,
     )
 
     try:
@@ -136,7 +147,6 @@ def get_project(project_id: int):
     project = _get_or_404(project_id)
     result  = _project_dict(project)
 
-    # Include linked energy contracts
     try:
         from models import EnergyContractMaster
         contracts = EnergyContractMaster.query.filter_by(project_id=project_id).all()
@@ -168,6 +178,7 @@ def update_project(project_id: int):
     Update a project.
     PUT /api/projects/<project_id>
     All fields optional — only provided fields are changed.
+    Accepts misc_col1 / Misc_Col1 to overwrite the JSON blob.
     """
     project = _get_or_404(project_id)
     data = request.get_json() or {}
@@ -181,6 +192,10 @@ def update_project(project_id: int):
             parsed = _parse_date(data[date_field])
             if parsed is not None or data[date_field] is None:
                 setattr(project, date_field, parsed)
+
+    # Update Misc_Col1 if either key variant is present in the payload
+    if 'misc_col1' in data or 'Misc_Col1' in data:
+        project.Misc_Col1 = data.get('misc_col1') or data.get('Misc_Col1')
 
     project.updated_at = datetime.utcnow()
 
@@ -200,7 +215,7 @@ def delete_project(project_id: int):
     """
     Delete a project.
     DELETE /api/projects/<project_id>
-    Returns 409 if the project is referenced by invoices, proposals, or contracts.
+    Returns 409 if referenced by invoices, proposals, or contracts.
     """
     project = _get_or_404(project_id)
 
@@ -221,10 +236,6 @@ def delete_project(project_id: int):
 # ─────────────────────────────────────────
 
 def _get_or_404(project_id: int) -> ProjectDetails:
-    """
-    Fetch a project scoped to the current tenant.
-    Tenant isolation is enforced by joining through Client_Master.
-    """
     project = (
         ProjectDetails.query
         .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
@@ -240,7 +251,6 @@ def _get_or_404(project_id: int) -> ProjectDetails:
 
 
 def _parse_date(value):
-    """Parse an ISO date string; returns None on failure."""
     if not value:
         return None
     if hasattr(value, 'date'):
@@ -252,6 +262,12 @@ def _parse_date(value):
 
 
 def _project_dict(p: ProjectDetails) -> dict:
+    """
+    Serialise a Project_Details row.
+    misc_col1 is included as a raw JSON string so the frontend parseMisc()
+    helper can unpack job_reference, job_type, priority, assigned_team,
+    primary_contact, salesperson, tags, and notes.
+    """
     return {
         'project_id':          p.project_id,
         'client_id':           p.client_id,
@@ -264,4 +280,6 @@ def _project_dict(p: ProjectDetails) -> dict:
         'address':             p.address,
         'created_at':          p.created_at.isoformat()  if p.created_at  else None,
         'updated_at':          p.updated_at.isoformat()  if p.updated_at  else None,
+        # Misc_Col1 pass-through — raw JSON string, lowercase key for frontend
+        'misc_col1':           p.Misc_Col1,
     }

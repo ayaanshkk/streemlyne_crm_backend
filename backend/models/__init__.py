@@ -13,7 +13,6 @@ IMPORT ORDER (respects SQLAlchemy mapper dependency resolution):
     5. core_documents   — Activities, Chat, Audit (depend on most of the above)
 
 NOTE: The education and interior_design modules have been archived.
-      Backup copies are in: models/_backup_modules/
       Do NOT re-import them here without restoring the module files first.
 """
 
@@ -43,6 +42,8 @@ from .masters import (
     RoleMaster,
     PermissionCatalog,
     RolePermissionMapping,
+    TaxMaster,
+    ContactMethodMaster,
 )
 
 
@@ -86,7 +87,7 @@ from .core_documents import (
     ChatMessage,
     ChatHistory,
 )
-
+from models.assignments import Assignment
 
 # ── Module availability flags ─────────────────────────────────────────────────
 # Education and interior_design modules are archived — always False.

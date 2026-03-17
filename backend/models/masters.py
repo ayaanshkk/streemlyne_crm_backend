@@ -25,6 +25,8 @@ __all__ = [
     'RoleMaster',
     'PermissionCatalog',
     'RolePermissionMapping',
+    'TaxMaster',
+    'ContactMethodMaster',
 ]
 
 
@@ -439,4 +441,68 @@ class RolePermissionMapping(db.Model):
             'permission_code': self.permission.permission_code if self.permission else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'edited_at': self.edited_at.isoformat() if self.edited_at else None,
+        }
+
+
+# ============================================================
+# TAX MASTER
+# ============================================================
+
+class TaxMaster(db.Model):
+    """
+    Tax rates for proposals and invoices.
+    SCHEMA: StreemLyne_MT.Tax_Master (new table)
+    """
+    __tablename__ = 'Tax_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    tax_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tax_name = db.Column(db.String(100), nullable=False)  # e.g., "VAT", "GST", "No Tax"
+    tax_rate = db.Column(db.Numeric(5, 2), nullable=False)  # Percentage, e.g., 20.00
+    tax_description = db.Column(db.String(255))
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<TaxMaster {self.tax_name} ({self.tax_rate}%)>'
+
+    def to_dict(self):
+        return {
+            'tax_id': self.tax_id,
+            'tax_name': self.tax_name,
+            'tax_rate': float(self.tax_rate) if self.tax_rate else 0,
+            'tax_description': self.tax_description,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ============================================================
+# CONTACT METHOD MASTER
+# ============================================================
+
+class ContactMethodMaster(db.Model):
+    """
+    Contact methods for client interactions.
+    SCHEMA: StreemLyne_MT.Contact_Method_Master (new table)
+    """
+    __tablename__ = 'Contact_Method_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    contact_method_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    method_name = db.Column(db.String(50), nullable=False, unique=True)  # Phone, Email, Meeting, WhatsApp
+    method_description = db.Column(db.String(255))
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<ContactMethodMaster {self.method_name}>'
+
+    def to_dict(self):
+        return {
+            'contact_method_id': self.contact_method_id,
+            'method_name': self.method_name,
+            'method_description': self.method_description,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }

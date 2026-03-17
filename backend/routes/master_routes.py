@@ -2,7 +2,7 @@
 Master Data Routes
 Handles: Country_Master, Currency_Master, UOM_Master,
          Services_Master, Supplier_Master, Module_Master,
-         Tenant_Module_Mapping
+         Tenant_Module_Mapping, TaxMaster, ContactMethodMaster
 
 Schema alignment (StreemLyne_MT):
   Country_Master  : country_id, country_name (UNIQUE), country_isd_code, created_at
@@ -16,6 +16,10 @@ Schema alignment (StreemLyne_MT):
   Module_Master   : module_id, module_code (UNIQUE), module_name (UNIQUE),
                     description, is_core, is_active, created_at, updated_at
   Tenant_Module_Mapping : tenant_module_mapping_id, tenant_id, module_id, created_at
+  TaxMaster       : tax_id, tax_name, tax_rate, description, is_active, created_at
+                    (referenced by Invoice_Master.tax_id, Proposal_Master.tax_id)
+  ContactMethodMaster : contact_method_id, contact_method_name, created_at
+                    (referenced by Client_Interactions.contact_method)
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -24,7 +28,9 @@ from database import db
 from models import (
     CountryMaster, CurrencyMaster, UOMMaster,
     ServicesMaster, SupplierMaster, ModuleMaster,
-    TenantModuleMapping
+    TenantModuleMapping,
+    TaxMaster,
+    ContactMethodMaster,
 )
 from middleware import auth_required, permission_required
 from datetime import datetime
@@ -79,7 +85,7 @@ def create_country():
 @permission_required('master.manage')
 def update_country(country_id: int):
     """
-    Update a country's ISD code (name is unique and rarely changes).
+    Update a country.
     PUT /api/master/countries/<country_id>
     """
     c = CountryMaster.query.get(country_id)
@@ -208,6 +214,244 @@ def delete_uom(uom_id: int):
         db.session.rollback()
         return jsonify({'error': 'Cannot delete UOM — it is referenced by invoice or proposal lines'}), 409
     return jsonify({'message': 'UOM deleted'}), 200
+
+
+# ─────────────────────────────────────────
+# Taxes
+# Referenced by: Invoice_Master.tax_id, Proposal_Master.tax_id
+# Frontend consumers: invoices/new, quotes/new
+# ─────────────────────────────────────────
+
+@master_bp.route('/taxes', methods=['GET'])
+@auth_required
+def list_taxes():
+    """
+    List all active taxes available for use on invoices and proposals.
+    GET /api/master/taxes
+
+    Response shape (array):
+    [
+      {
+        "tax_id": 1,
+        "tax_name": "VAT",
+        "tax_rate": 20.0,
+        "description": "UK Standard VAT",
+        "is_active": true,
+        "created_at": "2025-01-01T00:00:00"
+      }
+    ]
+    """
+    taxes = (
+        TaxMaster.query
+        .filter_by(is_active=True)
+        .order_by(TaxMaster.tax_name)
+        .all()
+    )
+    return jsonify([_tax_dict(t) for t in taxes]), 200
+
+
+@master_bp.route('/taxes/all', methods=['GET'])
+@auth_required
+@permission_required('master.manage')
+def list_taxes_all():
+    """
+    List all taxes including inactive ones (admin use).
+    GET /api/master/taxes/all
+    """
+    taxes = TaxMaster.query.order_by(TaxMaster.tax_name).all()
+    return jsonify([_tax_dict(t) for t in taxes]), 200
+
+
+@master_bp.route('/taxes', methods=['POST'])
+@auth_required
+@permission_required('master.manage')
+def create_tax():
+    """
+    Create a tax record.
+    POST /api/master/taxes
+    Body:
+    {
+        "tax_name": "VAT",          (required)
+        "tax_rate": 20.0,           (required, percentage e.g. 20 = 20%)
+        "description": "UK VAT",    (optional)
+        "is_active": true           (optional, defaults to true)
+    }
+    """
+    data = request.get_json() or {}
+
+    if not (data.get('tax_name') or '').strip():
+        return jsonify({'error': 'tax_name is required'}), 400
+    if data.get('tax_rate') is None:
+        return jsonify({'error': 'tax_rate is required'}), 400
+
+    try:
+        tax_rate = float(data['tax_rate'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'tax_rate must be a number'}), 400
+
+    t = TaxMaster(
+        tax_name=data['tax_name'].strip(),
+        tax_rate=tax_rate,
+        description=data.get('description'),
+        is_active=data.get('is_active', True),
+    )
+    try:
+        db.session.add(t)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Tax name already exists'}), 409
+
+    return jsonify({'message': 'Tax created', 'tax': _tax_dict(t)}), 201
+
+
+@master_bp.route('/taxes/<int:tax_id>', methods=['PUT'])
+@auth_required
+@permission_required('master.manage')
+def update_tax(tax_id: int):
+    """
+    Update a tax record.
+    PUT /api/master/taxes/<tax_id>
+    Body: any subset of { tax_name, tax_rate, description, is_active }
+    """
+    t = TaxMaster.query.get(tax_id)
+    if not t:
+        abort(404, description='Tax not found')
+
+    data = request.get_json() or {}
+
+    if 'tax_name' in data:
+        t.tax_name = data['tax_name'].strip()
+    if 'tax_rate' in data:
+        try:
+            t.tax_rate = float(data['tax_rate'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'tax_rate must be a number'}), 400
+    if 'description' in data:
+        t.description = data['description']
+    if 'is_active' in data:
+        t.is_active = bool(data['is_active'])
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Tax name already exists'}), 409
+
+    return jsonify({'message': 'Tax updated', 'tax': _tax_dict(t)}), 200
+
+
+@master_bp.route('/taxes/<int:tax_id>', methods=['DELETE'])
+@auth_required
+@permission_required('master.manage')
+def delete_tax(tax_id: int):
+    """
+    Soft-delete a tax by marking it inactive rather than hard-deleting,
+    because it may be referenced by existing invoices / proposals.
+    DELETE /api/master/taxes/<tax_id>
+    """
+    t = TaxMaster.query.get(tax_id)
+    if not t:
+        abort(404, description='Tax not found')
+
+    # Soft delete — preserves FK integrity on historical invoices/proposals
+    t.is_active = False
+    db.session.commit()
+    return jsonify({'message': 'Tax deactivated'}), 200
+
+
+# ─────────────────────────────────────────
+# Contact Methods
+# Referenced by: Client_Interactions.contact_method (smallint FK)
+# ─────────────────────────────────────────
+
+@master_bp.route('/contact-methods', methods=['GET'])
+@auth_required
+def list_contact_methods():
+    """
+    List all contact methods (used for Client_Interactions dropdown).
+    GET /api/master/contact-methods
+
+    Response shape (array):
+    [
+      {
+        "contact_method_id": 1,
+        "contact_method_name": "Phone",
+        "created_at": "2025-01-01T00:00:00"
+      }
+    ]
+    """
+    methods = ContactMethodMaster.query.order_by(
+        ContactMethodMaster.contact_method_name
+    ).all()
+    return jsonify([_contact_method_dict(m) for m in methods]), 200
+
+
+@master_bp.route('/contact-methods', methods=['POST'])
+@auth_required
+@permission_required('master.manage')
+def create_contact_method():
+    """
+    Create a contact method.
+    POST /api/master/contact-methods
+    Body: { "contact_method_name": "Phone" }
+    """
+    data = request.get_json() or {}
+    if not (data.get('contact_method_name') or '').strip():
+        return jsonify({'error': 'contact_method_name is required'}), 400
+
+    m = ContactMethodMaster(
+        contact_method_name=data['contact_method_name'].strip()
+    )
+    try:
+        db.session.add(m)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Contact method already exists'}), 409
+
+    return jsonify({'message': 'Contact method created', 'contact_method': _contact_method_dict(m)}), 201
+
+
+@master_bp.route('/contact-methods/<int:contact_method_id>', methods=['PUT'])
+@auth_required
+@permission_required('master.manage')
+def update_contact_method(contact_method_id: int):
+    """PUT /api/master/contact-methods/<contact_method_id>"""
+    m = ContactMethodMaster.query.get(contact_method_id)
+    if not m:
+        abort(404, description='Contact method not found')
+
+    data = request.get_json() or {}
+    if 'contact_method_name' in data:
+        m.contact_method_name = data['contact_method_name'].strip()
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Contact method name already exists'}), 409
+
+    return jsonify({'message': 'Contact method updated', 'contact_method': _contact_method_dict(m)}), 200
+
+
+@master_bp.route('/contact-methods/<int:contact_method_id>', methods=['DELETE'])
+@auth_required
+@permission_required('master.manage')
+def delete_contact_method(contact_method_id: int):
+    """DELETE /api/master/contact-methods/<contact_method_id>"""
+    m = ContactMethodMaster.query.get(contact_method_id)
+    if not m:
+        abort(404, description='Contact method not found')
+
+    try:
+        db.session.delete(m)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Cannot delete — contact method is in use by client interactions'}), 409
+
+    return jsonify({'message': 'Contact method deleted'}), 200
 
 
 # ─────────────────────────────────────────
@@ -522,6 +766,25 @@ def _uom_dict(u: UOMMaster) -> dict:
         'uom_id':          u.uom_id,
         'uom_description': u.uom_description,
         'created_at':      u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+def _tax_dict(t: TaxMaster) -> dict:
+    return {
+        'tax_id':      t.tax_id,
+        'tax_name':    t.tax_name,
+        'tax_rate':    t.tax_rate,       # percentage, e.g. 20.0 = 20%
+        'description': t.description,
+        'is_active':   t.is_active,
+        'created_at':  t.created_at.isoformat() if t.created_at else None,
+    }
+
+
+def _contact_method_dict(m: ContactMethodMaster) -> dict:
+    return {
+        'contact_method_id':   m.contact_method_id,
+        'contact_method_name': m.contact_method_name,
+        'created_at':          m.created_at.isoformat() if m.created_at else None,
     }
 
 
