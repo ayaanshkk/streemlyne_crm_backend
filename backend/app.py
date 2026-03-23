@@ -7,7 +7,7 @@ import os
 from database import db, init_db
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 def create_app(test_config=None):
     app = Flask(__name__)
@@ -17,22 +17,11 @@ def create_app(test_config=None):
     CORS(
         app,
         resources={r"/api/*": {"origins": "*"}},
-        supports_credentials=True,
         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         expose_headers=["Content-Type", "Authorization"],
+        # ❌ Remove supports_credentials=True — incompatible with origins="*"
     )
-
-    @app.before_request
-    def handle_preflight():
-        if request.method == "OPTIONS":
-            response = app.make_default_options_response()
-            h = response.headers
-            h['Access-Control-Allow-Origin'] = '*'
-            h['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-            h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-Tenant-ID'
-            h['Access-Control-Max-Age'] = '3600'
-            return response
 
     if test_config:
         app.config.update(test_config)
