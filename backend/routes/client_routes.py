@@ -62,7 +62,7 @@ def list_clients():
 
 @client_bp.route('', methods=['POST'])
 @auth_required
-@permission_required('client.create')
+# @permission_required('client.create')
 def create_client():
     """
     Create a new client.

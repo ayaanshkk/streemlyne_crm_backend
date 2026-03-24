@@ -25,7 +25,7 @@ from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import extract
 from database import db
-from models.assignments import Assignment
+from models import Assignment
 from middleware import auth_required
 from datetime import datetime, date
 
