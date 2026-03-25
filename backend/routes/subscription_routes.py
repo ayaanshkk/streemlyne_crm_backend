@@ -78,7 +78,7 @@ def get_plan(subscription_id: int):
 
 @subscription_bp.route('/plans', methods=['POST'])
 @auth_required
-@permission_required('subscription.create_plan')
+# @permission_required('subscription.create_plan')
 def create_plan():
     """
     Create a new subscription plan.
@@ -125,7 +125,7 @@ def create_plan():
 
 @subscription_bp.route('/plans/<int:subscription_id>', methods=['PUT'])
 @auth_required
-@permission_required('subscription.create_plan')
+# @permission_required('subscription.create_plan')
 def update_plan(subscription_id: int):
     """
     Update a subscription plan.
@@ -158,7 +158,7 @@ def update_plan(subscription_id: int):
 
 @subscription_bp.route('/tenants/<int:tenant_id>', methods=['GET'])
 @auth_required
-@permission_required('subscription.view')
+# @permission_required('subscription.view')
 def get_tenant_subscription(tenant_id: int):
     """
     Get active subscription(s) for a tenant.
@@ -175,7 +175,7 @@ def get_tenant_subscription(tenant_id: int):
 
 @subscription_bp.route('/tenants/<int:tenant_id>', methods=['POST'])
 @auth_required
-@permission_required('subscription.create')
+# @permission_required('subscription.create')
 def assign_subscription(tenant_id: int):
     """
     Assign a subscription plan to a tenant.
@@ -236,7 +236,7 @@ def assign_subscription(tenant_id: int):
 
 @subscription_bp.route('/tenants/<int:tenant_id>/cancel', methods=['POST'])
 @auth_required
-@permission_required('subscription.cancel')
+# @permission_required('subscription.cancel')
 def cancel_tenant_subscription(tenant_id: int):
     """
     Cancel the active subscription for a tenant.
@@ -259,7 +259,7 @@ def cancel_tenant_subscription(tenant_id: int):
 
 @subscription_bp.route('/tenants/<int:tenant_id>/renew', methods=['POST'])
 @auth_required
-@permission_required('subscription.create')
+# @permission_required('subscription.create')
 def renew_tenant_subscription(tenant_id: int):
     """
     Manually renew a tenant's current subscription for another billing cycle.
@@ -334,7 +334,7 @@ def get_plan_modules(subscription_id: int):
 
 @subscription_bp.route('/plans/<int:subscription_id>/modules/<int:module_id>', methods=['POST'])
 @auth_required
-@permission_required('subscription.manage_modules')
+# @permission_required('subscription.manage_modules')
 def add_module_to_plan(subscription_id: int, module_id: int):
     """
     Add a module to a subscription plan.
@@ -367,7 +367,7 @@ def add_module_to_plan(subscription_id: int, module_id: int):
 
 @subscription_bp.route('/plans/<int:subscription_id>/modules/<int:module_id>', methods=['DELETE'])
 @auth_required
-@permission_required('subscription.manage_modules')
+# @permission_required('subscription.manage_modules')
 def remove_module_from_plan(subscription_id: int, module_id: int):
     """
     Remove a module from a subscription plan.

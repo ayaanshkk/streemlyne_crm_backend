@@ -74,7 +74,7 @@ def list_projects():
 
 @project_bp.route('', methods=['POST'])
 @auth_required
-@permission_required('project.create')
+# @permission_required('project.create')
 def create_project():
     """
     Create a new project from a won opportunity.
@@ -172,7 +172,7 @@ def get_project(project_id: int):
 
 @project_bp.route('/<int:project_id>', methods=['PUT'])
 @auth_required
-@permission_required('project.update')
+# @permission_required('project.update')
 def update_project(project_id: int):
     """
     Update a project.
@@ -210,7 +210,7 @@ def update_project(project_id: int):
 
 @project_bp.route('/<int:project_id>', methods=['DELETE'])
 @auth_required
-@permission_required('project.delete')
+# @permission_required('project.delete')
 def delete_project(project_id: int):
     """
     Delete a project.
