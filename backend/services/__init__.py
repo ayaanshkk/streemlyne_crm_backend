@@ -49,19 +49,6 @@ from .employee_service import EmployeeService
 
 
 # ============================================================
-# EXISTING SERVICES (✅ KEEP AS-IS)
-# ============================================================
-
-# Domain-specific services for module functionality
-from .cutting_list_builder import CuttingListBuilder
-from .manufacturing_rules import ManufacturingRules
-from .ocr_dimension_extractor import OCRDimensionExtractor
-from .preprocessing import ImagePreprocessor
-from .section_analyzer import SectionAnalyzer
-from .section_detector import SectionDetector
-
-
-# ============================================================
 # EXPORTS
 # ============================================================
 
@@ -78,14 +65,6 @@ __all__ = [
     # 'ProjectService',
     # 'ProposalService',
     # 'InvoiceService',
-    
-    # Existing Domain Services
-    'CuttingListBuilder',
-    'ManufacturingRules',
-    'OCRDimensionExtractor',
-    'ImagePreprocessor',
-    'SectionAnalyzer',
-    'SectionDetector',
 ]
 
 

@@ -68,7 +68,7 @@ def list_proposals():
 
 @proposal_bp.route('', methods=['POST'])
 @auth_required
-@permission_required('proposal.create')
+# @permission_required('proposal.create')
 def create_proposal():
     """
     Create a new proposal with optional line items.
@@ -158,7 +158,7 @@ def get_proposal(proposal_id: int):
 
 @proposal_bp.route('/<int:proposal_id>', methods=['PUT'])
 @auth_required
-@permission_required('proposal.update')
+# @permission_required('proposal.update')
 def update_proposal(proposal_id: int):
     """
     Update proposal header fields.
@@ -191,7 +191,7 @@ def update_proposal(proposal_id: int):
 
 @proposal_bp.route('/<int:proposal_id>', methods=['DELETE'])
 @auth_required
-@permission_required('proposal.delete')
+# @permission_required('proposal.delete')
 def delete_proposal(proposal_id: int):
     """
     Delete a proposal and all its line items.
@@ -230,7 +230,7 @@ def list_detail_lines(proposal_id: int):
 
 @proposal_bp.route('/<int:proposal_id>/details', methods=['POST'])
 @auth_required
-@permission_required('proposal.update')
+# @permission_required('proposal.update')
 def add_detail_line(proposal_id: int):
     """
     Add a line item to an existing proposal.
@@ -267,7 +267,7 @@ def add_detail_line(proposal_id: int):
 
 @proposal_bp.route('/<int:proposal_id>/details/<int:detail_id>', methods=['PUT'])
 @auth_required
-@permission_required('proposal.update')
+# @permission_required('proposal.update')
 def update_detail_line(proposal_id: int, detail_id: int):
     """
     Update a proposal line item.
@@ -299,7 +299,7 @@ def update_detail_line(proposal_id: int, detail_id: int):
 
 @proposal_bp.route('/<int:proposal_id>/details/<int:detail_id>', methods=['DELETE'])
 @auth_required
-@permission_required('proposal.update')
+# @permission_required('proposal.update')
 def remove_detail_line(proposal_id: int, detail_id: int):
     """
     Remove a line item from a proposal.

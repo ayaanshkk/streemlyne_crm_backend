@@ -105,7 +105,7 @@ def create_app(test_config=None):
     # Assignment — application-level scheduling table (not in original schema dump)
     # Same pattern as Drawing/CuttingList: registered here so SQLAlchemy
     # includes it in `flask db migrate` and creates the table automatically.
-    from models.assignments import Assignment
+    from models import Assignment
 
     from models import DRAWING_MODULE_AVAILABLE
     if DRAWING_MODULE_AVAILABLE:
@@ -135,7 +135,7 @@ def create_app(test_config=None):
     from routes.form_routes         import form_bp
     from routes.chat_routes         import chat_bp
     from routes.core_routes         import core_bp
-    from routes.customer_routes     import customer_bp
+
 
 
     blueprints = [
@@ -144,14 +144,9 @@ def create_app(test_config=None):
         opportunity_bp, project_bp, contract_bp,
         proposal_bp, invoice_bp, document_bp,
         master_bp, form_bp, chat_bp, core_bp,
-        customer_bp,
         assignment_bp,   # ← Schedule feature
     ]
-
-    if DRAWING_MODULE_AVAILABLE:
-        from routes.drawing_analyser import drawing_bp
-        blueprints.append(drawing_bp)
-
+    
     for bp in blueprints:
         app.register_blueprint(bp)
 

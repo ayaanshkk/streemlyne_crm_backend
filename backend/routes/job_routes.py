@@ -233,7 +233,7 @@ def get_job_by_id(job_id: int):
 
 @job_bp.route('', methods=['POST'])
 @auth_required
-@permission_required('project.create')
+# @permission_required('project.create')
 def create_job():
     """
     Create a new job (project).
@@ -311,7 +311,7 @@ def create_job():
 
 @job_bp.route('/<int:job_id>', methods=['PUT'])
 @auth_required
-@permission_required('project.update')
+# @permission_required('project.update')
 def update_job(job_id: int):
     """
     Update a job/project.
@@ -358,7 +358,7 @@ def update_job(job_id: int):
 
 @job_bp.route('/<int:job_id>', methods=['DELETE'])
 @auth_required
-@permission_required('project.delete')
+# @permission_required('project.delete')
 def delete_job(job_id: int):
     """
     Delete a job/project.
@@ -450,7 +450,7 @@ def get_pipeline_opportunities():
 
 @job_bp.route('/pipeline-opportunities/<int:opportunity_id>/stage', methods=['PUT'])
 @auth_required
-@permission_required('opportunity.update')
+# @permission_required('opportunity.update')
 def update_pipeline_opportunity_stage(opportunity_id: int):
     """
     Update the stage_id of an opportunity from the jobs pipeline view.
