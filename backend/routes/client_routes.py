@@ -46,6 +46,7 @@ def list_clients():
       name      – partial match on client_company_name
       country_id – filter by country
     """
+    # Removed debug logging
     query = ClientMaster.query.filter_by(tenant_id=g.tenant_id)
 
     name_q = request.args.get('name')
@@ -57,6 +58,7 @@ def list_clients():
         query = query.filter_by(country_id=country_id)
 
     clients = query.order_by(ClientMaster.created_at.desc()).all()
+    # Removed debug logging
     return jsonify([_client_dict(c) for c in clients]), 200
 
 
@@ -417,11 +419,16 @@ def _client_dict(c: ClientMaster) -> dict:
         'client_website':       c.client_website,
         'created_at':           c.created_at.isoformat() if c.created_at else None,
         # Legacy aliases (kept for front-end backwards compatibility)
-        'id':       c.client_id,
-        'name':     c.client_company_name,
-        'email':    c.client_email,
-        'phone':    c.client_phone,
-        'postcode': c.post_code,
+        'id':             c.client_id,
+        'name':           c.client_company_name,
+        'company_name':   c.client_company_name,
+        'contact_name':   c.client_contact_name,
+        'client_name':    c.client_contact_name or c.client_company_name,
+        'display_name':   c.client_contact_name or c.client_company_name,
+        'full_name':      c.client_contact_name or c.client_company_name,
+        'email':          c.client_email,
+        'phone':          c.client_phone,
+        'postcode':       c.post_code,
     }
 
 

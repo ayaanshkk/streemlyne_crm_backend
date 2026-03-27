@@ -435,6 +435,13 @@ def _invoice_dict(i: InvoiceMaster, include_details: bool = True) -> dict:
         'created_at':       i.created_at.isoformat() if i.created_at else None,
         'updated_at':       i.updated_at.isoformat() if i.updated_at else None,
     }
+    
+    # Include customer name directly if client exists
+    if i.client_id:
+        client = ClientMaster.query.get(i.client_id)
+        if client:
+            result['customer_name'] = client.client_contact_name or client.client_company_name or f"Client #{client.client_id}"
+    
     if include_details:
         result['details'] = [
             _detail_dict(d)

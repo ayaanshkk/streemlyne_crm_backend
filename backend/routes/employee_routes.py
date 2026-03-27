@@ -9,7 +9,6 @@ Schema alignment (StreemLyne_MT):
     phone, email (UNIQUE), date_of_birth, date_of_joining,
     id_type, id_number, role_ids (varchar, comma-separated role IDs),
     created_on, updated_on, commission_percentage (real)
-
   Designation_Master:
     designation_id (PK), designation_description (UNIQUE), created_at
 
@@ -27,7 +26,6 @@ from middleware import auth_required, permission_required
 from datetime import datetime
 
 employee_bp = Blueprint('employee', __name__, url_prefix='/api/employees')
-
 
 # ─────────────────────────────────────────
 # Employees – CRUD

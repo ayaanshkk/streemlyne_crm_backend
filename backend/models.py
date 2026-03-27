@@ -1229,6 +1229,9 @@ class ProposalDetails(db.Model):
     service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
     uom_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=False)
     quantity = db.Column(db.Float(precision=24), nullable=False)
+    # Custom fields for quote generation - stores user-entered values
+    service_name = db.Column(db.String(255))
+    amount = db.Column(db.Float(precision=24))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
 
@@ -1253,6 +1256,8 @@ class ProposalDetails(db.Model):
             'service_title': self.service.service_title if self.service else None,
             'service_code': self.service.service_code if self.service else None,
             'service_rate': self.service.service_rate if self.service else None,
+            'service_name': self.service_name,
+            'amount': self.amount,
             'uom_id': self.uom_id,
             'uom_description': self.uom.uom_description if self.uom else None,
             'quantity': self.quantity,

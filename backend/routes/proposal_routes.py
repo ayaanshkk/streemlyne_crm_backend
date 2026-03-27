@@ -130,7 +130,9 @@ def create_proposal():
                 proposal_id=proposal.proposal_id,
                 service_id=item['service_id'],
                 quantity=float(item['quantity']),
-                uom_id=item['uom_id']
+                uom_id=item['uom_id'],
+                service_name=item.get('service_name'),
+                amount=float(item['amount']) if item.get('amount') else None
             )
             db.session.add(detail)
 
@@ -249,7 +251,9 @@ def add_detail_line(proposal_id: int):
         proposal_id=proposal_id,
         service_id=data['service_id'],
         quantity=float(data['quantity']),
-        uom_id=data['uom_id']
+        uom_id=data['uom_id'],
+        service_name=data.get('service_name'),
+        amount=float(data['amount']) if data.get('amount') else None
     )
 
     try:
@@ -282,9 +286,12 @@ def update_detail_line(proposal_id: int, detail_id: int):
         abort(404, description='Detail line not found')
 
     data = request.get_json() or {}
-    for field in ['service_id', 'quantity', 'uom_id']:
+    for field in ['service_id', 'quantity', 'uom_id', 'service_name', 'description', 'amount']:
         if field in data:
-            setattr(detail, field, data[field])
+            if field == 'amount':
+                setattr(detail, field, float(data[field]) if data[field] else None)
+            else:
+                setattr(detail, field, data[field])
 
     detail.updated_at = datetime.utcnow()
 
@@ -359,6 +366,13 @@ def _proposal_dict(p: ProposalMaster, include_details: bool = True) -> dict:
         'created_at':       p.created_at.isoformat() if p.created_at else None,
         'updated_at':       p.updated_at.isoformat() if p.updated_at else None,
     }
+    
+    # Include customer name directly if client exists
+    if p.client_id:
+        client = ClientMaster.query.get(p.client_id)
+        if client:
+            result['customer_name'] = client.client_contact_name or client.client_company_name or f"Client #{client.client_id}"
+    
     if include_details:
         result['details'] = [
             _detail_dict(d)
@@ -372,6 +386,8 @@ def _detail_dict(d: ProposalDetails) -> dict:
         'proposal_details_id': d.proposal_details_id,
         'proposal_id':         d.proposal_id,
         'service_id':          d.service_id,
+        'service_name':        d.service_name,
+        'amount':              d.amount,
         'quantity':            d.quantity,
         'uom_id':              d.uom_id,
         'created_at':          d.created_at.isoformat() if d.created_at else None,
