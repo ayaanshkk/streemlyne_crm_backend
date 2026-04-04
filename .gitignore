@@ -16,3 +16,4 @@ backups/
 *.sql
 venv/
 __pycache__/
+*.db 
