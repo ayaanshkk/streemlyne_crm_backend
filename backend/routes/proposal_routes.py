@@ -347,6 +347,7 @@ def _get_or_404(proposal_id: int) -> ProposalMaster:
         )
         .first()
     )
+    
     if not proposal:
         abort(404, description='Proposal not found')
     return proposal

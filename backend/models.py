@@ -1280,9 +1280,14 @@ class InvoiceMaster(db.Model):
     invoice_number = db.Column(db.String, nullable=False)
     billing_remarks = db.Column(db.String)
     sub_total = db.Column(db.Float(precision=24))
+    # ── VAT & other taxes columns ─────────────────────────────────────────────
+    vat = db.Column(db.Numeric(precision=12, scale=2))
+    other_taxes = db.Column(db.Numeric(precision=12, scale=2))
+    # ─────────────────────────────────────────────────────────────────────────
     total_amount = db.Column(db.Float(precision=24), nullable=False)
     discount_percent = db.Column(db.Float(precision=24))
     discount_amount = db.Column(db.Float(precision=24))
+    payment_status = db.Column(db.String(50), nullable=True, default='Not Paid')
     tax_id = db.Column(db.SmallInteger, nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
@@ -1321,9 +1326,14 @@ class InvoiceMaster(db.Model):
             'invoice_number': self.invoice_number,
             'billing_remarks': self.billing_remarks,
             'sub_total': self.sub_total,
+            # ── VAT & other taxes ─────────────────────────────────────────────
+            'vat': self.vat,
+            'other_taxes': self.other_taxes,
+            # ─────────────────────────────────────────────────────────────────────
             'total_amount': self.total_amount,
             'discount_percent': self.discount_percent,
             'discount_amount': self.discount_amount,
+            'payment_status': self.payment_status,
             'tax_id': self.tax_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -1337,9 +1347,11 @@ class InvoiceDetails(db.Model):
 
     invoice_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     invoice_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Invoice_Master.invoice_id'), nullable=False)
-    service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
-    uom_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=False)
-    quantity = db.Column(db.Float(precision=24), nullable=False)
+    service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=True)
+    uom_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=True)
+    quantity = db.Column(db.Float(precision=24), nullable=True, default=1.0)
+    service_name = db.Column(db.String(500), nullable=True)  # User-entered custom service name
+    unit_price = db.Column(db.Float(precision=24), nullable=True)  # User-entered custom amount
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
 

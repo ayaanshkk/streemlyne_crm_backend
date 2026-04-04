@@ -144,34 +144,6 @@ def get_client(client_id: int):
         .all()
     )
 
-    # CustomerFormData is an app-level model outside the core schema.
-    # Guarded import so the app still starts when the table doesn't exist yet.
-    form_submissions = []
-    try:
-        from models import CustomerFormData
-        import json as _json
-        entries = (
-            CustomerFormData.query
-            .filter_by(client_id=client.client_id, tenant_id=g.tenant_id)
-            .order_by(CustomerFormData.submitted_at.desc())
-            .all()
-        )
-        for f in entries:
-            try:
-                parsed = _json.loads(f.form_data)
-            except Exception:
-                parsed = {'raw': f.form_data}
-            form_submissions.append({
-                'id':           f.id,
-                'client_id':    f.client_id,
-                'token_used':   f.token_used,
-                'submitted_at': f.submitted_at.isoformat() if f.submitted_at else None,
-                'form_data':    parsed,
-                'source':       'web_form',
-            })
-    except ImportError:
-        pass
-
     result = _client_dict(client)
     result['interactions'] = [_interaction_dict(i) for i in interactions]
     result['opportunities'] = [
@@ -189,7 +161,6 @@ def get_client(client_id: int):
         }
         for o in opportunities
     ]
-    result['form_submissions'] = form_submissions
 
     return jsonify(result), 200
 

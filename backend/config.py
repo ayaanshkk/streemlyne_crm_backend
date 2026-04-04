@@ -13,7 +13,7 @@ class Config:
     
     # Database Configuration (Assuming SQLite for development as per logs)
     # The database file must be present in the project root or specified path
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///streemlyne_crm.db'
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///local.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     # JWT Configuration (for user authentication)

@@ -14,11 +14,16 @@ When you create new model files, you MUST import them in the
 import logging
 from logging.config import fileConfig
 
-from flask import current_app
-
 from alembic import context
 
+# Import config directly - bypass Flask
+from config import Config
+from sqlalchemy import create_engine
+
 config = context.config
+
+# Set sqlalchemy URL directly from config
+config.set_main_option('sqlalchemy.url', Config.SQLALCHEMY_DATABASE_URI.replace('sqlite:///', 'sqlite:///'))
 
 fileConfig(config.config_file_name)
 logger = logging.getLogger('alembic.env')
@@ -28,6 +33,7 @@ logger = logging.getLogger('alembic.env')
 # CRITICAL: Import all models here so Alembic can detect them
 # ============================================================================
 
+import models
 from models import (
     # Tenancy models
     TenantMaster,
@@ -68,43 +74,38 @@ from models import (
     # EnergyContractMaster,
 )
 
+# Get metadata from models
+target_metadata = models.db.metadata
+
 
 # ============================================================================
-# Flask-Migrate helper functions (keep existing)
+# Flask-Migrate helper functions (keep existing but simplified)
 # ============================================================================
 
 def get_engine():
-    """Get database engine from Flask-Migrate extension"""
-    try:
-        return current_app.extensions['migrate'].db.get_engine()
-    except (TypeError, AttributeError):
-        return current_app.extensions['migrate'].db.engine
+    """Get database engine"""
+    return create_engine(Config.SQLALCHEMY_DATABASE_URI)
 
 
 def get_engine_url():
-    """Get database URL from engine"""
-    try:
-        return get_engine().url.render_as_string(hide_password=False).replace(
-            '%', '%%')
-    except AttributeError:
-        return str(get_engine().url).replace('%', '%%')
+    """Get database URL"""
+    return Config.SQLALCHEMY_DATABASE_URI.replace('%', '%%')
 
 
 config.set_main_option('sqlalchemy.url', get_engine_url())
 
-target_db = current_app.extensions['migrate'].db
+# Use metadata from models directly
+target_metadata = models.db.metadata
 
 
 def get_metadata():
     """
-    Get metadata from database object
+    Get metadata from models
 
     This is where Alembic reads your model definitions to detect changes.
     All imported models above are included in this metadata.
     """
-    if hasattr(target_db, 'metadatas'):
-        return target_db.metadatas[None]
-    return target_db.metadata
+    return target_metadata
 
 
 # ============================================================================
@@ -210,9 +211,8 @@ def run_migrations_online():
                 return False
         return True
 
-    conf_args = current_app.extensions['migrate'].configure_args
-    if conf_args.get("process_revision_directives") is None:
-        conf_args["process_revision_directives"] = process_revision_directives
+    # Configure without Flask-Migrate extensions
+    conf_args = {}
 
     connectable = get_engine()
 

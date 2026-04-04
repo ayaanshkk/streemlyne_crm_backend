@@ -94,7 +94,6 @@ def create_app(test_config=None):
         # Documents & Forms
         CaseDocuments,
         CustomerDocuments,
-        CustomerFormData,
 
         # Chat (application-level, no schema table)
         ChatHistory,
@@ -171,4 +170,4 @@ app = create_app()
 if __name__ == '__main__':
     with app.app_context():
         print("🌐 Running on http://localhost:5000")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
