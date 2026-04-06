@@ -1,3 +1,4 @@
+#C:\streemlyne_crm_backend\backend\routes\invoice_routes.py
 """
 Invoice Routes
 Handles: Invoice_Master, Invoice_Details
@@ -42,6 +43,7 @@ from database import db
 from models import InvoiceMaster, InvoiceDetails, ClientMaster, ProjectDetails
 from middleware import auth_required
 from datetime import datetime
+from sqlalchemy import func
 
 invoice_bp = Blueprint('invoice', __name__, url_prefix='/api/invoices')
 
@@ -85,7 +87,6 @@ def _get_or_404(invoice_id: int) -> InvoiceMaster:
     if not invoice:
         abort(404, description='Invoice not found')
     return invoice
-
 
 # ─────────────────────────────────────────
 # Invoice number generation
@@ -133,26 +134,59 @@ def get_next_invoice_number():
 @invoice_bp.route('', methods=['GET'])
 @auth_required
 def list_invoices():
-    """
-    GET /api/invoices
-    Query params: client_id, project_id, proposal_id
-    """
     query = InvoiceMaster.query.filter(_tenant_invoice_filter(g.tenant_id))
-
-    client_id   = request.args.get('client_id',   type=int)
-    project_id  = request.args.get('project_id',  type=int)
-    proposal_id = request.args.get('proposal_id', type=int)
-
-    if client_id:
-        query = query.filter(InvoiceMaster.client_id == client_id)
-    if project_id:
-        query = query.filter(InvoiceMaster.project_id == project_id)
-    if proposal_id:
-        query = query.filter(InvoiceMaster.proposal_id == proposal_id)
-
     invoices = query.order_by(InvoiceMaster.created_at.desc()).all()
-    return jsonify([_invoice_dict(i, include_details=False) for i in invoices]), 200
 
+    invoice_ids = [i.invoice_id for i in invoices]
+
+    details_map = {}
+
+    if invoice_ids:
+        # 🔹 Summary aggregation
+        rows = (
+            db.session.query(
+                InvoiceDetails.invoice_id,
+                func.string_agg(InvoiceDetails.service_name, ', ').label("summary"),
+            )
+            .filter(InvoiceDetails.invoice_id.in_(invoice_ids))
+            .group_by(InvoiceDetails.invoice_id)
+            .all()
+        )
+
+        for r in rows:
+            details_map[r.invoice_id] = {
+                "summary_description": r.summary or "",
+            }
+
+        # 🔹 First service name (correct order)
+        first_rows = (
+            db.session.query(InvoiceDetails)
+            .filter(InvoiceDetails.invoice_id.in_(invoice_ids))
+            .order_by(InvoiceDetails.invoice_id, InvoiceDetails.invoice_details_id)
+            .all()
+        )
+
+        for d in first_rows:
+            if d.invoice_id not in details_map:
+                details_map[d.invoice_id] = {}
+
+            if "first_service_name" not in details_map[d.invoice_id]:
+                details_map[d.invoice_id]["first_service_name"] = d.service_name or ""
+
+    # 🔥 FINAL RESPONSE BUILD (YOU WERE MISSING THIS)
+    result = []
+
+    for i in invoices:
+        data = _invoice_dict(i, include_details=False)
+
+        agg = details_map.get(i.invoice_id, {})
+
+        data["summary_description"] = agg.get("summary_description", "")
+        data["first_service_name"] = agg.get("first_service_name", "")
+
+        result.append(data)
+
+    return jsonify(result), 200
 
 @invoice_bp.route('', methods=['POST'])
 @auth_required
@@ -435,6 +469,7 @@ def remove_detail_line(invoice_id: int, detail_id: int):
 # Serialisers
 # ─────────────────────────────────────────
 
+
 def _invoice_dict(i: InvoiceMaster, include_details: bool = True) -> dict:
     result = {
         'invoice_id':       i.invoice_id,
@@ -446,10 +481,8 @@ def _invoice_dict(i: InvoiceMaster, include_details: bool = True) -> dict:
         'tax_id':           i.tax_id,
         'currency_id':      i.currency_id,
         'sub_total':        i.sub_total,
-        # ── VAT & taxes now included in every response ───────────────────────
         'vat':              float(i.vat) if i.vat is not None else 0.0,
         'other_taxes':      float(i.other_taxes) if i.other_taxes is not None else 0.0,
-        # ─────────────────────────────────────────────────────────────────────
         'total_amount':     i.total_amount,
         'discount_percent': i.discount_percent,
         'discount_amount':  i.discount_amount,
@@ -458,6 +491,7 @@ def _invoice_dict(i: InvoiceMaster, include_details: bool = True) -> dict:
         'updated_at':       i.updated_at.isoformat() if i.updated_at else None,
     }
 
+    # ── Customer Name ─────────────────────────────────────────────
     if i.client_id:
         client = ClientMaster.query.get(i.client_id)
         if client:
@@ -468,13 +502,13 @@ def _invoice_dict(i: InvoiceMaster, include_details: bool = True) -> dict:
             )
 
     if include_details:
-        # Use joinedload to avoid N+1 query when accessing service relationship
         result['details'] = [
             _detail_dict(d)
             for d in InvoiceDetails.query
             .options(db.joinedload(InvoiceDetails.service))
             .filter_by(invoice_id=i.invoice_id).all()
         ]
+
     return result
 
 

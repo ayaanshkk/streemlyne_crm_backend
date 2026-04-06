@@ -1,3 +1,4 @@
+#C:\streemlyne_crm_backend\backend\routes\proposal_routes.py
 """
 Proposal Routes
 Handles: Proposal_Master, Proposal_Details
@@ -6,7 +7,9 @@ Schema alignment (StreemLyne_MT):
   Proposal_Master:
     proposal_id (PK), client_id (FK→Client_Master, nullable),
     project_id (FK→Project_Details, nullable),
-    sub_total (real), currency_id (FK→Currency_Master), tax_id (NOT NULL),
+sub_total (numeric(12,2))
+total_amount (numeric(12,2))
+quantity (numeric(10,2))
     total_amount (real, NOT NULL), discount_percent, discount_amount,
     created_at, updated_at
 
@@ -29,6 +32,10 @@ from database import db
 from models import ProposalMaster, ProposalDetails, ClientMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
+import json
+from sqlalchemy import text
+from decimal import Decimal
+
 
 proposal_bp = Blueprint('proposal', __name__, url_prefix='/api/proposals')
 
@@ -63,7 +70,7 @@ def list_proposals():
         query = query.filter(ProposalMaster.project_id == project_id)
 
     proposals = query.order_by(ProposalMaster.created_at.desc()).all()
-    return jsonify([_proposal_dict(p, include_details=False) for p in proposals]), 200
+    return jsonify([_proposal_dict(p, include_details=True) for p in proposals]), 200
 
 
 @proposal_bp.route('', methods=['POST'])
@@ -111,14 +118,20 @@ def create_proposal():
             return jsonify({'error': 'Invalid client_id for this tenant'}), 400
 
     proposal = ProposalMaster(
-        client_id=data.get('client_id'),
-        project_id=data.get('project_id'),
-        tax_id=data['tax_id'],
-        sub_total=data.get('sub_total'),
-        currency_id=data.get('currency_id'),
-        total_amount=float(data['total_amount']),
-        discount_percent=data.get('discount_percent'),
-        discount_amount=data.get('discount_amount')
+        client_id        = data.get('client_id'),
+        project_id       = data.get('project_id'),
+        tax_id           = data['tax_id'],
+        sub_total = Decimal(str(data['sub_total'])) if data.get('sub_total') is not None else None,
+        discount_amount = Decimal(str(data['discount_amount'])) if data.get('discount_amount') is not None else None,
+        currency_id      = data.get('currency_id'),
+        total_amount = Decimal(str(data['total_amount'])),
+        discount_percent = data.get('discount_percent'),
+        # ── previously silently dropped ───────────────────────────────────────
+        customer_name    = data.get('customer_name'),
+        notes            = data.get('notes'),
+        company_details  = data.get('company_details'),
+        payment_details  = data.get('payment_details'),
+        tax_breakdown    = data.get('tax_breakdown'),   # ← new
     )
 
     try:
@@ -129,10 +142,10 @@ def create_proposal():
             detail = ProposalDetails(
                 proposal_id=proposal.proposal_id,
                 service_id=item['service_id'],
-                quantity=float(item['quantity']),
+                quantity = Decimal(str(item['quantity'])),
+                amount = Decimal(str(item['amount'])) if item.get('amount') else None,
                 uom_id=item['uom_id'],
                 service_name=item.get('service_name'),
-                amount=float(item['amount']) if item.get('amount') else None
             )
             db.session.add(detail)
 
@@ -170,12 +183,27 @@ def update_proposal(proposal_id: int):
     proposal = _get_or_404(proposal_id)
     data = request.get_json() or {}
 
+    # Non-numeric fields
     for field in [
-        'tax_id', 'currency_id', 'sub_total', 'total_amount',
-        'discount_percent', 'discount_amount', 'client_id', 'project_id'
+        'tax_id', 'currency_id', 'client_id', 'project_id',
+        'customer_name', 'notes', 'company_details', 'payment_details', 'tax_breakdown'
     ]:
         if field in data:
             setattr(proposal, field, data[field])
+
+    # Numeric fields
+    if 'sub_total' in data:
+        proposal.sub_total = Decimal(str(data['sub_total'])) if data['sub_total'] is not None else None
+
+    if 'total_amount' in data:
+        proposal.total_amount = Decimal(str(data['total_amount']))
+
+    if 'discount_amount' in data:
+        proposal.discount_amount = Decimal(str(data['discount_amount'])) if data['discount_amount'] is not None else None
+
+    if 'discount_percent' in data:
+        proposal.discount_percent = data['discount_percent']
+
 
     proposal.updated_at = datetime.utcnow()
 
@@ -250,10 +278,10 @@ def add_detail_line(proposal_id: int):
     detail = ProposalDetails(
         proposal_id=proposal_id,
         service_id=data['service_id'],
-        quantity=float(data['quantity']),
+        quantity=Decimal(str(data['quantity'])),
+        amount=Decimal(str(data['amount'])) if data.get('amount') else None,
         uom_id=data['uom_id'],
         service_name=data.get('service_name'),
-        amount=float(data['amount']) if data.get('amount') else None
     )
 
     try:
@@ -289,7 +317,7 @@ def update_detail_line(proposal_id: int, detail_id: int):
     for field in ['service_id', 'quantity', 'uom_id', 'service_name', 'description', 'amount']:
         if field in data:
             if field == 'amount':
-                setattr(detail, field, float(data[field]) if data[field] else None)
+                setattr(detail, field, Decimal(str(data[field])) if data[field] else None)
             else:
                 setattr(detail, field, data[field])
 
@@ -355,31 +383,43 @@ def _get_or_404(proposal_id: int) -> ProposalMaster:
 
 def _proposal_dict(p: ProposalMaster, include_details: bool = True) -> dict:
     result = {
+        'quote_id':         p.quote_id,
         'proposal_id':      p.proposal_id,
         'client_id':        p.client_id,
         'project_id':       p.project_id,
         'tax_id':           p.tax_id,
-        'sub_total':        p.sub_total,
         'currency_id':      p.currency_id,
-        'total_amount':     p.total_amount,
         'discount_percent': p.discount_percent,
-        'discount_amount':  p.discount_amount,
+        'customer_name':    p.customer_name,
+        'notes':            p.notes,
+        'company_details':  p.company_details,
+        'payment_details':  p.payment_details,
+        'tax_breakdown':    p.tax_breakdown,
         'created_at':       p.created_at.isoformat() if p.created_at else None,
         'updated_at':       p.updated_at.isoformat() if p.updated_at else None,
+        'sub_total': float(p.sub_total) if p.sub_total is not None else None,
+        'total_amount': float(p.total_amount) if p.total_amount is not None else None,
+        'discount_amount': float(p.discount_amount) if p.discount_amount is not None else None,
     }
-    
-    # Include customer name directly if client exists
-    if p.client_id:
+
+    # Fallback: derive customer_name from Client_Master if not stored directly
+    if not result['customer_name'] and p.client_id:
         client = ClientMaster.query.get(p.client_id)
         if client:
-            result['customer_name'] = client.client_contact_name or client.client_company_name or f"Client #{client.client_id}"
-    
+            result['customer_name'] = (
+                client.client_contact_name or
+                client.client_company_name or
+                f"Client #{client.client_id}"
+            )
+
     if include_details:
-        result['details'] = [
-            _detail_dict(d)
-            for d in ProposalDetails.query.filter_by(proposal_id=p.proposal_id).all()
-        ]
-    return result
+            result['details'] = [
+                _detail_dict(d)
+                for d in p.proposal_details.all()
+            ]
+        return result
+    
+
 
 
 def _detail_dict(d: ProposalDetails) -> dict:
@@ -388,9 +428,9 @@ def _detail_dict(d: ProposalDetails) -> dict:
         'proposal_id':         d.proposal_id,
         'service_id':          d.service_id,
         'service_name':        d.service_name,
-        'amount':              d.amount,
-        'quantity':            d.quantity,
         'uom_id':              d.uom_id,
         'created_at':          d.created_at.isoformat() if d.created_at else None,
         'updated_at':          d.updated_at.isoformat() if d.updated_at else None,
+        'amount': float(d.amount) if d.amount is not None else None,
+        'quantity': float(d.quantity),
     }

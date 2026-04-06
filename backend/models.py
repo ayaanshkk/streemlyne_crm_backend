@@ -19,6 +19,7 @@ import sys
 import os
 from datetime import datetime, date
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import text
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -494,7 +495,7 @@ class RoleMaster(db.Model):
 
     def get_permission_codes(self) -> list:
         """Return list of permission_code strings assigned to this role."""
-        return [rpm.permission.permission_code for rpm in self.role_permission_mappings if rpm.permission]
+        return [rpm.permission.permission_code for rpm in self.role_permission_mappings.all() if rpm.permission]
 
     def to_dict(self):
         return {
@@ -1168,54 +1169,59 @@ class ProposalMaster(db.Model):
     """Header record for a client proposal (quote)."""
     __tablename__ = 'Proposal_Master'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-
-    proposal_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
-    project_id = db.Column(db.SmallInteger)
-    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
-    sub_total = db.Column(db.Float(precision=24))
-    total_amount = db.Column(db.Float(precision=24), nullable=False)
+    
+    quote_id = db.Column(
+        db.String(10),
+        unique=True,
+        nullable=False,
+        server_default=text(
+            "'QUO-' || lpad(nextval('\"StreemLyne_MT\".quote_id_seq')::text, 3, '0')"
+        )
+    )
+    proposal_id = db.Column(db.Integer, primary_key=True)
+    client_id       = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+    project_id      = db.Column(db.SmallInteger)
+    currency_id     = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    sub_total = db.Column(db.Numeric(12, 2))
+    total_amount = db.Column(db.Numeric(12, 2), nullable=False)
     discount_percent = db.Column(db.Float(precision=24))
-    discount_amount = db.Column(db.Float(precision=24))
-    tax_id = db.Column(db.SmallInteger, nullable=False)
-    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    discount_amount = db.Column(db.Numeric(12, 2))
+    tax_id          = db.Column(db.SmallInteger)
+    # ── columns that exist in DB but were missing from the model ──────────
+    customer_name   = db.Column(db.String(255))
+    notes           = db.Column(db.Text)
+    company_details = db.Column(db.JSON)
+    payment_details = db.Column(db.JSON)
+    tax_breakdown   = db.Column(db.JSON)          # ← new column
+    # ─────────────────────────────────────────────────────────────────────
+    created_at      = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at      = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
 
-    # Relationships
-    client = db.relationship('ClientMaster', back_populates='proposals')
-    currency = db.relationship('CurrencyMaster', backref='proposals')
+    # Relationships — unchanged
+    client           = db.relationship('ClientMaster', back_populates='proposals')
+    currency         = db.relationship('CurrencyMaster', backref='proposals')
     proposal_details = db.relationship('ProposalDetails', back_populates='proposal', lazy='dynamic', cascade='all, delete-orphan')
-    invoices = db.relationship('InvoiceMaster', back_populates='proposal', lazy='dynamic')
-
-    def __repr__(self):
-        return f'<ProposalMaster {self.proposal_id}>'
-
-    def calculate_totals(self):
-        """Recalculate sub_total, discount_amount, and total_amount from line items."""
-        details = self.proposal_details.all()
-        self.sub_total = sum((d.quantity * d.service.service_rate) for d in details if d.service and d.service.service_rate is not None)
-        if self.discount_percent:
-            self.discount_amount = self.sub_total * (self.discount_percent / 100)
-        elif not self.discount_amount:
-            self.discount_amount = 0.0
-        self.total_amount = self.sub_total - (self.discount_amount or 0.0)
-        return self.total_amount
+    invoices         = db.relationship('InvoiceMaster', back_populates='proposal', lazy='dynamic')
 
     def to_dict(self):
         return {
-            'proposal_id': self.proposal_id,
-            'client_id': self.client_id,
-            'client_name': self.client.client_company_name if self.client else None,
-            'project_id': self.project_id,
-            'currency_id': self.currency_id,
-            'currency_code': self.currency.currency_code if self.currency else None,
-            'sub_total': self.sub_total,
-            'total_amount': self.total_amount,
+            'proposal_id':      self.proposal_id,
+            'client_id':        self.client_id,
+            'client_name':      self.client.client_company_name if self.client else None,
+            'project_id':       self.project_id,
+            'currency_id':      self.currency_id,
+            'sub_total':        self.sub_total,
+            'total_amount':     self.total_amount,
             'discount_percent': self.discount_percent,
-            'discount_amount': self.discount_amount,
-            'tax_id': self.tax_id,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'discount_amount':  self.discount_amount,
+            'tax_id':           self.tax_id,
+            'customer_name':    self.customer_name,
+            'notes':            self.notes,
+            'company_details':  self.company_details,
+            'payment_details':  self.payment_details,
+            'tax_breakdown':    self.tax_breakdown,
+            'created_at':       self.created_at.isoformat() if self.created_at else None,
+            'updated_at':       self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
@@ -1224,14 +1230,20 @@ class ProposalDetails(db.Model):
     __tablename__ = 'Proposal_Details'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
-    proposal_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    proposal_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Proposal_Master.proposal_id'), nullable=False)
+    proposal_details_id = db.Column(db.Integer, primary_key=True)
+
+    proposal_id = db.Column(
+        db.Integer,
+        db.ForeignKey('StreemLyne_MT.Proposal_Master.proposal_id'),
+        nullable=False
+    )
+
+    quantity = db.Column(db.Numeric(10, 2), nullable=False)
+    amount = db.Column(db.Numeric(12, 2))
     service_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
     uom_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=False)
-    quantity = db.Column(db.Float(precision=24), nullable=False)
     # Custom fields for quote generation - stores user-entered values
     service_name = db.Column(db.String(255))
-    amount = db.Column(db.Float(precision=24))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
 
@@ -1244,29 +1256,25 @@ class ProposalDetails(db.Model):
         return f'<ProposalDetails {self.proposal_details_id} for Proposal {self.proposal_id}>'
 
     def calculate_line_total(self) -> float:
-        if self.service and self.service.service_rate is not None:
-            return self.quantity * self.service.service_rate
-        return 0.0
+            if self.service and self.service.service_rate is not None:
+                return self.quantity * self.service.service_rate
+            return 0.0
 
     def to_dict(self):
-        return {
-            'proposal_details_id': self.proposal_details_id,
-            'proposal_id': self.proposal_id,
-            'service_id': self.service_id,
-            'service_title': self.service.service_title if self.service else None,
-            'service_code': self.service.service_code if self.service else None,
-            'service_rate': self.service.service_rate if self.service else None,
-            'service_name': self.service_name,
-            'amount': self.amount,
-            'uom_id': self.uom_id,
-            'uom_description': self.uom.uom_description if self.uom else None,
-            'quantity': self.quantity,
-            'line_total': self.calculate_line_total(),
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
+            return {
+                'proposal_details_id': self.proposal_details_id,
+                'proposal_id':         self.proposal_id,
+                'service_id':          self.service_id,
+                'service_title':       self.service.service_title if self.service else None,
+                'service_name':        self.service_name,
+                'amount':              self.amount,
+                'uom_id':              self.uom_id,
+                'quantity':            self.quantity,
+                'line_total':          self.calculate_line_total(),
+                'created_at':          self.created_at.isoformat() if self.created_at else None,
+                'updated_at':          self.updated_at.isoformat() if self.updated_at else None,
+            }
+    
 class InvoiceMaster(db.Model):
     """Invoice header, optionally linked to a proposal."""
     __tablename__ = 'Invoice_Master'
@@ -1325,7 +1333,7 @@ class InvoiceMaster(db.Model):
             'currency_code': self.currency.currency_code if self.currency else None,
             'invoice_number': self.invoice_number,
             'billing_remarks': self.billing_remarks,
-            'sub_total': self.sub_total,
+            'sub_total': float(self.sub_total) if self.sub_total is not None else None,
             # ── VAT & other taxes ─────────────────────────────────────────────
             'vat': self.vat,
             'other_taxes': self.other_taxes,
@@ -1704,7 +1712,7 @@ class ChatConversation(db.Model):
             'session_id': self.session_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'message_count': len(self.messages) if self.messages else 0,
+            'message_count': len(list(self.messages)) if self.messages is not None else 0,
         }
 
 
