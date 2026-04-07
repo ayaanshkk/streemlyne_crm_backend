@@ -413,11 +413,11 @@ def _proposal_dict(p: ProposalMaster, include_details: bool = True) -> dict:
             )
 
     if include_details:
-            result['details'] = [
-                _detail_dict(d)
-                for d in p.proposal_details.all()
-            ]
-        return result
+        result['details'] = [
+            _detail_dict(d)
+            for d in p.proposal_details.all()
+        ]
+    return result
     
 
 
