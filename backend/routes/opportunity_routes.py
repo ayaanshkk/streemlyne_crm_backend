@@ -41,7 +41,7 @@ from models import OpportunityDetails, StageMaster, ClientMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
 
-opportunity_bp = Blueprint('opportunity', __name__, url_prefix='/api/opportunities')
+opportunity_bp = Blueprint('opportunity', __name__, url_prefix='/opportunities')
 
 
 # ─────────────────────────────────────────

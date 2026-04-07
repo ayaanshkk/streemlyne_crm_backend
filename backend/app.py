@@ -14,13 +14,21 @@ def create_app(test_config=None):
 
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-fallback-secret-key')
 
+    # ✅ FIXED CORS CONFIGURATION
     CORS(
         app,
-        resources={r"/api/*": {"origins": "*"}},
+        resources={r"/api/*": {
+            "origins": [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3001",
+            ]
+        }},
         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         expose_headers=["Content-Type", "Authorization"],
-        # ❌ Remove supports_credentials=True — incompatible with origins="*"
+        supports_credentials=True,
     )
 
     if test_config:
@@ -83,9 +91,7 @@ def create_app(test_config=None):
         InvoiceDetails,
         UOMMaster,
 
-        # Master data  ← TaxMaster and ContactMethodMaster added here
-        # TaxMaster       : referenced by Invoice_Master.tax_id, Proposal_Master.tax_id
-        # ContactMethodMaster : referenced by Client_Interactions.contact_method
+        # Master data
         CountryMaster,
         CurrencyMaster,
         TaxMaster,
@@ -101,9 +107,7 @@ def create_app(test_config=None):
         ChatMessage,
     )
 
-    # Assignment — application-level scheduling table (not in original schema dump)
-    # Same pattern as Drawing/CuttingList: registered here so SQLAlchemy
-    # includes it in `flask db migrate` and creates the table automatically.
+    # Assignment — application-level scheduling table
     from models import Assignment
 
     from models import DRAWING_MODULE_AVAILABLE
@@ -135,28 +139,35 @@ def create_app(test_config=None):
     from routes.chat_routes         import chat_bp
     from routes.core_routes         import core_bp
 
-
-
     blueprints = [
         auth_bp, tenant_bp, subscription_bp,
         client_bp, employee_bp, role_bp,
         opportunity_bp, project_bp, contract_bp,
         proposal_bp, invoice_bp, document_bp,
         master_bp, form_bp, chat_bp, core_bp,
-        assignment_bp,   # ← Schedule feature
+        assignment_bp,
     ]
     
+    # ✅ FIXED: Register all blueprints with /api prefix
     for bp in blueprints:
-        app.register_blueprint(bp)
+        app.register_blueprint(bp, url_prefix=f'/api{bp.url_prefix}')
 
     print("✅ All blueprints registered")
+    
+    # ✅ DEBUG: Show registered auth routes (remove after confirming it works)
+    print("\n🔍 Sample Registered Auth Routes:")
+    for rule in app.url_map.iter_rules():
+        if 'auth' in str(rule) and 'login' in str(rule):
+            methods = ', '.join(sorted(rule.methods - {'HEAD', 'OPTIONS'}))
+            print(f"  → [{methods}] {rule}")
+    print()
 
     print("\n" + "=" * 60)
     print("🚀 StreemLyne CRM Backend Starting...")
     print("=" * 60)
     print(f"{'🧪 Database: SQLite (Test Mode)' if test_config else '✅ Database: Supabase PostgreSQL'}")
     print("✅ Schema:   StreemLyne_MT")
-    print("✅ CORS:     Enabled (all origins on /api/*)")
+    print("✅ CORS:     Enabled (localhost:3000, 3001)")
     print("✅ Auth:     JWT — staff (UserMaster) + portal (CustomerAuth)")
     print("✅ RBAC:     Role_Master / Permission_Catalog")
     if DRAWING_MODULE_AVAILABLE:

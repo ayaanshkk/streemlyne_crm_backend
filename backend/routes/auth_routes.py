@@ -20,8 +20,7 @@ from datetime import datetime, timedelta, date
 import secrets
 import re
 
-auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
-
+auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
 # ─────────────────────────────────────────
 # Helpers

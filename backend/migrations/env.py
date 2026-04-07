@@ -11,10 +11,13 @@ When you create new model files, you MUST import them in the
 "Import all models" section below.
 """
 
-import logging
 from logging.config import fileConfig
 
+from sqlalchemy import engine_from_config, pool, create_engine
 from alembic import context
+import sys
+import os
+import logging
 
 # Import config directly - bypass Flask
 from config import Config
@@ -26,8 +29,26 @@ config = context.config
 config.set_main_option('sqlalchemy.url', Config.SQLALCHEMY_DATABASE_URI.replace('sqlite:///', 'sqlite:///'))
 
 fileConfig(config.config_file_name)
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# ✅ Import Flask app and db
+from app import app, db
+
+# ✅ Import all models
+from models import *
+
+# this is the Alembic Config object
+config = context.config
+
+# Interpret the config file for Python logging.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
 logger = logging.getLogger('alembic.env')
 
+# ✅ Set target metadata from db (not models.db)
+target_metadata = db.metadata
 
 # ============================================================================
 # CRITICAL: Import all models here so Alembic can detect them
@@ -118,16 +139,19 @@ def run_migrations_offline():
     Used when generating SQL scripts without database connection:
     alembic upgrade --sql 1234:5678 > migration.sql
     """
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=get_metadata(),
-        literal_binds=True,
-        render_as_batch=False,  # PostgreSQL supports transactional DDL
-    )
+    with app.app_context():
+        url = str(db.engine.url)
+        context.configure(
+            url=url,
+            target_metadata=target_metadata,
+            literal_binds=True,
+            dialect_opts={"paramstyle": "named"},
+            version_table_schema='StreemLyne_MT',
+            render_as_batch=False,
+        )
 
-    with context.begin_transaction():
-        context.run_migrations()
+        with context.begin_transaction():
+            context.run_migrations()
 
 
 def run_migrations_online():
@@ -146,87 +170,36 @@ def run_migrations_online():
                 logger.info('No changes in schema detected.')
 
     def include_object(object, name, type_, reflected, compare_to):
-        """Only include objects in the public schema, ignore Supabase internal schemas"""
+        """Only include objects in StreemLyne_MT schema"""
         if type_ == "table":
             schema = getattr(object, 'schema', None)
-            if schema and schema != 'public':
+            # Only include tables in StreemLyne_MT schema
+            if schema != 'StreemLyne_MT':
                 return False
-            skip_tables = {
-                # Infrastructure - never touch/remove these
-                'alembic_version',
-                'tenant_domains',
-                'tenant_supabase_config',
-                # Old/unused tables
-                'quotes',
-                'quote_line_items',
-                # Dev B tables - not modelled yet, don't drop them
-                'client_master',
-                'client_interactions',
-                'energy_contract_master',
-                'invoice_master',
-                'invoice_details',
-                'opportunity_details',
-                'project_details',
-                'proposal_master',
-                'proposal_details',
-                # OLD tables - never modify these via migration
-                'tenants',
-                'users',
-                'jobs',
-                'customers',
-                'assignments',
-                'teams',
-                'team_members',
-                'salespeople',
-                'invoices',
-                'invoice_line_items',
-                'proposals',
-                'proposal_items',
-                'payments',
-                'opportunities',
-                'opportunity_documents',
-                'opportunity_notes',
-                'activities',
-                'audit_logs',
-                'login_attempts',
-                'user_sessions',
-                'chat_conversations',
-                'chat_messages',
-                'chat_history',
-                'document_templates',
-                'form_submissions',
-                'customer_form_data',
-                'data_imports',
-                'versioned_snapshots',
-                'products',
-                'product_categories',
-                'drawings',
-                'cutting_lists',
-                'education_certificates',
-                'education_test_results',
-                'education_training_batches',
-                'education_pti_forms',
-            }
-            if name in skip_tables:
+                
+            # Skip Alembic's own table
+            if name == 'alembic_version':
                 return False
         return True
 
     # Configure without Flask-Migrate extensions
     conf_args = {}
+    # ✅ Use Flask app's engine directly
+    with app.app_context():
+        connectable = db.engine
 
-    connectable = get_engine()
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                process_revision_directives=process_revision_directives,
+                version_table_schema='StreemLyne_MT',
+                include_schemas=False,
+                include_object=include_object,
+            )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=get_metadata(),
-            include_schemas=False,
-            include_object=include_object,
-            **conf_args
-        )
-
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
 
 
 if context.is_offline_mode():

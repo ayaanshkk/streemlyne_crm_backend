@@ -23,7 +23,7 @@ import secrets
 import string
 import json
 
-form_bp = Blueprint('form', __name__, url_prefix='/api/forms')
+form_bp = Blueprint('form', __name__, url_prefix='/forms')
 
 # ── In-memory token store ──────────────────────────────────────────────────────
 # Replace with Redis or a DB-backed token table in production.

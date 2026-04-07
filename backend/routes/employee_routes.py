@@ -26,6 +26,7 @@ from middleware import auth_required, permission_required
 from datetime import datetime
 
 employee_bp = Blueprint('employee', __name__, url_prefix='/api/employees')
+employee_bp = Blueprint('employee', __name__, url_prefix='/employees')
 
 # ─────────────────────────────────────────
 # Employees – CRUD

@@ -24,7 +24,7 @@ from models import EnergyContractMaster, EmployeeMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
 
-contract_bp = Blueprint('contract', __name__, url_prefix='/api/contracts')
+contract_bp = Blueprint('contract', __name__, url_prefix='/contracts')
 
 
 # ─────────────────────────────────────────

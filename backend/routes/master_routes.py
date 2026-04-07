@@ -35,7 +35,7 @@ from models import (
 from middleware import auth_required, permission_required
 from datetime import datetime
 
-master_bp = Blueprint('master', __name__, url_prefix='/api/master')
+master_bp = Blueprint('master', __name__, url_prefix='/master')
 
 
 # ─────────────────────────────────────────

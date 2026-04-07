@@ -16,7 +16,7 @@ from middleware import auth_required
 from datetime import datetime
 import uuid
 
-chat_bp = Blueprint('chat', __name__, url_prefix='/api/chat')
+chat_bp = Blueprint('chat', __name__, url_prefix='/chat')
 
 
 # ─────────────────────────────────────────

@@ -28,7 +28,7 @@ from models import SubscriptionPlan, TenantSubscription, SubscriptionModuleMappi
 from middleware import auth_required, permission_required
 from datetime import datetime, date
 
-subscription_bp = Blueprint('subscription', __name__, url_prefix='/api/subscriptions')
+subscription_bp = Blueprint('subscription', __name__, url_prefix='/subscriptions')
 
 
 # ─────────────────────────────────────────

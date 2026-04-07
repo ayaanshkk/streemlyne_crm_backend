@@ -29,7 +29,7 @@ from models import ClientMaster, ClientInteractions
 from middleware import auth_required, permission_required
 from datetime import datetime
 
-client_bp = Blueprint('client', __name__, url_prefix='/api/clients')
+client_bp = Blueprint('client', __name__, url_prefix='/clients')
 
 
 # ─────────────────────────────────────────
@@ -60,6 +60,14 @@ def list_clients():
     clients = query.order_by(ClientMaster.created_at.desc()).all()
     # Removed debug logging
     return jsonify([_client_dict(c) for c in clients]), 200
+    # ✅ Order by creation date or ID to maintain consistent numbering
+    clients = query.order_by(ClientMaster.created_at.asc()).all()
+    
+    # ✅ Add sequential display_id using enumerate
+    return jsonify([
+        {**_client_dict(c), 'display_id': idx} 
+        for idx, c in enumerate(clients, start=1)
+    ]), 200
 
 
 @client_bp.route('', methods=['POST'])
@@ -374,7 +382,7 @@ def _client_dict(c: ClientMaster) -> dict:
     """
     Returns both canonical schema names and legacy aliases so existing
     front-end code keeps working without changes.
-    """
+    """    
     return {
         # Canonical schema fields
         'client_id':            c.client_id,
@@ -390,6 +398,11 @@ def _client_dict(c: ClientMaster) -> dict:
         'client_website':       c.client_website,
         'created_at':           c.created_at.isoformat() if c.created_at else None,
         # Legacy aliases (kept for front-end backwards compatibility)
+        
+        # ✅ Stage (but not display_id - that's added by the route)
+        'stage':          c.stage,
+        
+        # Legacy aliases
         'id':             c.client_id,
         'name':           c.client_company_name,
         'company_name':   c.client_company_name,
@@ -415,52 +428,79 @@ def _interaction_dict(i: ClientInteractions) -> dict:
         'created_at':     i.created_at.isoformat() if i.created_at else None,
     }
 
-@client_bp.route('/<int:client_id>/stage', methods=['PATCH'])
+@client_bp.route('/<int:client_id>', methods=['PATCH'])
 @auth_required
-# @permission_required('client.update')
-def update_client_stage(client_id: int):
-    """
-    Update a client's stage.
-    PATCH /api/clients/<client_id>/stage
-    Body:
-    {
-        "stage": "Qualified",
-        "reason": "Customer responded positively",
-        "updated_by": "current_user"
-    }
-    """
-    client = _get_or_404(client_id)
-    data = request.get_json() or {}
-
-    new_stage = data.get('stage')
-    reason = data.get('reason', '')
-    updated_by = data.get('updated_by', 'system')
-
-    if not new_stage:
-        return jsonify({'error': 'stage is required'}), 400
-
-    # Update the stage
-    old_stage = client.stage if hasattr(client, 'stage') else None
-    client.stage = new_stage
-
-    # You can also log the change to an audit table if you have one
-    # AuditLog.create(
-    #     entity_type='Client',
-    #     entity_id=client_id,
-    #     action='update',
-    #     changed_by=updated_by,
-    #     change_summary=f'Stage changed from {old_stage} to {new_stage}. Reason: {reason}'
-    # )
-
-    try:
+def update_client_stage(client_id):
+    """Update client stage (for pipeline drag & drop)"""
+    from models import ClientMaster
+    
+    client = ClientMaster.query.filter_by(
+        client_id=client_id,
+        tenant_id=g.tenant_id
+    ).first()
+    
+    if not client:
+        return jsonify({'error': 'Client not found'}), 404
+    
+    data = request.json
+    
+    if 'stage' in data:
+        client.stage = data['stage']
         db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({'error': 'Failed to update stage'}), 500
+        
+        return jsonify({
+            'message': 'Client stage updated successfully',
+            'client_id': client.client_id,
+            'stage': client.stage
+        }), 200
+    
+    return jsonify({'error': 'No stage provided'}), 400
 
-    return jsonify({
-        'message': 'Stage updated successfully',
-        'client': _client_dict(client),
-        'old_stage': old_stage,
-        'new_stage': new_stage
-    }), 200
+@client_bp.route('/pipeline', methods=['GET'])
+@auth_required
+def get_pipeline_data():
+    """
+    Returns customers formatted for pipeline view.
+    Each customer becomes a pipeline item based on their stage.
+    """
+    from models import ClientMaster
+    
+    # Get all customers for this tenant
+    customers = ClientMaster.query.filter_by(tenant_id=g.tenant_id).all()
+    
+    pipeline_items = []
+    
+    for customer in customers:
+        # Create pipeline item from customer
+        pipeline_items.append({
+            'id': f'customer-{customer.client_id}',
+            'type': 'customer',
+            'customer': {
+                'id': str(customer.client_id),
+                'name': customer.client_contact_name or customer.client_company_name or 'Unknown',
+                'company_name': customer.client_company_name,
+                'address': customer.address,
+                'postcode': customer.post_code,
+                'phone': customer.client_phone,
+                'email': customer.client_email,
+                'contact_made': 'Unknown',  # You can add this field to ClientMaster if needed
+                'preferred_contact_method': None,
+                'marketing_opt_in': False,
+                'stage': customer.stage or 'Prospect',
+                'salesperson': None,
+                'notes': None,
+                'industry': None,
+                'company_size': None,
+                'status': 'Active',
+                'created_at': customer.created_at.isoformat() if customer.created_at else None,
+            },
+            'opportunity_id': None,
+            'opportunity_name': None,
+            'opportunity_reference': None,
+            'stage': customer.stage or 'Prospect',
+            'estimated_value': None,
+            'end_date': None,
+            'created_at': customer.created_at.isoformat() if customer.created_at else None,
+        })
+    
+    return jsonify(pipeline_items), 200

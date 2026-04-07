@@ -37,7 +37,8 @@ from sqlalchemy import text
 from decimal import Decimal
 
 
-proposal_bp = Blueprint('proposal', __name__, url_prefix='/api/proposals')
+
+proposal_bp = Blueprint('proposal', __name__, url_prefix='/proposals')
 
 
 # ─────────────────────────────────────────

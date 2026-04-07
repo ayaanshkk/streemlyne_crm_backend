@@ -26,7 +26,7 @@ from database import db
 from models import RoleMaster, RolePermissionMapping, PermissionCatalog, UserRoleMapping
 from middleware import auth_required, permission_required
 
-role_bp = Blueprint('role', __name__, url_prefix='/api/roles')
+role_bp = Blueprint('role', __name__, url_prefix='/roles')
 
 
 # ─────────────────────────────────────────

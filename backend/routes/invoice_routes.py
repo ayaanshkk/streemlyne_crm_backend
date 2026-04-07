@@ -45,7 +45,86 @@ from middleware import auth_required
 from datetime import datetime
 from sqlalchemy import func
 
-invoice_bp = Blueprint('invoice', __name__, url_prefix='/api/invoices')
+invoice_bp = Blueprint('invoice', __name__, url_prefix='/invoices')
+
+_INVOICE_NUMBER_RE = re.compile(r'^INV-(\d+)$')
+
+
+# ─────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────
+
+def _tenant_client_ids_subquery(tenant_id: int):
+    return (
+        db.session.query(ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == tenant_id)
+        .subquery()
+    )
+
+
+def _tenant_project_ids_subquery(tenant_id: int):
+    return (
+        db.session.query(ProjectDetails.project_id)
+        .join(ClientMaster, ProjectDetails.client_id == ClientMaster.client_id)
+        .filter(ClientMaster.tenant_id == tenant_id)
+        .subquery()
+    )
+
+
+def _tenant_invoice_filter(tenant_id: int):
+    """Return a SQLAlchemy filter expression that scopes invoices to a tenant."""
+    return or_(
+        InvoiceMaster.client_id.in_(_tenant_client_ids_subquery(tenant_id)),
+        InvoiceMaster.project_id.in_(_tenant_project_ids_subquery(tenant_id)),
+    )
+
+
+def _get_or_404(invoice_id: int) -> InvoiceMaster:
+    invoice = InvoiceMaster.query.filter(
+        InvoiceMaster.invoice_id == invoice_id,
+        _tenant_invoice_filter(g.tenant_id),
+    ).first()
+    if not invoice:
+        abort(404, description='Invoice not found')
+    return invoice
+
+# ─────────────────────────────────────────
+# Invoice number generation
+# ─────────────────────────────────────────
+
+def _next_invoice_number_for_tenant(tenant_id: int) -> str:
+    """
+    Atomically compute the next INV-NNN number for a given tenant.
+    Runs inside the caller's transaction — no separate commit needed.
+    """
+    existing_numbers = (
+        db.session.query(InvoiceMaster.invoice_number)
+        .filter(_tenant_invoice_filter(tenant_id))
+        .all()
+    )
+
+    max_sequence = 0
+    for (number,) in existing_numbers:
+        if number:
+            match = _INVOICE_NUMBER_RE.match(number)
+            if match:
+                max_sequence = max(max_sequence, int(match.group(1)))
+
+    return f"INV-{str(max_sequence + 1).zfill(3)}"
+
+
+@invoice_bp.route('/next-number', methods=['GET'])
+@auth_required
+def get_next_invoice_number():
+    """
+    GET /api/invoices/next-number
+    Response: { "invoice_number": "INV-007" }
+
+    Read-only — does not reserve the number. The uniqueness constraint on
+    invoice_number is the final guard; a 409 on POST means re-fetch and retry.
+    """
+    number = _next_invoice_number_for_tenant(g.tenant_id)
+    return jsonify({'invoice_number': number}), 200
 
 _INVOICE_NUMBER_RE = re.compile(r'^INV-(\d+)$')
 

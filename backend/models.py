@@ -632,6 +632,9 @@ class ClientMaster(db.Model):
     client_email = db.Column(db.String(255))
     client_website = db.Column(db.String(255))
     created_at = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    
+    # ✅ NEW: Add stage column for sales pipeline tracking
+    stage = db.Column(db.String(50), nullable=True)
 
     # Relationships
     tenant = db.relationship('TenantMaster', back_populates='clients')
@@ -665,6 +668,7 @@ class ClientMaster(db.Model):
             'default_currency_id': self.default_currency_id,
             'default_currency_code': self.default_currency.currency_code if self.default_currency else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'stage': self.stage,
         }
 
 

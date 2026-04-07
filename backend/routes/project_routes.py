@@ -32,7 +32,7 @@ from models import ProjectDetails, ClientMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
 
-project_bp = Blueprint('project', __name__, url_prefix='/api/projects')
+project_bp = Blueprint('project', __name__, url_prefix='/projects')
 
 
 # ─────────────────────────────────────────
