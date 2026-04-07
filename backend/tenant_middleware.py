@@ -6,7 +6,6 @@ import jwt
 from flask import g, request, jsonify, current_app
 from functools import wraps
 
-
 def require_tenant(f):
     """
     Decorator that:
@@ -95,7 +94,5 @@ def check_role(required_role_id: int) -> bool:
         return False
     held_ids = [r.strip() for r in g.employee.role_ids.split(",")]
     return str(required_role_id) in held_ids
-
-
 # Alias for backward compatibility
 token_required = require_tenant

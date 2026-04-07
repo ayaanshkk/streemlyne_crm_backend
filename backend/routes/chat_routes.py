@@ -1,3 +1,4 @@
+#C:\streemlyne_crm_backend\backend\routes\chat_routes.py
 """
 Chat Routes
 AI chat sessions are application-level data — no corresponding StreemLyne_MT table.
@@ -15,7 +16,7 @@ from middleware import auth_required
 from datetime import datetime
 import uuid
 
-chat_bp = Blueprint('chat', __name__, url_prefix='/api/chat')
+chat_bp = Blueprint('chat', __name__, url_prefix='/chat')
 
 
 # ─────────────────────────────────────────

@@ -29,7 +29,7 @@ from models import Assignment
 from middleware import auth_required
 from datetime import datetime, date
 
-assignment_bp = Blueprint('assignments', __name__, url_prefix='/api/assignments')
+assignment_bp = Blueprint('assignments', __name__, url_prefix='/assignments')
 
 # Valid assignment types — matches frontend AssignmentType union
 VALID_TYPES = {'meeting', 'call', 'task', 'delivery', 'note'}

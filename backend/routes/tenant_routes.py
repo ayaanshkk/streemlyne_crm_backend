@@ -19,7 +19,7 @@ from models import TenantMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
 
-tenant_bp = Blueprint('tenant', __name__, url_prefix='/api/tenant')
+tenant_bp = Blueprint('tenant', __name__, url_prefix='/tenant')
 
 
 # ─────────────────────────────────────────

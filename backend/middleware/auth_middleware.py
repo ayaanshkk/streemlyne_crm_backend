@@ -67,6 +67,7 @@ def auth_required(f):
             return jsonify({"error": "Missing token", "message": "Authorization header with Bearer token required"}), 401
 
         token = auth_header.split(" ", 1)[1]
+        
         user, employee, tenant, err = _resolve_user_from_token(token)
         if err is not None:
             return err

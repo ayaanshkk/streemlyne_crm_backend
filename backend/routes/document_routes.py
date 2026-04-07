@@ -28,7 +28,7 @@ from middleware import auth_required, permission_required
 import os
 import uuid
 
-document_bp = Blueprint('document', __name__, url_prefix='/api/documents')
+document_bp = Blueprint('document', __name__, url_prefix='/documents')
 
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'csv', 'txt'}
 

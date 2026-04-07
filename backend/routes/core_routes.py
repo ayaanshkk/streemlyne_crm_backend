@@ -14,8 +14,7 @@ except ImportError:
     latest_structured_data = {}
     FORM_COLUMNS = []
 
-core_bp = Blueprint('core', __name__)
-
+core_bp = Blueprint('core', __name__, url_prefix='/core')
 
 # ─────────────────────────────────────────
 # Health check
