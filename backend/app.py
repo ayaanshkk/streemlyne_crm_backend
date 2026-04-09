@@ -138,6 +138,7 @@ def create_app(test_config=None):
     from routes.form_routes         import form_bp
     from routes.chat_routes         import chat_bp
     from routes.core_routes         import core_bp
+    from routes.ai_routes           import ai_bp
 
     blueprints = [
         auth_bp, tenant_bp, subscription_bp,
@@ -145,7 +146,7 @@ def create_app(test_config=None):
         opportunity_bp, project_bp, contract_bp,
         proposal_bp, invoice_bp, document_bp,
         master_bp, form_bp, chat_bp, core_bp,
-        assignment_bp,
+        assignment_bp, ai_bp,
     ]
     
     # ✅ FIXED: Register all blueprints with /api prefix

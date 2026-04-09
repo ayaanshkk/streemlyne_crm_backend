@@ -182,8 +182,12 @@ def update_client(client_id: int):
     PUT /api/clients/<client_id>
     Accepts both canonical schema names and legacy field names for backwards compatibility.
     """
+    print(f"📝 PUT /api/clients/{client_id} - Tenant: {g.tenant_id}")
+    
     client = _get_or_404(client_id)
     data = request.get_json() or {}
+    
+    print(f"📦 Update payload: {data}")
 
     # Each tuple: (model_attr, list_of_accepted_keys_in_priority_order)
     field_map = [
@@ -196,22 +200,28 @@ def update_client(client_id: int):
         ('country_id',          ['country_id']),
         ('default_currency_id', ['default_currency_id']),
         ('client_website',      ['client_website']),
+        ('stage',               ['stage']),  
     ]
 
     for attr, keys in field_map:
         for key in keys:
             if key in data and data[key] is not None:
-                setattr(client, attr, data[key])
+                old_value = getattr(client, attr)
+                new_value = data[key]
+                if attr == 'stage':
+                    print(f"🔄 Changing stage: {old_value} → {new_value}")
+                setattr(client, attr, new_value)
                 break
 
     try:
         db.session.commit()
-    except IntegrityError:
+        print(f"✅ Client {client_id} updated successfully")
+    except IntegrityError as e:
         db.session.rollback()
+        print(f"❌ Update failed: {e}")
         return jsonify({'error': 'Update violates a data constraint'}), 409
 
     return jsonify({'message': 'Client updated successfully', 'client': _client_dict(client)}), 200
-
 
 @client_bp.route('/<int:client_id>', methods=['DELETE'])
 @auth_required
