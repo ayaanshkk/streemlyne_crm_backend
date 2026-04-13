@@ -7,8 +7,6 @@ instance/
 .env
 .vscode/
 
-
-
 .env
 .env.*
 backups/
