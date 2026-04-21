@@ -64,7 +64,8 @@ CHANGES vs previous version
 
 import sys
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timezone
+from typing import cast
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import Enum as SAEnum, text
 
@@ -238,16 +239,21 @@ class ModuleMaster(db.Model):
 class SubscriptionModuleMapping(db.Model):
     """Defines which modules are bundled into each subscription plan."""
     __tablename__ = 'Subscription_Module_Mapping'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = (
+        db.UniqueConstraint('subscription_id', 'module_id', name='uq_subscription_module'),
+        db.Index('ix_subscription_module_mapping_subscription_id', 'subscription_id'),
+        db.Index('ix_subscription_module_mapping_module_id', 'module_id'),
+        {'schema': 'StreemLyne_MT'},
+    )
 
     subscription_module_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     subscription_id = db.Column(
-        db.BigInteger,
+        db.SmallInteger,
         db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'),
         nullable=False,
     )
     module_id = db.Column(
-        db.BigInteger,
+        db.SmallInteger,
         db.ForeignKey('StreemLyne_MT.Module_Master.module_id'),
         nullable=False,
     )
@@ -272,7 +278,12 @@ class SubscriptionModuleMapping(db.Model):
 class TenantModuleMapping(db.Model):
     """Tracks which modules are currently active for each tenant."""
     __tablename__ = 'Tenant_Module_Mapping'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'module_id', name='uq_tenant_module'),
+        db.Index('ix_tenant_module_mapping_tenant_id', 'tenant_id'),
+        db.Index('ix_tenant_module_mapping_module_id', 'module_id'),
+        {'schema': 'StreemLyne_MT'},
+    )
 
     tenant_module_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     # [SUBSCRIPTION-010] was db.SmallInteger
@@ -312,12 +323,23 @@ class TenantSubscription(db.Model):
         status in ('expired', 'canceled') → block, redirect to /subscription-required
     """
     __tablename__ = 'Tenant_Subscription'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = (
+        db.Index('ix_tenant_subscription_tenant_id', 'tenant_id'),
+        db.Index('ix_tenant_subscription_is_active', 'is_active'),
+        db.Index('ix_tenant_subscription_subscription_end_date', 'subscription_end_date'),
+        db.Index(
+            'idx_tenant_subscription_access_gate',
+            'tenant_id',
+            'status',
+            'trial_end_date',
+        ),
+        {'schema': 'StreemLyne_MT'},
+    )
 
     tenant_subscription_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     # [SUBSCRIPTION-005] was db.BigInteger
     tenant_id         = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
-    subscription_id   = db.Column(db.BigInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
+    subscription_id   = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
     subscription_start_date = db.Column(db.Date)
     subscription_end_date   = db.Column(db.Date)
     is_active   = db.Column(db.Boolean)
@@ -341,7 +363,9 @@ class TenantSubscription(db.Model):
     trial_end_date = db.Column(db.DateTime(timezone=True))
     # [SUBSCRIPTION-008] populated by checkout.session.completed webhook; null until then
     stripe_subscription_id = db.Column(db.String(255), unique=True)
-
+    cancel_at_period_end = db.Column(db.Boolean, default=False)
+    current_period_start = db.Column(db.DateTime(timezone=False))
+    current_period_end   = db.Column(db.DateTime(timezone=False))
     tenant       = db.relationship('TenantMaster', back_populates='subscriptions')
     subscription = db.relationship('SubscriptionPlan', back_populates='tenant_subscriptions')
 
@@ -363,7 +387,25 @@ class TenantSubscription(db.Model):
         if not self.is_active:
             return False
 
-        today = datetime.utcnow().date()
+        now = datetime.now(timezone.utc)
+        today = now.date()
+
+        def _as_utc(dt_value):
+            if dt_value is None:
+                return None
+            if dt_value.tzinfo is None:
+                return dt_value.replace(tzinfo=timezone.utc)
+            return dt_value.astimezone(timezone.utc)
+
+        if self.status == 'trialing' and self.trial_end_date:
+            if now > _as_utc(self.trial_end_date):
+                return False
+
+        if self.current_period_start and now < _as_utc(self.current_period_start):
+            return False
+        if self.current_period_end and now > _as_utc(self.current_period_end):
+            return False
+
         if self.subscription_start_date and today < self.subscription_start_date:
             return False
         if self.subscription_end_date and today > self.subscription_end_date:
@@ -398,6 +440,9 @@ class TenantSubscription(db.Model):
             'trial_end_date':         self.trial_end_date.isoformat() if self.trial_end_date else None,
             'days_remaining_in_trial': self.days_remaining_in_trial(),
             'stripe_subscription_id': self.stripe_subscription_id,
+            'cancel_at_period_end': self.cancel_at_period_end,
+            'current_period_start': self.current_period_start.isoformat() if self.current_period_start else None,
+            'current_period_end':   self.current_period_end.isoformat() if self.current_period_end else None,
             'created_at':             self.created_at.isoformat() if self.created_at else None,
             'updated_at':             self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -958,22 +1003,42 @@ class UserMaster(db.Model):
         from services.auth_service import generate_staff_token
         return generate_staff_token(user_id=self.user_id, employee_id=self.employee_id, secret_key=secret_key)
 
+
     def to_dict(self):
+        # [MODEL-001] Read actual roles from User_Role_Mapping via the ORM
+        # relationship (UserMaster.roles → RoleMaster, secondary=User_Role_Mapping).
+        # self.roles is populated by SQLAlchemy when the relationship is loaded.
+        role_names = [r.role_name for r in cast(list, self.roles or [])]
+ 
         return {
-            'user_id':     self.user_id,
-            'employee_id': self.employee_id,
-            'user_name':   self.user_name,
+            'user_id':       self.user_id,
+            'employee_id':   self.employee_id,
+            'user_name':     self.user_name,
             'employee_name': self.employee.employee_name if self.employee else None,
-            'email':       self.employee.email if self.employee else None,
-            'first_name':  self.employee.employee_name.split()[0] if self.employee and self.employee.employee_name else '',
-            'last_name':   ' '.join(self.employee.employee_name.split()[1:]) if self.employee and self.employee.employee_name else '',
-            'full_name':   self.employee.employee_name if self.employee else None,
-            'phone':       self.employee.phone if self.employee else None,
-            'role':        'user',
-            'is_active':   True,
-            'is_verified': True,
-            'created_at':  self.created_at.isoformat() if self.created_at else None,
-            'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
+            'email':         self.employee.email if self.employee else None,
+            'first_name':    (
+                self.employee.employee_name.split()[0]
+                if self.employee and self.employee.employee_name else ''
+            ),
+            'last_name':     (
+                ' '.join(self.employee.employee_name.split()[1:])
+                if self.employee and self.employee.employee_name else ''
+            ),
+            'full_name':     self.employee.employee_name if self.employee else None,
+            'phone':         self.employee.phone if self.employee else None,
+            # [MODEL-001] real roles from User_Role_Mapping
+            'roles':         role_names,
+            'role':          role_names[0] if role_names else 'user',
+            # True when the user holds at least one owner-level role — used by
+            # the frontend to show/hide the Billing menu (PRD §2.2, Design Doc §9)
+            'is_owner':      any(
+                name in {'Admin', 'Super Admin', 'Tenant Owner'}
+                for name in role_names
+            ),
+            'is_active':     True,
+            'is_verified':   True,
+            'created_at':    self.created_at.isoformat() if self.created_at else None,
+            'updated_at':    self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

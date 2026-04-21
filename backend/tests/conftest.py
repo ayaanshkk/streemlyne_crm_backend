@@ -6,6 +6,8 @@ Sets up test fixtures and database for testing
 import pytest
 import sys
 import os
+from sqlalchemy import event
+from sqlalchemy.pool import StaticPool
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,6 +23,22 @@ from models import *
 from flask import g
 
 
+TEST_TABLES = [
+    CurrencyMaster.__table__,
+    DesignationMaster.__table__,
+    TenantMaster.__table__,
+    ModuleMaster.__table__,
+    SubscriptionPlan.__table__,
+    SubscriptionModuleMapping.__table__,
+    TenantModuleMapping.__table__,
+    TenantSubscription.__table__,
+    EmployeeMaster.__table__,
+    RoleMaster.__table__,
+    UserMaster.__table__,
+    UserRoleMapping.__table__,
+]
+
+
 @pytest.fixture(scope='session')
 def app():
     """
@@ -29,16 +47,31 @@ def app():
     """
     flask_app.config.update({
         'TESTING': True,
-        'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
+        'SQLALCHEMY_DATABASE_URI': 'sqlite://',
         'SECRET_KEY': 'test-secret-key',
         'SQLALCHEMY_TRACK_MODIFICATIONS': False,
         'SQLALCHEMY_ECHO': False,
+        'SQLALCHEMY_ENGINE_OPTIONS': {
+            'connect_args': {'check_same_thread': False},
+            'poolclass': StaticPool,
+        },
     })
 
     with flask_app.app_context():
         # Dispose any existing connections to Supabase and recreate with SQLite
         _db.engine.dispose()
-        _db.create_all()
+        
+        @event.listens_for(_db.engine, 'connect')
+        def _attach_test_schema(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute('ATTACH DATABASE ":memory:" AS "StreemLyne_MT"')
+            except Exception:
+                pass
+            cursor.execute('PRAGMA foreign_keys = ON')
+            cursor.close()
+
+        _db.metadata.create_all(bind=_db.engine, tables=TEST_TABLES)
 
         yield flask_app
 
@@ -46,7 +79,7 @@ def app():
         # Use raw SQL with CASCADE to avoid FK dependency issues on drop
         with _db.engine.connect() as conn:
             conn.execute(_db.text('PRAGMA foreign_keys = OFF'))
-        _db.drop_all()
+        _db.metadata.drop_all(bind=_db.engine, tables=TEST_TABLES)
 
 
 @pytest.fixture(scope='function')
@@ -57,7 +90,7 @@ def session(app):
         _db.session.rollback()
         _db.session.remove()
         # Truncate all tables to ensure clean state
-        for table in reversed(_db.metadata.sorted_tables):
+        for table in reversed(TEST_TABLES):
             _db.session.execute(table.delete())
         _db.session.commit()
 
@@ -71,6 +104,7 @@ def client(app):
 def tenant(session):
     """Create a test tenant"""
     tenant = TenantMaster(
+        tenant_id='test-company-001',
         tenant_company_name='Test Company',
         tenant_contact_name='Test User',
         is_active=True

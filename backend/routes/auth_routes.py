@@ -6,9 +6,16 @@ Handles authentication for two user types:
 
 Schema alignment (StreemLyne_MT):
   - User_Master       : user_id, employee_id, user_name, password, created_at, updated_at (DATE)
-  - Employee_Master   : employee_id, tenant_id, employee_name, email, phone, …
-  - Customer_Auth     : customer_user_id, client_id, tenant_id, email, password_hash, is_active, created_at
+  - Employee_Master   : employee_id, tenant_id (varchar), employee_name, email, phone, …
+  - Customer_Auth     : customer_user_id, client_id, tenant_id (varchar), email, password_hash, is_active, created_at
   - Customer_Password_Reset : id, customer_user_id, token, expires_at, used, created_at
+
+CHANGES vs previous version
+─────────────────────────────────────────────────────────────────────────────
+[AUTH-001] tenant_id is now stored and forwarded as a STRING (varchar slug).
+           The old code called int(data['tenant_id']) which would crash for
+           slugs like "acme-ltd-a3f8c2" and was inconsistent with the DB PK.
+─────────────────────────────────────────────────────────────────────────────
 """
 
 from flask import Blueprint, request, jsonify, g, current_app
@@ -21,6 +28,7 @@ import secrets
 import re
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
+
 
 # ─────────────────────────────────────────
 # Helpers
@@ -82,13 +90,13 @@ def register():
     POST /api/auth/register
     Body:
     {
-        "tenant_id": 1,
+        "tenant_id": "acme-ltd-a3f8c2",   (required, string slug)
         "employee_name": "Jane Doe",
         "email": "jane@example.com",
-        "phone": "555-0100",         (optional)
+        "phone": "555-0100",               (optional)
         "user_name": "janedoe",
         "password": "Secret123",
-        "designation_id": 2          (optional)
+        "designation_id": 2                (optional)
     }
     """
     data = request.get_json() or {}
@@ -103,8 +111,8 @@ def register():
         return jsonify({'error': msg}), 400
 
     try:
-        # Make tenant_id available to service layer via request context
-        g.tenant_id = int(data['tenant_id'])
+        # [AUTH-001] tenant_id is a string slug — do NOT cast to int.
+        g.tenant_id = str(data['tenant_id'])
 
         from services import EmployeeService
         svc = EmployeeService()
@@ -223,7 +231,7 @@ def customer_register():
     Register a new customer portal account.
 
     POST /api/auth/customer/register
-    Body: { "email": "...", "password": "...", "client_id": 5, "tenant_id": 1 }
+    Body: { "email": "...", "password": "...", "client_id": 5, "tenant_id": "acme-ltd-a3f8c2" }
 
     Validates that the referenced Client_Master row exists before creating the account.
     """
@@ -247,7 +255,7 @@ def customer_register():
     from models import ClientMaster
     client = ClientMaster.query.filter_by(
         client_id=data['client_id'],
-        tenant_id=data['tenant_id']
+        tenant_id=str(data['tenant_id'])
     ).first()
     if not client:
         return jsonify({'error': 'Invalid client_id or tenant_id'}), 400
@@ -255,7 +263,7 @@ def customer_register():
     try:
         customer_user = CustomerAuth(
             client_id=data['client_id'],
-            tenant_id=data['tenant_id'],
+            tenant_id=str(data['tenant_id']),
             email=email,
             is_active=True
         )
@@ -314,7 +322,6 @@ def customer_forgot_password():
         db.session.commit()
 
         # TODO: dispatch reset email containing the token
-        # Security: Do not log tokens in production - they should only be sent via email
         current_app.logger.info(f"[AUTH] Password reset requested for {email}")
 
     return jsonify({'message': 'If that email exists, a reset link has been sent.'}), 200
@@ -345,7 +352,6 @@ def customer_reset_password():
     if not reset or reset.expires_at < datetime.utcnow():
         return jsonify({'error': 'Invalid or expired token'}), 400
 
-    # FIX: .query.get() is deprecated in SQLAlchemy 2.x — use db.session.get()
     customer_user: CustomerAuth = db.session.get(CustomerAuth, reset.customer_user_id)
     if not customer_user:
         return jsonify({'error': 'Account not found'}), 404

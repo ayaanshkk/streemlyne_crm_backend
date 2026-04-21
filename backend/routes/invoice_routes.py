@@ -192,9 +192,9 @@ def _next_invoice_number_for_tenant(tenant_id: int) -> str:
     return f"INV-{str(max_sequence + 1).zfill(3)}"
 
 
-@invoice_bp.route('/next-number', methods=['GET'])
+@invoice_bp.route('/next-number-legacy', methods=['GET'])
 @auth_required
-def get_next_invoice_number():
+def get_next_invoice_number_legacy():
     """
     GET /api/invoices/next-number
     Response: { "invoice_number": "INV-007" }

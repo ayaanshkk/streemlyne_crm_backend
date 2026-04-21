@@ -8,8 +8,26 @@ Two access levels:
 
 Schema alignment (StreemLyne_MT):
   Tenant_Master:
-    tenant_id (PK, UNIQUE), tenant_company_name (UNIQUE), tenant_contact_name,
-    onboarding_Date (date), is_active (boolean), created_at, updated_at
+    tenant_id (PK, UNIQUE, character varying), tenant_company_name (UNIQUE),
+    tenant_contact_name, onboarding_Date (date), is_active (boolean),
+    created_at, updated_at, stripe_customer_id (UNIQUE)
+
+CHANGES vs previous version
+─────────────────────────────────────────────────────────────────────────────
+[TNT-001] All <int:tenant_id> URL converters changed to <string:tenant_id>.
+
+[TNT-002] create_tenant delegates to TenantService.create_tenant() so that
+          trial provisioning is always handled in one place.
+
+[TNT-003] _tenant_dict now includes stripe_customer_id.
+
+[TNT-004] get_tenant_info / update_tenant_info use g.tenant_id (now a string).
+
+[TNT-005] H1 FIX — Restored all @permission_required decorators on super-admin
+          endpoints (list_tenants, create_tenant, get_tenant, update_tenant,
+          deactivate_tenant, activate_tenant). Self-service endpoints
+          (GET/PATCH /info) remain open to all authenticated users as intended.
+─────────────────────────────────────────────────────────────────────────────
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -18,12 +36,14 @@ from database import db
 from models import TenantMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
+import re
+import uuid
 
 tenant_bp = Blueprint('tenant', __name__, url_prefix='/tenant')
 
 
 # ─────────────────────────────────────────
-# Self-service (own tenant)
+# Self-service (own tenant) — open to all authenticated users
 # ─────────────────────────────────────────
 
 @tenant_bp.route('/info', methods=['GET'])
@@ -33,7 +53,7 @@ def get_tenant_info():
     Get the calling user's own tenant details.
     GET /api/tenant/info
     """
-    tenant = TenantMaster.query.get(g.tenant_id)
+    tenant = db.session.get(TenantMaster, g.tenant_id)
     if not tenant:
         return jsonify({'error': 'Tenant not found'}), 404
     return jsonify(_tenant_dict(tenant)), 200
@@ -41,14 +61,13 @@ def get_tenant_info():
 
 @tenant_bp.route('/info', methods=['PATCH'])
 @auth_required
-# @permission_required('tenant.update')
 def update_tenant_info():
     """
     Update own tenant's display details.
     PATCH /api/tenant/info
     Body: { "tenant_company_name": "...", "tenant_contact_name": "..." }
     """
-    tenant = TenantMaster.query.get(g.tenant_id)
+    tenant = db.session.get(TenantMaster, g.tenant_id)
     if not tenant:
         return jsonify({'error': 'Tenant not found'}), 404
 
@@ -71,18 +90,17 @@ def update_tenant_info():
 
 
 # ─────────────────────────────────────────
-# Super-admin: all tenants
+# Super-admin: all tenants — requires explicit permissions
 # ─────────────────────────────────────────
 
 @tenant_bp.route('', methods=['GET'])
 @auth_required
-# @permission_required('tenant.view')
+@permission_required('tenant.view')  # [TNT-005] restored
 def list_tenants():
     """
     List all tenants (super-admin only).
     GET /api/tenant
-    Query params:
-      is_active=true/false – filter by activation status
+    Restricted to users with tenant.view permission.
     """
     query = TenantMaster.query
 
@@ -96,17 +114,12 @@ def list_tenants():
 
 @tenant_bp.route('', methods=['POST'])
 @auth_required
-# @permission_required('tenant.create')
+@permission_required('tenant.create')  # [TNT-005] restored
 def create_tenant():
     """
-    Create a new tenant (super-admin only).
+    Create a new tenant and automatically provision a 7-day trial subscription.
     POST /api/tenant
-    Body:
-    {
-        "tenant_company_name": "Acme Ltd",   (required, UNIQUE)
-        "tenant_contact_name": "Jane Doe",
-        "onboarding_date": "2025-07-01"
-    }
+    Restricted to users with tenant.create permission.
     """
     data = request.get_json() or {}
 
@@ -116,46 +129,50 @@ def create_tenant():
 
     onboarding = _parse_date(data.get('onboarding_date'))
 
-    tenant = TenantMaster(
-        tenant_company_name=name,
-        tenant_contact_name=data.get('tenant_contact_name'),
-        onboarding_Date=onboarding,
-        is_active=True
-    )
-
     try:
-        db.session.add(tenant)
-        db.session.commit()
+        from services.tenant_service import TenantService
+        svc = TenantService()
+        tenant = svc.create_tenant(
+            company_name=name,
+            contact_name=data.get('tenant_contact_name'),
+            onboarding_date=onboarding,
+        )
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
     except IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'A tenant with this company name already exists'}), 409
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
     return jsonify({
-        'message': 'Tenant created successfully',
-        'tenant':  _tenant_dict(tenant)
+        'message': 'Tenant created successfully with 7-day trial',
+        'tenant': _tenant_dict(tenant)
     }), 201
 
 
-@tenant_bp.route('/<int:tenant_id>', methods=['GET'])
+@tenant_bp.route('/<string:tenant_id>', methods=['GET'])
 @auth_required
-# @permission_required('tenant.view')
-def get_tenant(tenant_id: int):
+@permission_required('tenant.view')  # [TNT-005] restored
+def get_tenant(tenant_id: str):
     """
     Get a specific tenant by ID with basic usage stats.
     GET /api/tenant/<tenant_id>
+    Restricted to users with tenant.view permission.
     """
-    tenant = TenantMaster.query.get(tenant_id)
+    tenant = db.session.get(TenantMaster, tenant_id)
     if not tenant:
         abort(404, description='Tenant not found')
 
     result = _tenant_dict(tenant)
 
-    # Attach lightweight stats (counts only — no heavy joins)
     try:
         from models import ClientMaster, EmployeeMaster, OpportunityDetails, TenantSubscription
         result['stats'] = {
-            'client_count':      ClientMaster.query.filter_by(tenant_id=tenant_id).count(),
-            'employee_count':    EmployeeMaster.query.filter_by(tenant_id=tenant_id).count(),
+            'client_count': ClientMaster.query.filter_by(tenant_id=tenant_id).count(),
+            'employee_count': EmployeeMaster.query.filter_by(tenant_id=tenant_id).count(),
             'opportunity_count': OpportunityDetails.query.filter_by(
                 tenant_id=tenant_id
             ).filter(OpportunityDetails.deleted_at.is_(None)).count(),
@@ -169,16 +186,16 @@ def get_tenant(tenant_id: int):
     return jsonify(result), 200
 
 
-@tenant_bp.route('/<int:tenant_id>', methods=['PUT'])
+@tenant_bp.route('/<string:tenant_id>', methods=['PUT'])
 @auth_required
-# @permission_required('tenant.update')
-def update_tenant(tenant_id: int):
+@permission_required('tenant.update')  # [TNT-005] restored
+def update_tenant(tenant_id: str):
     """
     Update any tenant's details (super-admin only).
     PUT /api/tenant/<tenant_id>
-    Body: { "tenant_company_name": "...", "tenant_contact_name": "...", "onboarding_date": "...", "is_active": true }
+    Restricted to users with tenant.update permission.
     """
-    tenant = TenantMaster.query.get(tenant_id)
+    tenant = db.session.get(TenantMaster, tenant_id)
     if not tenant:
         abort(404, description='Tenant not found')
 
@@ -204,16 +221,17 @@ def update_tenant(tenant_id: int):
     return jsonify({'message': 'Tenant updated successfully', 'tenant': _tenant_dict(tenant)}), 200
 
 
-@tenant_bp.route('/<int:tenant_id>/deactivate', methods=['POST'])
+@tenant_bp.route('/<string:tenant_id>/deactivate', methods=['POST'])
 @auth_required
-# @permission_required('tenant.deactivate')
-def deactivate_tenant(tenant_id: int):
+@permission_required('tenant.deactivate')  # [TNT-005] restored
+def deactivate_tenant(tenant_id: str):
     """
     Deactivate a tenant (super-admin only).
     POST /api/tenant/<tenant_id>/deactivate
     Also cancels any active subscriptions to prevent billing.
+    Restricted to users with tenant.deactivate permission.
     """
-    tenant = TenantMaster.query.get(tenant_id)
+    tenant = db.session.get(TenantMaster, tenant_id)
     if not tenant:
         abort(404, description='Tenant not found')
 
@@ -223,12 +241,11 @@ def deactivate_tenant(tenant_id: int):
     tenant.is_active  = False
     tenant.updated_at = datetime.utcnow()
 
-    # Cancel active subscriptions
     try:
         from models import TenantSubscription
         TenantSubscription.query.filter_by(
             tenant_id=tenant_id, is_active=True
-        ).update({'is_active': False, 'auto_renew': False, 'updated_at': datetime.utcnow()})
+        ).update({'is_active': False, 'auto_renew': False, 'status': 'canceled', 'updated_at': datetime.utcnow()})
     except Exception:
         pass
 
@@ -236,15 +253,16 @@ def deactivate_tenant(tenant_id: int):
     return jsonify({'message': 'Tenant deactivated successfully'}), 200
 
 
-@tenant_bp.route('/<int:tenant_id>/activate', methods=['POST'])
+@tenant_bp.route('/<string:tenant_id>/activate', methods=['POST'])
 @auth_required
-# @permission_required('tenant.deactivate')
-def activate_tenant(tenant_id: int):
+@permission_required('tenant.deactivate')  # [TNT-005] restored (reuses deactivate permission)
+def activate_tenant(tenant_id: str):
     """
     Re-activate a previously deactivated tenant.
     POST /api/tenant/<tenant_id>/activate
+    Restricted to users with tenant.deactivate permission.
     """
-    tenant = TenantMaster.query.get(tenant_id)
+    tenant = db.session.get(TenantMaster, tenant_id)
     if not tenant:
         abort(404, description='Tenant not found')
 
@@ -258,6 +276,16 @@ def activate_tenant(tenant_id: int):
 # ─────────────────────────────────────────
 # Private helpers
 # ─────────────────────────────────────────
+
+def _generate_tenant_id(company_name: str) -> str:
+    """
+    Generate a unique, URL-safe tenant_id slug from the company name.
+    Example: "Acme Ltd" → "acme-ltd-a3f8c2"
+    """
+    slug = re.sub(r'[^a-z0-9]+', '-', company_name.lower()).strip('-')[:24]
+    suffix = uuid.uuid4().hex[:6]
+    return f"{slug}-{suffix}"
+
 
 def _parse_date(value):
     if not value:
@@ -277,6 +305,7 @@ def _tenant_dict(t: TenantMaster) -> dict:
         'tenant_contact_name':  t.tenant_contact_name,
         'onboarding_date':      t.onboarding_Date.isoformat() if t.onboarding_Date else None,
         'is_active':            t.is_active,
-        'created_at':           t.created_at.isoformat()  if t.created_at  else None,
-        'updated_at':           t.updated_at.isoformat()  if t.updated_at  else None,
+        'stripe_customer_id':   t.stripe_customer_id,
+        'created_at':           t.created_at.isoformat() if t.created_at else None,
+        'updated_at':           t.updated_at.isoformat() if t.updated_at else None,
     }

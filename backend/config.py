@@ -21,6 +21,23 @@ class Config:
     JWT_TOKEN_LOCATION = ['headers']
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24) # Example: 24 hours
 
+    # ── Stripe ─────────────────────────────────────────────────────────────
+    # Values are read from .env at startup.  The routes call
+    # current_app.config.get('STRIPE_SECRET_KEY') first, then fall back to
+    # os.environ.get() — loading them here makes current_app.config the
+    # single source of truth and removes the double-lookup in every route.
+    STRIPE_SECRET_KEY     = os.environ.get('STRIPE_SECRET_KEY')
+    STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
+    STRIPE_SUCCESS_URL    = os.environ.get(
+        'STRIPE_SUCCESS_URL',
+        'http://localhost:3000/subscription/success?session_id={CHECKOUT_SESSION_ID}'
+    )
+    STRIPE_CANCEL_URL     = os.environ.get(
+        'STRIPE_CANCEL_URL',
+        'http://localhost:3000/subscription-required'
+    )
+    SALES_CONTACT_EMAIL   = os.environ.get('SALES_CONTACT_EMAIL', 'sales@streemlyne.com')
+
 # ----------------------------------
 # File Upload Configuration
 # ----------------------------------

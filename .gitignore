@@ -1,17 +1,48 @@
-﻿node_modules
-database.db
-venv/
-__pycache__/
-*.pyc
-instance/
-.env
-.vscode/
+﻿# 🔐 Environment
 
 .env
 .env.*
-backups/
-*.dump
-*.sql
+
+# 🐍 Python
+
+**pycache**/
+*.pyc
+
+# 🧪 Virtual Environment
+
 venv/
-__pycache__/
-*.db 
+env/
+ENV/
+
+# 🗄️ Database (local only)
+
+*.db
+*.sqlite3
+
+# ❌ Ignore schema dump (AI context file)
+
+backend/schema_dump.sql
+backend/New db schema.sql
+
+# 📦 Node
+
+node_modules/
+
+# 🧰 IDE
+
+.vscode/
+.idea/
+
+# 🗃️ App-specific
+
+instance/
+backups/
+
+# 📄 Logs
+
+*.log
+
+# 🧠 OS
+
+.DS_Store
+Thumbs.db

@@ -137,6 +137,24 @@ CREATE TABLE StreemLyne_MT.Designation_Master (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT Designation_Master_pkey PRIMARY KEY (designation_id)
 );
+CREATE TABLE StreemLyne_MT.Drawing_Cutting_List (
+  id integer NOT NULL DEFAULT nextval('"StreemLyne_MT"."Drawing_Cutting_List_id_seq"'::regclass),
+  document_id integer,
+  tenant_id character varying NOT NULL,
+  component_type character varying,
+  part_name character varying,
+  width numeric,
+  height numeric,
+  depth numeric,
+  quantity integer DEFAULT 1,
+  thickness numeric DEFAULT 18,
+  edge_banding character varying,
+  area_m2 numeric,
+  section_index integer,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT Drawing_Cutting_List_pkey PRIMARY KEY (id),
+  CONSTRAINT Drawing_Cutting_List_document_id_fkey FOREIGN KEY (document_id) REFERENCES StreemLyne_MT.Customer_Documents(id)
+);
 CREATE TABLE StreemLyne_MT.Employee_Master (
   employee_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
   tenant_id character varying NOT NULL,
@@ -229,6 +247,26 @@ CREATE TABLE StreemLyne_MT.Invoice_Master (
   CONSTRAINT Invoice_Master_project_id_fkey FOREIGN KEY (project_id) REFERENCES StreemLyne_MT.Project_Details(project_id),
   CONSTRAINT Invoice_Master_client_id_fkey FOREIGN KEY (client_id) REFERENCES StreemLyne_MT.Client_Master(client_id),
   CONSTRAINT Invoice_Master_proposal_id_fkey FOREIGN KEY (proposal_id) REFERENCES StreemLyne_MT.Proposal_Master(proposal_id)
+);
+CREATE TABLE StreemLyne_MT.Material_Orders (
+  material_id integer NOT NULL DEFAULT nextval('"StreemLyne_MT"."Material_Orders_material_id_seq"'::regclass),
+  tenant_id character varying NOT NULL,
+  client_id integer NOT NULL,
+  contract_id integer,
+  ordered_by_employee_id integer,
+  material_description text NOT NULL,
+  supplier_name character varying,
+  supplier_reference character varying,
+  status character varying DEFAULT 'not_ordered'::character varying,
+  order_date timestamp without time zone,
+  expected_delivery_date timestamp without time zone,
+  actual_delivery_date timestamp without time zone,
+  estimated_cost numeric,
+  actual_cost numeric,
+  notes text,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT Material_Orders_pkey PRIMARY KEY (material_id)
 );
 CREATE TABLE StreemLyne_MT.Module_Master (
   module_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -568,13 +606,13 @@ CREATE TABLE StreemLyne_MT.Stage_Master (
   CONSTRAINT Stage_Master_pkey PRIMARY KEY (stage_id)
 );
 CREATE TABLE StreemLyne_MT.Subscription_Module_Mapping (
-  subscription_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
-  subscription_id bigint NOT NULL,
-  module_id bigint NOT NULL,
+  subscription_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  subscription_id smallint NOT NULL,
+  module_id smallint NOT NULL,
   created_at timestamp without time zone DEFAULT now(),
   CONSTRAINT Subscription_Module_Mapping_pkey PRIMARY KEY (subscription_module_mapping_id),
-  CONSTRAINT Subscription_Module_Mapping_module_id_fkey FOREIGN KEY (module_id) REFERENCES StreemLyne_MT.Module_Master(module_id),
-  CONSTRAINT Subscription_Module_Mapping_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id)
+  CONSTRAINT Subscription_Module_Mapping_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id),
+  CONSTRAINT Subscription_Module_Mapping_module_id_fkey FOREIGN KEY (module_id) REFERENCES StreemLyne_MT.Module_Master(module_id)
 );
 CREATE TABLE StreemLyne_MT.Subscription_Plans (
   subscription_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -621,9 +659,9 @@ CREATE TABLE StreemLyne_MT.Tenant_Master (
   CONSTRAINT Tenant_Master_pkey PRIMARY KEY (tenant_id)
 );
 CREATE TABLE StreemLyne_MT.Tenant_Module_Mapping (
-  tenant_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
-  tenant_id character varying,
-  module_id smallint,
+  tenant_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  tenant_id character varying NOT NULL,
+  module_id smallint NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT Tenant_Module_Mapping_pkey PRIMARY KEY (tenant_module_mapping_id),
   CONSTRAINT Tenant_Module_Mapping_module_id_fkey FOREIGN KEY (module_id) REFERENCES StreemLyne_MT.Module_Master(module_id),
@@ -631,8 +669,8 @@ CREATE TABLE StreemLyne_MT.Tenant_Module_Mapping (
 );
 CREATE TABLE StreemLyne_MT.Tenant_Subscription (
   tenant_subscription_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
-  tenant_id character varying,
-  subscription_id bigint,
+  tenant_id character varying NOT NULL,
+  subscription_id smallint NOT NULL,
   subscription_start_date date,
   subscription_end_date date,
   is_active boolean,
@@ -642,9 +680,12 @@ CREATE TABLE StreemLyne_MT.Tenant_Subscription (
   status USER-DEFINED NOT NULL DEFAULT 'trialing'::"StreemLyne_MT".subscription_status_enum,
   trial_end_date timestamp with time zone,
   stripe_subscription_id character varying UNIQUE,
+  cancel_at_period_end boolean DEFAULT false,
+  current_period_start timestamp without time zone,
+  current_period_end timestamp without time zone,
   CONSTRAINT Tenant_Subscription_pkey PRIMARY KEY (tenant_subscription_mapping_id),
-  CONSTRAINT Tenant_Subscription_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id),
-  CONSTRAINT fk_tenant_subscription_tenant FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id)
+  CONSTRAINT fk_tenant_subscription_tenant FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
+  CONSTRAINT Tenant_Subscription_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id)
 );
 CREATE TABLE StreemLyne_MT.UOM_Master (
   uom_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,

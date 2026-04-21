@@ -17,9 +17,16 @@ Schema alignment (StreemLyne_MT):
                     description, is_core, is_active, created_at, updated_at
   Tenant_Module_Mapping : tenant_module_mapping_id, tenant_id, module_id, created_at
   TaxMaster       : tax_id, tax_name, tax_rate, description, is_active, created_at
-                    (referenced by Invoice_Master.tax_id, Proposal_Master.tax_id)
   ContactMethodMaster : contact_method_id, contact_method_name, created_at
-                    (referenced by Client_Interactions.contact_method)
+
+CHANGES vs previous version
+─────────────────────────────────────────────────────────────────────────────
+[MST-001] H1 FIX — Restored all @permission_required decorators that were
+          previously commented out. Key fix: enable_tenant_module and
+          disable_tenant_module now require module.assign / module.revoke
+          permissions. Without these guards any authenticated user could toggle
+          modules, bypassing plan entitlements (audit H1).
+─────────────────────────────────────────────────────────────────────────────
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -55,12 +62,13 @@ def list_countries():
 
 @master_bp.route('/countries', methods=['POST'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def create_country():
     """
     Create a country.
     POST /api/master/countries
     Body: { "country_name": "United Kingdom", "country_isd_code": "+44" }
+    Restricted to users with master.manage permission.
     """
     data = request.get_json() or {}
     if not data.get('country_name') or not data.get('country_isd_code'):
@@ -82,11 +90,12 @@ def create_country():
 
 @master_bp.route('/countries/<int:country_id>', methods=['PUT'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def update_country(country_id: int):
     """
     Update a country.
     PUT /api/master/countries/<country_id>
+    Restricted to users with master.manage permission.
     """
     c = CountryMaster.query.get(country_id)
     if not c:
@@ -121,11 +130,12 @@ def list_currencies():
 
 @master_bp.route('/currencies', methods=['POST'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def create_currency():
     """
     POST /api/master/currencies
     Body: { "currency_name": "Pound Sterling", "currency_code": "GBP" }
+    Restricted to users with master.manage permission.
     """
     data = request.get_json() or {}
     if not data.get('currency_name') or not data.get('currency_code'):
@@ -147,9 +157,12 @@ def create_currency():
 
 @master_bp.route('/currencies/<int:currency_id>', methods=['PUT'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def update_currency(currency_id: int):
-    """PUT /api/master/currencies/<currency_id>"""
+    """
+    PUT /api/master/currencies/<currency_id>
+    Restricted to users with master.manage permission.
+    """
     c = CurrencyMaster.query.get(currency_id)
     if not c:
         abort(404, description='Currency not found')
@@ -178,11 +191,12 @@ def list_uoms():
 
 @master_bp.route('/uoms', methods=['POST'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def create_uom():
     """
     POST /api/master/uoms
     Body: { "uom_description": "kWh" }
+    Restricted to users with master.manage permission.
     """
     data = request.get_json() or {}
     if not (data.get('uom_description') or '').strip():
@@ -201,9 +215,12 @@ def create_uom():
 
 @master_bp.route('/uoms/<int:uom_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def delete_uom(uom_id: int):
-    """DELETE /api/master/uoms/<uom_id>"""
+    """
+    DELETE /api/master/uoms/<uom_id>
+    Restricted to users with master.manage permission.
+    """
     u = UOMMaster.query.get(uom_id)
     if not u:
         abort(404, description='UOM not found')
@@ -219,7 +236,6 @@ def delete_uom(uom_id: int):
 # ─────────────────────────────────────────
 # Taxes
 # Referenced by: Invoice_Master.tax_id, Proposal_Master.tax_id
-# Frontend consumers: invoices/new, quotes/new
 # ─────────────────────────────────────────
 
 @master_bp.route('/taxes', methods=['GET'])
@@ -228,18 +244,6 @@ def list_taxes():
     """
     List all active taxes available for use on invoices and proposals.
     GET /api/master/taxes
-
-    Response shape (array):
-    [
-      {
-        "tax_id": 1,
-        "tax_name": "VAT",
-        "tax_rate": 20.0,
-        "description": "UK Standard VAT",
-        "is_active": true,
-        "created_at": "2025-01-01T00:00:00"
-      }
-    ]
     """
     taxes = (
         TaxMaster.query
@@ -252,11 +256,12 @@ def list_taxes():
 
 @master_bp.route('/taxes/all', methods=['GET'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def list_taxes_all():
     """
     List all taxes including inactive ones (admin use).
     GET /api/master/taxes/all
+    Restricted to users with master.manage permission.
     """
     taxes = TaxMaster.query.order_by(TaxMaster.tax_name).all()
     return jsonify([_tax_dict(t) for t in taxes]), 200
@@ -264,18 +269,12 @@ def list_taxes_all():
 
 @master_bp.route('/taxes', methods=['POST'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def create_tax():
     """
     Create a tax record.
     POST /api/master/taxes
-    Body:
-    {
-        "tax_name": "VAT",          (required)
-        "tax_rate": 20.0,           (required, percentage e.g. 20 = 20%)
-        "description": "UK VAT",    (optional)
-        "is_active": true           (optional, defaults to true)
-    }
+    Restricted to users with master.manage permission.
     """
     data = request.get_json() or {}
 
@@ -307,12 +306,12 @@ def create_tax():
 
 @master_bp.route('/taxes/<int:tax_id>', methods=['PUT'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def update_tax(tax_id: int):
     """
     Update a tax record.
     PUT /api/master/taxes/<tax_id>
-    Body: any subset of { tax_name, tax_rate, description, is_active }
+    Restricted to users with master.manage permission.
     """
     t = TaxMaster.query.get(tax_id)
     if not t:
@@ -343,18 +342,18 @@ def update_tax(tax_id: int):
 
 @master_bp.route('/taxes/<int:tax_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def delete_tax(tax_id: int):
     """
-    Soft-delete a tax by marking it inactive rather than hard-deleting,
-    because it may be referenced by existing invoices / proposals.
+    Soft-delete a tax by marking it inactive (preserves FK integrity on
+    historical invoices/proposals).
     DELETE /api/master/taxes/<tax_id>
+    Restricted to users with master.manage permission.
     """
     t = TaxMaster.query.get(tax_id)
     if not t:
         abort(404, description='Tax not found')
 
-    # Soft delete — preserves FK integrity on historical invoices/proposals
     t.is_active = False
     db.session.commit()
     return jsonify({'message': 'Tax deactivated'}), 200
@@ -371,15 +370,6 @@ def list_contact_methods():
     """
     List all contact methods (used for Client_Interactions dropdown).
     GET /api/master/contact-methods
-
-    Response shape (array):
-    [
-      {
-        "contact_method_id": 1,
-        "contact_method_name": "Phone",
-        "created_at": "2025-01-01T00:00:00"
-      }
-    ]
     """
     methods = ContactMethodMaster.query.order_by(
         ContactMethodMaster.contact_method_name
@@ -389,12 +379,12 @@ def list_contact_methods():
 
 @master_bp.route('/contact-methods', methods=['POST'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def create_contact_method():
     """
     Create a contact method.
     POST /api/master/contact-methods
-    Body: { "contact_method_name": "Phone" }
+    Restricted to users with master.manage permission.
     """
     data = request.get_json() or {}
     if not (data.get('contact_method_name') or '').strip():
@@ -415,9 +405,12 @@ def create_contact_method():
 
 @master_bp.route('/contact-methods/<int:contact_method_id>', methods=['PUT'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def update_contact_method(contact_method_id: int):
-    """PUT /api/master/contact-methods/<contact_method_id>"""
+    """
+    PUT /api/master/contact-methods/<contact_method_id>
+    Restricted to users with master.manage permission.
+    """
     m = ContactMethodMaster.query.get(contact_method_id)
     if not m:
         abort(404, description='Contact method not found')
@@ -437,9 +430,12 @@ def update_contact_method(contact_method_id: int):
 
 @master_bp.route('/contact-methods/<int:contact_method_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def delete_contact_method(contact_method_id: int):
-    """DELETE /api/master/contact-methods/<contact_method_id>"""
+    """
+    DELETE /api/master/contact-methods/<contact_method_id>
+    Restricted to users with master.manage permission.
+    """
     m = ContactMethodMaster.query.get(contact_method_id)
     if not m:
         abort(404, description='Contact method not found')
@@ -483,17 +479,7 @@ def create_service():
     """
     Create a service.
     POST /api/master/services
-    Body:
-    {
-        "service_code": "GAS-FIX",          (required, NOT NULL in schema)
-        "service_title": "Gas Fixed Rate",   (required)
-        "service_description": "...",
-        "service_rate": 0.12,
-        "currency_id": 1,
-        "supplier_id": 2,
-        "date_from": "2025-01-01",
-        "date_to": "2025-12-31"
-    }
+    Restricted to users with master.manage_services permission.
     """
     data = request.get_json() or {}
 
@@ -524,11 +510,12 @@ def create_service():
 
 @master_bp.route('/services/<int:service_id>', methods=['PUT'])
 @auth_required
-# @permission_required('master.manage_services')
+@permission_required('master.manage_services')  # [MST-001] restored
 def update_service(service_id: int):
     """
     Update a service.
     PUT /api/master/services/<service_id>
+    Restricted to users with master.manage_services permission.
     """
     s = ServicesMaster.query.filter_by(
         service_id=service_id, tenant_id=g.tenant_id
@@ -558,9 +545,12 @@ def update_service(service_id: int):
 
 @master_bp.route('/services/<int:service_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('master.manage_services')
+@permission_required('master.manage_services')  # [MST-001] restored
 def delete_service(service_id: int):
-    """DELETE /api/master/services/<service_id>"""
+    """
+    DELETE /api/master/services/<service_id>
+    Restricted to users with master.manage_services permission.
+    """
     s = ServicesMaster.query.filter_by(
         service_id=service_id, tenant_id=g.tenant_id
     ).first()
@@ -591,11 +581,11 @@ def list_suppliers():
 
 @master_bp.route('/suppliers', methods=['POST'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def create_supplier():
     """
     POST /api/master/suppliers
-    Body: { "supplier_company_name": "British Gas", "supplier_contact_name": "...", "supplier_provisions": 1 }
+    Restricted to users with master.manage permission.
     """
     data = request.get_json() or {}
     if not (data.get('supplier_company_name') or '').strip():
@@ -613,9 +603,12 @@ def create_supplier():
 
 @master_bp.route('/suppliers/<int:supplier_id>', methods=['PUT'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def update_supplier(supplier_id: int):
-    """PUT /api/master/suppliers/<supplier_id>"""
+    """
+    PUT /api/master/suppliers/<supplier_id>
+    Restricted to users with master.manage permission.
+    """
     s = SupplierMaster.query.get(supplier_id)
     if not s:
         abort(404, description='Supplier not found')
@@ -631,9 +624,12 @@ def update_supplier(supplier_id: int):
 
 @master_bp.route('/suppliers/<int:supplier_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('master.manage')
+@permission_required('master.manage')  # [MST-001] restored
 def delete_supplier(supplier_id: int):
-    """DELETE /api/master/suppliers/<supplier_id>"""
+    """
+    DELETE /api/master/suppliers/<supplier_id>
+    Restricted to users with master.manage permission.
+    """
     s = SupplierMaster.query.get(supplier_id)
     if not s:
         abort(404, description='Supplier not found')
@@ -672,6 +668,7 @@ def get_tenant_modules():
     """
     Get modules currently enabled for the current tenant.
     GET /api/master/modules/tenant
+    Open to all authenticated users — reading your own tenant's modules is safe.
     """
     mappings = TenantModuleMapping.query.filter_by(tenant_id=g.tenant_id).all()
     module_ids = [m.module_id for m in mappings]
@@ -689,11 +686,16 @@ def get_tenant_modules():
 
 @master_bp.route('/modules/tenant/<int:module_id>', methods=['POST'])
 @auth_required
-# @permission_required('module.assign')
+@permission_required('module.assign')  # [MST-001] restored — critical H1 fix
 def enable_tenant_module(module_id: int):
     """
     Enable a module for the current tenant.
     POST /api/master/modules/tenant/<module_id>
+    Restricted to users with module.assign permission.
+
+    NOTE: This endpoint is the primary H1 vector. Without this guard any
+    authenticated user could enable arbitrary modules, bypassing plan
+    entitlements entirely.
     """
     module = ModuleMaster.query.filter_by(module_id=module_id, is_active=True).first()
     if not module:
@@ -713,11 +715,12 @@ def enable_tenant_module(module_id: int):
 
 @master_bp.route('/modules/tenant/<int:module_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('module.revoke')
+@permission_required('module.revoke')  # [MST-001] restored — critical H1 fix
 def disable_tenant_module(module_id: int):
     """
     Disable a module for the current tenant.
     DELETE /api/master/modules/tenant/<module_id>
+    Restricted to users with module.revoke permission.
     """
     mapping = TenantModuleMapping.query.filter_by(
         tenant_id=g.tenant_id, module_id=module_id
@@ -773,7 +776,7 @@ def _tax_dict(t: TaxMaster) -> dict:
     return {
         'tax_id':      t.tax_id,
         'tax_name':    t.tax_name,
-        'tax_rate':    t.tax_rate,       # percentage, e.g. 20.0 = 20%
+        'tax_rate':    t.tax_rate,
         'description': t.description,
         'is_active':   t.is_active,
         'created_at':  t.created_at.isoformat() if t.created_at else None,
