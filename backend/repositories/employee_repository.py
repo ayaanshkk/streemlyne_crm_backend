@@ -7,7 +7,6 @@ from models import EmployeeMaster
 from .base_repository import BaseRepository
 from typing import List, Optional
 
-
 class EmployeeRepository(BaseRepository):
     """Repository for Employee operations"""
     

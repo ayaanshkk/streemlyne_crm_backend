@@ -37,6 +37,18 @@ class Config:
         'http://localhost:3000/subscription-required'
     )
     SALES_CONTACT_EMAIL   = os.environ.get('SALES_CONTACT_EMAIL', 'sales@streemlyne.com')
+    SENDGRID_API_KEY      = os.environ.get('SENDGRID_API_KEY')
+    BILLING_FROM_EMAIL    = os.environ.get('BILLING_FROM_EMAIL', 'billing@streemlyne.com')
+    EMAIL_UNSUBSCRIBE_URL = os.environ.get('EMAIL_UNSUBSCRIBE_URL')
+    SMTP_HOST             = os.environ.get('SMTP_HOST')
+    SMTP_PORT             = int(os.environ.get('SMTP_PORT', '587'))
+    SMTP_USERNAME         = os.environ.get('SMTP_USERNAME')
+    SMTP_PASSWORD         = os.environ.get('SMTP_PASSWORD')
+    SMTP_USE_TLS          = os.environ.get('SMTP_USE_TLS', 'true')
+    STRIPE_PORTAL_RETURN_URL = os.environ.get(
+        'STRIPE_PORTAL_RETURN_URL',
+        'http://localhost:3000/subscription/manage'
+    )
 
 # ----------------------------------
 # File Upload Configuration

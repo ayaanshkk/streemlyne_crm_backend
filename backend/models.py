@@ -315,18 +315,21 @@ class TenantSubscription(db.Model):
     Lifecycle states (status column):
         trialing  — 7-day free trial, auto-created on tenant creation
         active    — paid subscription confirmed via Stripe webhook
-        expired   — trial ended with no payment
+        past_due  — payment failed but tenant is still in dunning / retry flow
+        expired   — trial ended or retries exhausted with no recovery
         canceled  — subscription ended; access blocked after billing period
 
     Access rule (enforced by middleware):
-        status in ('trialing', 'active')  → allow
-        status in ('expired', 'canceled') → block, redirect to /subscription-required
+        status in ('trialing', 'active', 'past_due') → allow
+        status in ('expired', 'canceled')            → block, redirect to /subscription-required
     """
     __tablename__ = 'Tenant_Subscription'
     __table_args__ = (
         db.Index('ix_tenant_subscription_tenant_id', 'tenant_id'),
         db.Index('ix_tenant_subscription_is_active', 'is_active'),
         db.Index('ix_tenant_subscription_subscription_end_date', 'subscription_end_date'),
+        db.Index('idx_tenant_subscription_status', 'tenant_id', 'status'),
+        db.Index('idx_tenant_subscription_trial_end', 'tenant_id', 'trial_end_date'),
         db.Index(
             'idx_tenant_subscription_access_gate',
             'tenant_id',
@@ -351,7 +354,7 @@ class TenantSubscription(db.Model):
     # create_type=False: SQLAlchemy must NOT try to CREATE the type — it already exists.
     status = db.Column(
         SAEnum(
-            'trialing', 'active', 'expired', 'canceled',
+            'trialing', 'active', 'past_due', 'expired', 'canceled',
             name='subscription_status_enum',
             schema='StreemLyne_MT',
             create_type=False,
@@ -366,6 +369,8 @@ class TenantSubscription(db.Model):
     cancel_at_period_end = db.Column(db.Boolean, default=False)
     current_period_start = db.Column(db.DateTime(timezone=False))
     current_period_end   = db.Column(db.DateTime(timezone=False))
+    payment_attempts = db.Column(db.Integer, default=0)
+    next_retry_date = db.Column(db.DateTime(timezone=True))
     tenant       = db.relationship('TenantMaster', back_populates='subscriptions')
     subscription = db.relationship('SubscriptionPlan', back_populates='tenant_subscriptions')
 
@@ -380,8 +385,7 @@ class TenantSubscription(db.Model):
         Now also gates on status so that expired/canceled subscriptions whose
         is_active flag was not yet cleared are still correctly blocked.
         """
-        # Primary gate: subscription lifecycle status
-        if self.status not in ('trialing', 'active'):
+        if self.status not in ('trialing', 'active', 'past_due'):
             return False
 
         if not self.is_active:
@@ -398,18 +402,19 @@ class TenantSubscription(db.Model):
             return dt_value.astimezone(timezone.utc)
 
         if self.status == 'trialing' and self.trial_end_date:
-            if now > _as_utc(self.trial_end_date):
+            if now > _as_utc(self.trial_end_date): # type: ignore
                 return False
 
-        if self.current_period_start and now < _as_utc(self.current_period_start):
-            return False
-        if self.current_period_end and now > _as_utc(self.current_period_end):
-            return False
-
-        if self.subscription_start_date and today < self.subscription_start_date:
-            return False
-        if self.subscription_end_date and today > self.subscription_end_date:
-            return False
+        # Keep access during dunning while the subscription is still recoverable.
+        if self.status != 'past_due':
+            if self.current_period_start and now < _as_utc(self.current_period_start): # pyright: ignore[reportOperatorIssue]
+                return False
+            if self.current_period_end and now > _as_utc(self.current_period_end): # pyright: ignore[reportOperatorIssue]
+                return False
+            if self.subscription_start_date and today < self.subscription_start_date:
+                return False
+            if self.subscription_end_date and today > self.subscription_end_date:
+                return False
 
         return True
 
@@ -443,6 +448,8 @@ class TenantSubscription(db.Model):
             'cancel_at_period_end': self.cancel_at_period_end,
             'current_period_start': self.current_period_start.isoformat() if self.current_period_start else None,
             'current_period_end':   self.current_period_end.isoformat() if self.current_period_end else None,
+            'payment_attempts':     self.payment_attempts,
+            'next_retry_date':      self.next_retry_date.isoformat() if self.next_retry_date else None,
             'created_at':             self.created_at.isoformat() if self.created_at else None,
             'updated_at':             self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1379,6 +1386,317 @@ class EnergyContractMaster(db.Model):
 
 
 # ============================================================================
+# SECTION 4: SUBSCRIPTION BILLING (NEW)
+# ============================================================================
+
+class SubscriptionInvoice(db.Model):
+    """
+    Subscription-specific invoices generated from Stripe.
+    Separate from the client-facing InvoiceMaster table.
+    """
+    __tablename__ = 'Subscription_Invoice'
+    __table_args__ = (
+        db.Index('idx_invoice_tenant', 'tenant_id', 'status'),
+        db.Index('idx_subscription_invoice_stripe', 'stripe_invoice_id'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    invoice_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    subscription_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'))
+    stripe_invoice_id = db.Column(db.String(255), unique=True)
+    invoice_number = db.Column(db.String(50), nullable=False, unique=True)
+    amount = db.Column(db.Numeric(10, 2), nullable=False)
+    tax_amount = db.Column(db.Numeric(10, 2), default=0)
+    total_amount = db.Column(db.Numeric(10, 2), nullable=False)
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
+    status = db.Column(db.String(50), default='pending')
+    period_start = db.Column(db.Date)
+    period_end = db.Column(db.Date)
+    invoice_pdf_url = db.Column(db.Text)
+    due_date = db.Column(db.Date)
+    paid_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), onupdate=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='subscription_invoices')
+    subscription = db.relationship('TenantSubscription', backref='invoices')
+    currency = db.relationship('CurrencyMaster', backref='subscription_invoices')
+
+    def __repr__(self):
+        return f'<SubscriptionInvoice {self.invoice_id}: {self.invoice_number}>'
+
+    def to_dict(self):
+        line_items = [{
+            'label': self.subscription.subscription.subscription_name
+            if self.subscription and self.subscription.subscription
+            else 'Subscription charge',
+            'type': 'subscription',
+            'amount': float(self.amount) if self.amount else 0,
+        }]
+        if self.tax_amount:
+            line_items.append({
+                'label': 'Tax',
+                'type': 'tax',
+                'amount': float(self.tax_amount),
+            })
+
+        return {
+            'invoice_id': self.invoice_id,
+            'tenant_id': self.tenant_id,
+            'subscription_id': self.subscription_id,
+            'stripe_invoice_id': self.stripe_invoice_id,
+            'invoice_number': self.invoice_number,
+            'amount': float(self.amount) if self.amount else 0,
+            'tax_amount': float(self.tax_amount) if self.tax_amount else 0,
+            'total_amount': float(self.total_amount) if self.total_amount else 0,
+            'currency_id': self.currency_id,
+            'currency_code': self.currency.currency_code if self.currency else None,
+            'status': self.status,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'invoice_pdf_url': self.invoice_pdf_url,
+            'due_date': self.due_date.isoformat() if self.due_date else None,
+            'paid_at': self.paid_at.isoformat() if self.paid_at else None,
+            'line_items': line_items,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PaymentAttempt(db.Model):
+    """
+    Tracks all payment attempts for retry logic and history.
+    """
+    __tablename__ = 'Payment_Attempt'
+    __table_args__ = (
+        db.Index('idx_payment_attempt_tenant', 'tenant_id', 'created_at'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    payment_attempt_id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    subscription_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
+    stripe_payment_intent_id = db.Column(db.String(255))
+    invoice_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Invoice.invoice_id'))
+    attempt_number = db.Column(db.Integer, nullable=False)
+    amount = db.Column(db.Numeric(10, 2), nullable=False)
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
+    status = db.Column(db.String(50), nullable=False)
+    failure_reason = db.Column(db.Text)
+    failure_code = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    tenant       = db.relationship('TenantMaster', backref='tenant_payment_attempt_records')
+    subscription = db.relationship('TenantSubscription', backref='payment_attempt_records')
+    invoice      = db.relationship('SubscriptionInvoice', backref='invoice_payment_attempt_records')
+    currency     = db.relationship('CurrencyMaster', backref='currency_payment_attempt_records')
+    def __repr__(self):
+        return f'<PaymentAttempt {self.payment_attempt_id}: {self.status}>'
+
+    def to_dict(self):
+        return {
+            'payment_attempt_id': self.payment_attempt_id,
+            'tenant_id': self.tenant_id,
+            'subscription_id': self.subscription_id,
+            'stripe_payment_intent_id': self.stripe_payment_intent_id,
+            'invoice_id': self.invoice_id,
+            'attempt_number': self.attempt_number,
+            'amount': float(self.amount) if self.amount else 0,
+            'currency_id': self.currency_id,
+            'currency_code': self.currency.currency_code if self.currency else None,
+            'status': self.status,
+            'failure_reason': self.failure_reason,
+            'failure_code': self.failure_code,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class DunningConfig(db.Model):
+    """
+    Configurable retry schedule and dunning policy per plan.
+    """
+    __tablename__ = 'Dunning_Config'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    config_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    plan_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
+    retry_schedule = db.Column(db.JSON, nullable=False, default=[3, 7])
+    max_retries = db.Column(db.Integer, default=3)
+    grace_period_days = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), onupdate=datetime.utcnow)
+
+    plan = db.relationship('SubscriptionPlan', backref='dunning_configs')
+
+    def __repr__(self):
+        return f'<DunningConfig {self.config_id}: plan={self.plan_id}>'
+
+    def to_dict(self):
+        return {
+            'config_id': self.config_id,
+            'plan_id': self.plan_id,
+            'retry_schedule': self.retry_schedule or [],
+            'max_retries': self.max_retries,
+            'grace_period_days': self.grace_period_days,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class NotificationPreference(db.Model):
+    """
+    Per-tenant notification channel preferences.
+    """
+    __tablename__ = 'Notification_Preference'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'notification_type', name='uq_notification_pref_tenant_type'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    preference_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    notification_type = db.Column(db.String(100), nullable=False)
+    email_enabled = db.Column(db.Boolean, default=True)
+    in_app_enabled = db.Column(db.Boolean, default=True)
+    sms_enabled = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='notification_preferences')
+
+    def __repr__(self):
+        return f'<NotificationPreference {self.preference_id}: {self.notification_type}>'
+
+    def to_dict(self):
+        return {
+            'preference_id': self.preference_id,
+            'tenant_id': self.tenant_id,
+            'notification_type': self.notification_type,
+            'email_enabled': self.email_enabled,
+            'in_app_enabled': self.in_app_enabled,
+            'sms_enabled': self.sms_enabled,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class NotificationLog(db.Model):
+    """
+    Audit trail for sent notifications.
+    """
+    __tablename__ = 'Notification_Log'
+    __table_args__ = (
+        db.Index('idx_notification_log_tenant', 'tenant_id', 'created_at'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    notification_id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    notification_type = db.Column(db.String(100), nullable=False)
+    channel = db.Column(db.String(50), nullable=False)
+    recipient = db.Column(db.String(255))
+    subject = db.Column(db.Text)
+    body = db.Column(db.Text)
+    status = db.Column(db.String(50), default='pending')
+    sent_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='notification_logs')
+
+    def __repr__(self):
+        return f'<NotificationLog {self.notification_id}: {self.notification_type}>'
+
+    def to_dict(self):
+        return {
+            'notification_id': self.notification_id,
+            'tenant_id': self.tenant_id,
+            'notification_type': self.notification_type,
+            'channel': self.channel,
+            'recipient': self.recipient,
+            'subject': self.subject,
+            'body': self.body,
+            'status': self.status,
+            'sent_at': self.sent_at.isoformat() if self.sent_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class SubscriptionPause(db.Model):
+    """
+    Track paused subscriptions for pause/resume functionality.
+    """
+    __tablename__ = 'Subscription_Pause'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    pause_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_subscription_mapping_id = db.Column(
+        db.SmallInteger,
+        db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'),
+        nullable=False
+    )
+    paused_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    resume_at = db.Column(db.DateTime(timezone=True))
+    pause_reason = db.Column(db.String(255))
+    is_active = db.Column(db.Boolean, default=True)
+
+    subscription = db.relationship('TenantSubscription', backref='pause_records')
+
+    def __repr__(self):
+        return f'<SubscriptionPause {self.pause_id}>'
+
+    def to_dict(self):
+        return {
+            'pause_id': self.pause_id,
+            'tenant_subscription_mapping_id': self.tenant_subscription_mapping_id,
+            'paused_at': self.paused_at.isoformat() if self.paused_at else None,
+            'resume_at': self.resume_at.isoformat() if self.resume_at else None,
+            'pause_reason': self.pause_reason,
+            'is_active': self.is_active,
+        }
+
+
+class PendingPlanChange(db.Model):
+    """
+    Tracks scheduled plan downgrade at period end.
+    """
+    __tablename__ = 'Pending_Plan_Change'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', name='uq_pending_plan_change_tenant'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    change_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, unique=True)
+    current_plan_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
+    new_plan_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'), nullable=False)
+    scheduled_for = db.Column(db.Date, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), onupdate=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='pending_plan_change')
+    current_plan = db.relationship('SubscriptionPlan', foreign_keys=[current_plan_id])
+    new_plan = db.relationship('SubscriptionPlan', foreign_keys=[new_plan_id])
+
+    def __repr__(self):
+        return f'<PendingPlanChange {self.change_id}: tenant={self.tenant_id}>'
+
+    def to_dict(self):
+        return {
+            'change_id': self.change_id,
+            'tenant_id': self.tenant_id,
+            'current_plan_id': self.current_plan_id,
+            'current_plan_name': self.current_plan.subscription_name if self.current_plan else None,
+            'current_plan_code': self.current_plan.subscription_code if self.current_plan else None,
+            'new_plan_id': self.new_plan_id,
+            'new_plan_name': self.new_plan.subscription_name if self.new_plan else None,
+            'new_plan_code': self.new_plan.subscription_code if self.new_plan else None,
+            'scheduled_for': self.scheduled_for.isoformat() if self.scheduled_for else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ============================================================================
 # SECTION 4: PROPOSALS & INVOICES
 # ============================================================================
 
@@ -1929,7 +2247,7 @@ class ChatConversation(db.Model):
             'session_id':    self.session_id,
             'created_at':    self.created_at.isoformat() if self.created_at else None,
             'updated_at':    self.updated_at.isoformat() if self.updated_at else None,
-            'message_count': len(list(self.messages)) if self.messages is not None else 0,
+            'message_count': len(list(self.messages)) if self.messages else 0,  # type: ignore[arg-type]
         }
 
 
@@ -2094,9 +2412,13 @@ def get_available_modules() -> list:
 
 def get_new_schema_models() -> list:
     return [
-        # Tenancy
+        # Tenancy & Subscription
         'TenantMaster', 'SubscriptionPlan', 'ModuleMaster',
         'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
+        # Subscription Billing (NEW)
+        'SubscriptionInvoice', 'PaymentAttempt', 'DunningConfig',
+        'NotificationPreference', 'NotificationLog', 'SubscriptionPause',
+        'PendingPlanChange',
         # Masters
         'CountryMaster', 'CurrencyMaster', 'DesignationMaster',
         'ServicesMaster', 'UOMMaster', 'StageMaster', 'SupplierMaster',
@@ -2134,9 +2456,13 @@ def get_legacy_schema_models() -> list:
 # ============================================================================
 
 __all__ = [
-    # Tenancy
+    # Tenancy & Subscription
     'TenantMaster', 'SubscriptionPlan', 'SubscriptionPlans', 'ModuleMaster',
     'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
+    # Subscription Billing (NEW)
+    'SubscriptionInvoice', 'PaymentAttempt', 'DunningConfig',
+    'NotificationPreference', 'NotificationLog', 'SubscriptionPause',
+    'PendingPlanChange',
     # Masters
     'CountryMaster', 'CurrencyMaster', 'DesignationMaster', 'ServicesMaster',
     'UOMMaster', 'StageMaster', 'SupplierMaster', 'RoleMaster',

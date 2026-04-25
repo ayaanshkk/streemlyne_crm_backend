@@ -145,61 +145,20 @@ def create_checkout_session():
 
     if not STRIPE_AVAILABLE:
         return jsonify({"error": "stripe package not installed. Run: pip install stripe"}), 500
-
-    stripe_key = (
-        current_app.config.get("STRIPE_SECRET_KEY") or os.environ.get("STRIPE_SECRET_KEY")
-    )
-    if not stripe_key:
-        return jsonify({"error": "STRIPE_SECRET_KEY is not configured"}), 500
-
-    stripe.api_key = stripe_key
-
-    success_url = (
-        current_app.config.get("STRIPE_SUCCESS_URL")
-        or os.environ.get("STRIPE_SUCCESS_URL")
-        or "http://localhost:3000/subscription/success?session_id={CHECKOUT_SESSION_ID}"
-    )
-    cancel_url = (
-        current_app.config.get("STRIPE_CANCEL_URL")
-        or os.environ.get("STRIPE_CANCEL_URL")
-        or "http://localhost:3000/subscription-required"
-    )
-
-    tenant = db.session.get(TenantMaster, g.tenant_id)
-    if not tenant:
-        return jsonify({"error": "Tenant not found"}), 404
+    from services.payment_service import PaymentService
 
     try:
-        if tenant.stripe_customer_id:
-            customer_id = tenant.stripe_customer_id
-        else:
-            customer = stripe.Customer.create(
-                name     = tenant.tenant_company_name,
-                metadata = {"tenant_id": g.tenant_id},
-            )
-            customer_id = customer.id
-            tenant.stripe_customer_id = customer_id
-            db.session.commit()
-
-        session = stripe.checkout.Session.create(
-            customer             = customer_id,
-            payment_method_types = ["card"],
-            line_items           = [{"price": plan.stripe_price_id, "quantity": 1}],
-            mode                 = "subscription",
-            success_url          = success_url,
-            cancel_url           = cancel_url,
-            metadata             = {
-                "tenant_id": g.tenant_id,
-                "plan_code": plan.subscription_code,
-            },
-        )
+        result = PaymentService().create_checkout_session(g.tenant_id, plan)
+    except ImportError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 400
+        return jsonify({"error": message}), status_code
     except stripe.error.StripeError as exc:
-        current_app.logger.error(
-            "[STRIPE] Checkout session error for tenant %s: %s", g.tenant_id, exc
-        )
         return jsonify({"error": "Stripe error", "message": str(exc)}), 502
 
-    return jsonify({"checkout_url": session.url}), 200
+    return jsonify(result), 200
 
 
 @subscription_bp.route("/me/cancel", methods=["POST"])
@@ -279,12 +238,346 @@ def cancel_my_subscription():
     db.session.commit()
 
     return jsonify({
-        "message":            "Subscription will be cancelled at the end of the current billing period.",
-        "cancel_at":          sub.subscription_end_date.isoformat() if sub.subscription_end_date else None,
+        "message": "Subscription will be cancelled at the end of the current billing period.",
+        "cancel_at": sub.subscription_end_date.isoformat() if sub.subscription_end_date else None,
         "cancel_at_period_end": True,
     }), 200
 
 
+# =============================================================================
+# SECTION 1B: Subscription Invoices (tenant)
+# =============================================================================
+
+@subscription_bp.route("/me/invoices", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def list_my_invoices():
+    """
+    List tenant's subscription invoices.
+    GET /api/subscriptions/me/invoices
+
+    Query params:
+    - page: Page number (default: 1)
+    - per_page: Items per page (default: 20, max: 100)
+    - status: Filter by status (pending, paid, failed, void)
+    """
+    from services.invoice_service import InvoiceService
+
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(100, max(1, int(request.args.get("per_page", 20))))
+    status = request.args.get("status")
+
+    svc = InvoiceService()
+    result = svc.list_invoices(
+        tenant_id=g.tenant_id,
+        page=page,
+        per_page=per_page,
+        status=status,
+    )
+    return jsonify(result), 200
+
+
+@subscription_bp.route("/me/invoices/<int:invoice_id>", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_my_invoice(invoice_id: int):
+    """
+    Get invoice details.
+    GET /api/subscriptions/me/invoices/{invoice_id}
+
+    Returns invoice details including line items if available.
+    """
+    from services.invoice_service import InvoiceService
+    from models import SubscriptionInvoice
+
+    invoice = db.session.get(SubscriptionInvoice, invoice_id)
+    if not invoice or invoice.tenant_id != g.tenant_id:
+        return jsonify({"error": "Invoice not found"}), 404
+
+    return jsonify(invoice.to_dict()), 200
+
+
+@subscription_bp.route("/me/invoices/<int:invoice_id>/pdf", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_my_invoice_pdf(invoice_id: int):
+    """
+    Download invoice PDF or generate it on-demand.
+    GET /api/subscriptions/me/invoices/{invoice_id}/pdf
+
+    Returns PDF file or generates it if not available.
+    """
+    import os
+    from flask import send_file
+    from services.invoice_service import InvoiceService
+    from models import SubscriptionInvoice
+
+    invoice = db.session.get(SubscriptionInvoice, invoice_id)
+    if not invoice or invoice.tenant_id != g.tenant_id:
+        return jsonify({"error": "Invoice not found"}), 404
+
+    svc = InvoiceService()
+
+    if invoice.invoice_pdf_url:
+        backend_dir = os.path.dirname(current_app.config.get("UPLOAD_FOLDER", ""))
+        pdf_path = os.path.join(backend_dir, invoice.invoice_pdf_url.lstrip("/\\"))
+        pdf_path = os.path.normpath(pdf_path)
+        if os.path.exists(pdf_path):
+            return send_file(
+                pdf_path,
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name=f"invoice_{invoice.invoice_number}.pdf",
+            )
+
+    pdf_path = svc.generate_invoice_pdf(invoice_id)
+    if pdf_path and os.path.exists(pdf_path):
+        return send_file(
+            pdf_path,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"invoice_{invoice.invoice_number}.pdf",
+        )
+
+    return jsonify({"error": "PDF not available"}), 404
+
+
+# =============================================================================
+# SECTION 1C: Payment Methods (tenant)
+# =============================================================================
+
+@subscription_bp.route("/me/payment-methods", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def list_my_payment_methods():
+    """
+    List stored payment methods for the tenant.
+    GET /api/subscriptions/me/payment-methods
+
+    Returns masked card details (brand, last4, expiry).
+    """
+    from services.payment_service import PaymentService
+
+    svc = PaymentService()
+    methods = svc.list_payment_methods(g.tenant_id)
+    return jsonify(methods), 200
+
+
+@subscription_bp.route("/me/payment-methods", methods=["POST"])
+@auth_required
+@require_tenant_owner
+def create_setup_intent():
+    """
+    Create a Stripe SetupIntent for adding a new payment method.
+    POST /api/subscriptions/me/payment-methods
+
+    Returns client_secret for Stripe Elements to collect card details.
+    Flow:
+    1. Create SetupIntent
+    2. Return { client_secret, payment_method_types }
+    3. Frontend uses Stripe Elements to collect card
+    4. On success, confirm and attach to customer
+    """
+    from services.payment_service import PaymentService
+
+    svc = PaymentService()
+    try:
+        result = svc.create_setup_intent(g.tenant_id)
+        return jsonify(result), 200
+    except ImportError as e:
+        return jsonify({"error": str(e)}), 500
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@subscription_bp.route("/me/payment-methods/<payment_method_id>", methods=["DELETE"])
+@auth_required
+@require_tenant_owner
+def remove_payment_method(payment_method_id: str):
+    """
+    Remove a payment method.
+    DELETE /api/subscriptions/me/payment-methods/{payment_method_id}
+
+    Cannot remove if it's the only method on an active subscription.
+    """
+    from services.payment_service import PaymentService
+
+    svc = PaymentService()
+
+    if not svc.remove_payment_method(g.tenant_id, payment_method_id):
+        return jsonify({"error": "Failed to remove payment method"}), 400
+
+    return jsonify({"message": "Payment method removed"}), 200
+
+
+@subscription_bp.route("/me/payment-methods/<payment_method_id>/default", methods=["POST"])
+@auth_required
+@require_tenant_owner
+def set_default_payment_method(payment_method_id: str):
+    """
+    Set a payment method as the default for subscriptions.
+    POST /api/subscriptions/me/payment-methods/{payment_method_id}/default
+    """
+    from services.payment_service import PaymentService
+
+    svc = PaymentService()
+
+    if not svc.set_default_payment_method(g.tenant_id, payment_method_id):
+        return jsonify({"error": "Failed to set default payment method"}), 400
+
+    return jsonify({"message": "Default payment method updated"}), 200
+
+
+# =============================================================================
+# SECTION 1D: Payment History (tenant)
+# =============================================================================
+
+@subscription_bp.route("/me/payment-history", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_my_payment_history():
+    """
+    Get payment attempt history for the tenant.
+    GET /api/subscriptions/me/payment-history
+
+    Query params:
+    - page: Page number (default: 1)
+    - per_page: Items per page (default: 20)
+    """
+    from services.payment_service import PaymentService
+
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(100, max(1, int(request.args.get("per_page", 20))))
+
+    svc = PaymentService()
+    result = svc.get_payment_history(
+        tenant_id=g.tenant_id,
+        page=page,
+        per_page=per_page,
+    )
+    return jsonify(result), 200
+
+
+@subscription_bp.route("/me/payment-summary", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_my_payment_summary():
+    """
+    Get payment summary including payment methods and recent attempts.
+    GET /api/subscriptions/me/payment-summary
+    """
+    from services.payment_service import PaymentService
+
+    svc = PaymentService()
+    summary = svc.get_payment_summary(g.tenant_id)
+    return jsonify(summary), 200
+
+
+# =============================================================================
+# SECTION 1E: Self-service billing utilities
+# =============================================================================
+
+@subscription_bp.route("/me/customer-portal", methods=["POST"])
+@auth_required
+@require_tenant_owner
+def create_customer_portal_session():
+    """
+    Create a Stripe Billing Portal session for the tenant owner.
+    POST /api/subscriptions/me/customer-portal
+    """
+    from services.payment_service import PaymentService
+
+    data = request.get_json(silent=True) or {}
+    return_url = data.get("return_url")
+
+    try:
+        result = PaymentService().create_customer_portal_session(
+            tenant_id=g.tenant_id,
+            return_url=return_url,
+        )
+    except ImportError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        if not STRIPE_AVAILABLE or not isinstance(exc, stripe.error.StripeError):
+            current_app.logger.error(
+                "[STRIPE] Failed to create billing portal session for tenant %s: %s",
+                g.tenant_id,
+                exc,
+            )
+            return jsonify({"error": "Unable to create billing portal session"}), 500
+        return jsonify({"error": "Stripe error", "message": str(exc)}), 502
+
+    return jsonify(result), 200
+
+
+@subscription_bp.route("/me/pause", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_pause_status():
+    """
+    Get the current subscription pause state for the tenant.
+    GET /api/subscriptions/me/pause
+    """
+    from services.subscription_management_service import SubscriptionManagementService
+
+    pause = SubscriptionManagementService().get_pause_status(g.tenant_id)
+    return jsonify({"pause": pause}), 200
+
+
+@subscription_bp.route("/me/pause", methods=["POST"])
+@auth_required
+@require_tenant_owner
+def pause_my_subscription():
+    """
+    Pause an active paid subscription.
+    POST /api/subscriptions/me/pause
+    """
+    from services.subscription_management_service import SubscriptionManagementService
+
+    data = request.get_json(silent=True) or {}
+    reason = data.get("reason")
+    resume_at_raw = data.get("resume_at")
+    resume_at = None
+    if resume_at_raw:
+        try:
+            resume_at = datetime.fromisoformat(str(resume_at_raw).replace("Z", "+00:00"))
+        except ValueError:
+            return jsonify({"error": "resume_at must be a valid ISO timestamp"}), 400
+
+    svc = SubscriptionManagementService()
+    if not svc.pause_subscription(g.tenant_id, reason=reason, resume_date=resume_at):
+        return jsonify({
+            "error": "Unable to pause subscription",
+            "message": "Only active paid subscriptions can be paused once at a time.",
+        }), 400
+
+    return jsonify({
+        "message": "Subscription paused",
+        "pause": svc.get_pause_status(g.tenant_id),
+    }), 200
+
+
+@subscription_bp.route("/me/resume", methods=["POST"])
+@auth_required
+@require_tenant_owner
+def resume_my_subscription():
+    """
+    Resume a paused subscription.
+    POST /api/subscriptions/me/resume
+    """
+    from services.subscription_management_service import SubscriptionManagementService
+
+    svc = SubscriptionManagementService()
+    if not svc.resume_subscription(g.tenant_id):
+        return jsonify({"error": "No paused subscription found"}), 404
+
+    return jsonify({"message": "Subscription resumed"}), 200
+
+
+# =============================================================================
+# SECTION 2: Stripe Webhook (no JWT auth)
 # =============================================================================
 # SECTION 2: Stripe Webhook (no JWT auth)
 # =============================================================================
@@ -342,6 +635,10 @@ def stripe_webhook():
             _handle_checkout_completed(event_data)
         elif event_type == "invoice.paid":
             _handle_invoice_paid(event_data)
+        elif event_type == "invoice.payment_failed":
+            _handle_payment_failed(event_data)
+        elif event_type == "payment_intent.payment_failed":
+            _handle_payment_intent_failed(event_data)
         elif event_type == "customer.subscription.deleted":
             _handle_subscription_deleted(event_data)
         else:
@@ -396,6 +693,8 @@ def _handle_checkout_completed(session):
     sub.cancel_at_period_end   = False
     sub.stripe_subscription_id = stripe_sub_id
     sub.subscription_start_date = date.today()
+    sub.payment_attempts       = 0
+    sub.next_retry_date        = None
     sub.updated_at             = datetime.utcnow()
 
     if sub.subscription and sub.subscription.billing_cycle:
@@ -446,6 +745,18 @@ def _handle_invoice_paid(invoice):
         period_start_ts = period.get("start")
         period_end_ts   = period.get("end")
 
+    from services.invoice_service import InvoiceService
+    from services.notification_service import NotificationService
+
+    invoice_svc = InvoiceService()
+    notification_svc = NotificationService()
+    invoice_row = invoice_svc.create_or_update_from_stripe_invoice(
+        tenant_id=sub.tenant_id,
+        subscription=sub,
+        stripe_invoice=invoice,
+        status="paid",
+    )
+
     if period_start_ts:
         sub.current_period_start = datetime.utcfromtimestamp(period_start_ts)
     if period_end_ts:
@@ -468,11 +779,34 @@ def _handle_invoice_paid(invoice):
                 stripe_sub_id,
             )
 
-    sub.status    = "active"
+    paid_at_ts = (invoice.get("status_transitions") or {}).get("paid_at")
+    invoice_row.status = "paid"
+    invoice_row.paid_at = (
+        datetime.utcfromtimestamp(paid_at_ts)
+        if paid_at_ts
+        else datetime.now(timezone.utc)
+    )
+    invoice_row.updated_at = datetime.utcnow()
+
+    sub.status = "active"
     sub.is_active = True
+    sub.payment_attempts = 0
+    sub.next_retry_date = None
     sub.updated_at = datetime.utcnow()
 
     db.session.commit()
+
+    notification_svc.send_payment_succeeded(
+        tenant_id=sub.tenant_id,
+        amount=float(invoice_row.total_amount),
+        currency=invoice_row.currency.currency_code if invoice_row.currency else "USD",
+    )
+    notification_svc.send_subscription_renewed(
+        tenant_id=sub.tenant_id,
+        next_period_end=sub.subscription_end_date.isoformat() if sub.subscription_end_date else None,
+    )
+    invoice_svc.send_invoice_email(invoice_row.invoice_id)
+
     current_app.logger.info(
         "[STRIPE] Subscription %s renewed; period_end=%s",
         stripe_sub_id, sub.current_period_end,
@@ -518,6 +852,165 @@ def _handle_subscription_deleted(stripe_sub):
     current_app.logger.info("[STRIPE] Tenant %s subscription canceled", sub.tenant_id)
 
 
+def _handle_payment_failed(invoice):
+    """
+    invoice.payment_failed → log attempt, mark subscription past_due.
+
+    Called when an automatic payment attempt fails. This triggers dunning
+    if max retries haven't been reached.
+    """
+    stripe_sub_id = invoice.get("subscription")
+    if not stripe_sub_id:
+        current_app.logger.warning("[STRIPE] invoice.payment_failed — no subscription")
+        return
+
+    sub = TenantSubscription.query.filter_by(
+        stripe_subscription_id=stripe_sub_id
+    ).first()
+    if not sub:
+        current_app.logger.warning(
+            "[STRIPE] invoice.payment_failed — no TenantSubscription for %s",
+            stripe_sub_id,
+        )
+        return
+
+    from services.dunning_service import DunningService
+    from services.invoice_service import InvoiceService
+    from services.payment_service import PaymentService
+
+    failure_error = (
+        invoice.get("last_finalization_error")
+        or invoice.get("last_payment_error")
+        or {}
+    )
+    failure_msg = failure_error.get("message", "Payment failed")
+    failure_code = failure_error.get("code")
+
+    payment_svc = PaymentService()
+    invoice_svc = InvoiceService()
+    dunning_svc = DunningService()
+
+    plan = sub.subscription
+    currency_id = plan.currency_id if plan else 1
+    amount = float(invoice.get("amount_due", 0)) / 100
+    invoice_row = invoice_svc.create_or_update_from_stripe_invoice(
+        tenant_id=sub.tenant_id,
+        subscription=sub,
+        stripe_invoice=invoice,
+        status="failed",
+    )
+
+    payment_svc.log_payment_attempt(
+        tenant_id=sub.tenant_id,
+        subscription_id=sub.tenant_subscription_mapping_id,
+        amount=amount,
+        currency_id=currency_id,
+        status="failed",
+        stripe_payment_intent_id=invoice.get("payment_intent"),
+        invoice_id=invoice_row.invoice_id,
+        failure_reason=failure_msg,
+        failure_code=failure_code,
+    )
+
+    payment_svc.update_subscription_payment_status(sub.tenant_id, "past_due")
+    dunning_result = dunning_svc.process_payment_failure(
+        tenant_id=sub.tenant_id,
+        invoice_id=invoice_row.invoice_id,
+        failure_reason=failure_msg,
+        failure_code=failure_code,
+    )
+
+    current_app.logger.warning(
+        "[STRIPE] Payment failed for tenant %s (subscription %s): %s; action=%s",
+        sub.tenant_id,
+        stripe_sub_id,
+        failure_msg,
+        dunning_result.get("action"),
+    )
+
+
+def _handle_payment_intent_failed(payment_intent):
+    """
+    payment_intent.payment_failed → log attempt for manual retries.
+
+    Called when a payment intent created for a manual operation fails.
+    """
+    stripe_pi_id = payment_intent.get("id")
+    if not stripe_pi_id:
+        return
+
+    tenant_id = (payment_intent.get("metadata") or {}).get("tenant_id")
+    if not tenant_id:
+        current_app.logger.warning(
+            "[STRIPE] payment_intent.payment_failed — no tenant_id in metadata"
+        )
+        return
+
+    sub = (
+        TenantSubscription.query
+        .filter_by(tenant_id=tenant_id, is_active=True)
+        .order_by(TenantSubscription.created_at.desc())
+        .first()
+    )
+    if not sub:
+        current_app.logger.warning(
+            "[STRIPE] payment_intent.payment_failed — no active subscription for tenant %s",
+            tenant_id,
+        )
+        return
+
+    failure_msg = payment_intent.get("last_payment_error", {}).get("message", "Payment failed")
+    failure_code = payment_intent.get("last_payment_error", {}).get("code")
+
+    from services.dunning_service import DunningService
+    from services.notification_service import NotificationService
+    from services.payment_service import PaymentService
+    payment_svc = PaymentService()
+    notification_svc = NotificationService()
+    dunning_svc = DunningService()
+
+    plan = sub.subscription
+    currency_id = plan.currency_id if plan else 1
+    amount = float(payment_intent.get("amount", 0)) / 100
+    metadata = payment_intent.get("metadata") or {}
+    invoice_id = metadata.get("invoice_id")
+
+    attempt = payment_svc.log_payment_attempt(
+        tenant_id=tenant_id,
+        subscription_id=sub.tenant_subscription_mapping_id,
+        amount=amount,
+        currency_id=currency_id,
+        status="failed",
+        stripe_payment_intent_id=stripe_pi_id,
+        invoice_id=int(invoice_id) if invoice_id else None,
+        failure_reason=failure_msg,
+        failure_code=failure_code,
+    )
+    payment_svc.update_subscription_payment_status(tenant_id, "past_due")
+
+    if invoice_id:
+        dunning_svc.process_payment_failure(
+            tenant_id=tenant_id,
+            invoice_id=int(invoice_id),
+            failure_reason=failure_msg,
+            failure_code=failure_code,
+        )
+    else:
+        notification_svc.send_payment_failed(
+            tenant_id=tenant_id,
+            attempt_number=attempt.attempt_number,
+            failure_reason=failure_msg,
+        )
+
+    current_app.logger.warning(
+        "[STRIPE] Payment intent failed for tenant %s: %s",
+        tenant_id,
+        failure_msg,
+    )
+
+
+# =============================================================================
+# SECTION 3: Subscription Plans — catalogue CRUD (admin)
 # =============================================================================
 # SECTION 3: Subscription Plans — catalogue CRUD (admin)
 # =============================================================================
@@ -736,11 +1229,299 @@ def renew_tenant_subscription(tenant_id: str):
         return jsonify({"error": "Could not renew subscription"}), 500
 
     return jsonify({
-        "message":      "Subscription renewed",
+        "message": "Subscription renewed",
         "subscription": _tenant_sub_dict(renewed),
     }), 201
 
 
+# =============================================================================
+# SECTION 4B: Subscription Management (tenant self-service)
+# =============================================================================
+
+@subscription_bp.route("/me/downgrade", methods=["POST"])
+@auth_required
+@require_tenant_owner
+def schedule_downgrade():
+    """
+    Schedule a plan downgrade at period end.
+    POST /api/subscriptions/me/downgrade
+
+    Body: { "plan_code": "STARTER" }
+    Response: { "scheduled_for": "2024-02-01", "current_plan": "PRO", "new_plan": "STARTER" }
+    """
+    data = request.get_json() or {}
+    new_plan_code = (data.get("plan_code") or "").strip().upper()
+
+    if not new_plan_code:
+        return jsonify({"error": "plan_code is required"}), 400
+
+    from services.subscription_management_service import SubscriptionManagementService
+
+    try:
+        result = SubscriptionManagementService().schedule_downgrade(
+            tenant_id=g.tenant_id,
+            new_plan_code=new_plan_code,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 400
+        return jsonify({"error": message}), status_code
+
+    return jsonify(result), 200
+
+
+@subscription_bp.route("/me/pending-changes", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_pending_changes():
+    """
+    Get pending plan changes for the tenant.
+    GET /api/subscriptions/me/pending-changes
+
+    Returns pending downgrade info or null if none scheduled.
+    """
+    from services.subscription_management_service import SubscriptionManagementService
+
+    pending = SubscriptionManagementService().get_pending_change(g.tenant_id)
+    return jsonify({"pending_change": pending}), 200
+
+
+@subscription_bp.route("/me/pending-changes", methods=["DELETE"])
+@auth_required
+@require_tenant_owner
+def cancel_pending_downgrade():
+    """
+    Cancel pending downgrade.
+    DELETE /api/subscriptions/me/pending-changes
+    """
+    from services.subscription_management_service import SubscriptionManagementService
+
+    if not SubscriptionManagementService().cancel_downgrade(g.tenant_id):
+        return jsonify({"error": "No pending change found"}), 404
+
+    return jsonify({"message": "Pending change cancelled"}), 200
+
+
+# =============================================================================
+# SECTION 4C: Notification Preferences (tenant)
+# =============================================================================
+
+@subscription_bp.route("/me/notification-preferences", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_notification_preferences():
+    """
+    Get notification preferences for the tenant.
+    GET /api/subscriptions/me/notification-preferences
+
+    Returns per-type preferences (trial_expiring, payment_failed, etc.)
+    """
+    from services.notification_service import NotificationService
+
+    prefs = NotificationService().get_preferences(g.tenant_id)
+    return jsonify(prefs), 200
+
+
+@subscription_bp.route("/me/notification-preferences", methods=["PUT"])
+@auth_required
+@require_tenant_owner
+def update_notification_preferences():
+    """
+    Update notification preferences.
+    PUT /api/subscriptions/me/notification-preferences
+
+    Body: {
+        "preferences": [
+            { "notification_type": "trial_expiring", "email_enabled": true, "in_app_enabled": true }
+        ]
+    }
+    """
+    data = request.get_json() or {}
+    preferences = data.get("preferences", [])
+
+    if not isinstance(preferences, list):
+        return jsonify({"error": "preferences must be a list"}), 400
+
+    from services.notification_service import NotificationService
+
+    NotificationService().update_preferences(g.tenant_id, preferences)
+    return jsonify({"message": "Preferences updated"}), 200
+
+
+@subscription_bp.route("/me/notification-history", methods=["GET"])
+@auth_required
+@require_tenant_owner
+def get_notification_history():
+    """
+    Get recent notification history for the tenant owner.
+    """
+    from services.notification_service import NotificationService
+
+    limit = min(100, max(1, int(request.args.get("limit", 50))))
+    history = NotificationService().get_notification_history(g.tenant_id, limit=limit)
+    return jsonify({"items": history, "total": len(history)}), 200
+
+
+# =============================================================================
+# SECTION 4D: Dunning & Payment History (admin)
+# =============================================================================
+
+@subscription_bp.route("/tenants", methods=["GET"])
+@auth_required
+@permission_required("subscription.view")
+def list_tenant_subscriptions():
+    """
+    Admin list of tenant subscriptions with basic search and status filters.
+    GET /api/subscriptions/tenants
+    """
+    from sqlalchemy import or_
+
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(100, max(1, int(request.args.get("per_page", 20))))
+    search = (request.args.get("search") or "").strip()
+    status = (request.args.get("status") or "").strip().lower()
+
+    query = (
+        db.session.query(TenantSubscription)
+        .join(TenantMaster, TenantMaster.tenant_id == TenantSubscription.tenant_id)
+        .outerjoin(
+            SubscriptionPlan,
+            SubscriptionPlan.subscription_id == TenantSubscription.subscription_id,
+        )
+        .order_by(TenantSubscription.created_at.desc())
+    )
+
+    if status:
+        query = query.filter(TenantSubscription.status == status)
+
+    if search:
+        like_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                TenantSubscription.tenant_id.ilike(like_term),
+                TenantMaster.tenant_company_name.ilike(like_term),
+                SubscriptionPlan.subscription_name.ilike(like_term),
+                SubscriptionPlan.subscription_code.ilike(like_term),
+            )
+        )
+
+    total = query.count()
+    rows = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    return jsonify({
+        "items": [_tenant_sub_dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": (total + per_page - 1) // per_page if per_page else 0,
+    }), 200
+
+@subscription_bp.route("/tenants/<string:tenant_id>/payment-history", methods=["GET"])
+@auth_required
+@permission_required("subscription.view")
+def get_tenant_payment_history(tenant_id: str):
+    """
+    Admin view of payment attempts for a tenant.
+    GET /api/subscriptions/tenants/<tenant_id>/payment-history
+
+    Query params: page, per_page
+    """
+    from services.payment_service import PaymentService
+
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(100, max(1, int(request.args.get("per_page", 20))))
+
+    svc = PaymentService()
+    result = svc.get_payment_history(
+        tenant_id=tenant_id,
+        page=page,
+        per_page=per_page,
+    )
+    return jsonify(result), 200
+
+
+@subscription_bp.route("/tenants/<string:tenant_id>/retry-payment", methods=["POST"])
+@auth_required
+@permission_required("subscription.create")
+def retry_payment_for_tenant(tenant_id: str):
+    """
+    Manually trigger payment retry for a tenant (admin).
+    POST /api/subscriptions/tenants/<tenant_id>/retry-payment
+
+    Body: { "invoice_id": 123 }
+    """
+    from services.payment_service import PaymentService
+
+    data = request.get_json() or {}
+    invoice_id = data.get("invoice_id")
+
+    if not invoice_id:
+        return jsonify({"error": "invoice_id is required"}), 400
+
+    svc = PaymentService()
+    try:
+        result = svc.retry_payment(tenant_id, invoice_id)
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"[ADMIN] retry_payment failed for tenant {tenant_id}: {e}")
+        return jsonify({"error": "Payment retry failed"}), 500
+
+
+# =============================================================================
+# SECTION 4E: Dunning Config (admin)
+# =============================================================================
+
+@subscription_bp.route("/config/dunning", methods=["GET"])
+@auth_required
+@permission_required("subscription.config")
+def get_dunning_config():
+    """
+    Get dunning configuration.
+    GET /api/subscriptions/config/dunning
+
+    Returns retry schedule, max retries, grace period per plan.
+    """
+    from models import DunningConfig
+    from services.dunning_service import DunningService
+
+    configs = DunningConfig.query.order_by(DunningConfig.plan_id.asc().nullsfirst()).all()
+    if configs:
+        return jsonify([c.to_dict() for c in configs]), 200
+
+    return jsonify([DunningService().get_dunning_config()]), 200
+
+
+@subscription_bp.route("/config/dunning", methods=["PUT"])
+@auth_required
+@permission_required("subscription.config")
+def update_dunning_config():
+    """
+    Update dunning configuration.
+    PUT /api/subscriptions/config/dunning
+
+    Body: {
+        "plan_id": 1,
+        "retry_schedule": [3, 7],
+        "max_retries": 3,
+        "grace_period_days": 0
+    }
+    """
+    data = request.get_json() or {}
+    from services.dunning_service import DunningService
+
+    config = DunningService().update_dunning_config(
+        plan_id=data.get("plan_id"),
+        retry_schedule=data.get("retry_schedule", [3, 7]),
+        max_retries=int(data.get("max_retries", 3)),
+        grace_period_days=int(data.get("grace_period_days", 0)),
+    )
+    return jsonify({"message": "Dunning config updated", "config": config.to_dict()}), 200
+
+
+# =============================================================================
+# SECTION 5: Subscription → Module Mapping
 # =============================================================================
 # SECTION 5: Subscription → Module Mapping
 # =============================================================================

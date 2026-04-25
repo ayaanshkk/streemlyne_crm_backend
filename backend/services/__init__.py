@@ -38,15 +38,14 @@ from .employee_service import EmployeeService
 # ============================================================
 # DEVELOPER B - BUSINESS DOMAIN SERVICES (⏳ TO BE IMPLEMENTED)
 # ============================================================
+# DEVELOPER B - BUSINESS DOMAIN SERVICES (✅ IMPLEMENTED)
+# ============================================================
 
-# Uncomment these imports as Developer B creates the services:
-
-# from .client_service import ClientService
-# from .opportunity_service import OpportunityService
-# from .project_service import ProjectService
-# from .proposal_service import ProposalService
-# from .invoice_service import InvoiceService
-
+from .invoice_service import InvoiceService
+from .payment_service import PaymentService
+from .dunning_service import DunningService
+from .notification_service import NotificationService
+from .subscription_management_service import SubscriptionManagementService
 
 # ============================================================
 # EXPORTS
@@ -58,15 +57,14 @@ __all__ = [
     'SubscriptionService',
     'PermissionService',
     'EmployeeService',
-    
-    # Developer B - Business Domain Services (add as implemented)
-    # 'ClientService',
-    # 'OpportunityService',
-    # 'ProjectService',
-    # 'ProposalService',
-    # 'InvoiceService',
-]
 
+    # Developer B - Business Domain Services
+    'InvoiceService',
+    'PaymentService',
+    'DunningService',
+    'NotificationService',
+    'SubscriptionManagementService',
+]
 
 # ============================================================
 # HELPER FUNCTION FOR SERVICE AVAILABILITY
@@ -76,9 +74,9 @@ def get_available_services():
     """
     Get list of available service names
     Useful for debugging and feature flags
-    
+
     Returns:
-        dict: Dictionary with service categories and their availability
+    dict: Dictionary with service categories and their availability
     """
     return {
         'foundation': [
@@ -88,12 +86,11 @@ def get_available_services():
             'EmployeeService'
         ],
         'business_domain': [
-            # Add as Developer B implements them
-            # 'ClientService',
-            # 'OpportunityService',
-            # 'ProjectService',
-            # 'ProposalService',
-            # 'InvoiceService',
+            'InvoiceService',
+            'PaymentService',
+            'DunningService',
+            'NotificationService',
+            'SubscriptionManagementService',
         ],
         'domain_specific': [
             'CuttingListBuilder',

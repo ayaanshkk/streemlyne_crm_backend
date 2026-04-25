@@ -522,6 +522,7 @@ CREATE TABLE StreemLyne_MT.Property_Payments (
   notes text,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  total_rent numeric DEFAULT 0,
   CONSTRAINT Property_Payments_pkey PRIMARY KEY (id),
   CONSTRAINT property_payments_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
   CONSTRAINT property_payments_property_id_fkey FOREIGN KEY (property_id) REFERENCES StreemLyne_MT.Property_Master(property_id)
