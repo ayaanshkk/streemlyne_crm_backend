@@ -65,18 +65,24 @@ class InvoiceService:
             raise ValueError("Subscription has no associated plan")
 
         invoice_number = self._generate_invoice_number(tenant_id)
+        subtotal = amount if amount is not None else float(plan.price or 0)
+        tax_total = tax_amount if tax_amount is not None else 0
+        total = subtotal + tax_total
 
         invoice = SubscriptionInvoice(
             tenant_id=tenant_id,
             subscription_id=subscription.tenant_subscription_mapping_id,
             stripe_invoice_id=stripe_invoice_id,
+            stripe_subscription_id=subscription.stripe_subscription_id,
             invoice_number=invoice_number,
-            amount=amount if amount is not None else float(plan.price or 0),
-            tax_amount=tax_amount if tax_amount is not None else 0,
-            total_amount=(amount if amount is not None else float(plan.price or 0))
-            + (tax_amount if tax_amount is not None else 0),
+            amount=subtotal,
+            amount_paid=int(round(total * 100)) if status == "paid" else None,
+            tax_amount=tax_total,
+            total_amount=total,
             currency_id=currency_id or plan.currency_id,
+            stripe_currency=plan.currency.currency_code.lower() if plan.currency else None,
             status=status,
+            invoice_date=datetime.now(timezone.utc),
             period_start=period_start,
             period_end=period_end,
             due_date=due_date,
@@ -120,6 +126,11 @@ class InvoiceService:
         amount = float(stripe_invoice.get("subtotal", 0)) / 100
         tax_amount = float(stripe_invoice.get("tax", 0) or 0) / 100
         total_amount = float(stripe_invoice.get("amount_paid") or stripe_invoice.get("amount_due") or stripe_invoice.get("total") or 0) / 100
+        amount_paid = stripe_invoice.get("amount_paid")
+        invoice_currency = stripe_invoice.get("currency")
+        invoice_date = None
+        if stripe_invoice.get("created"):
+            invoice_date = datetime.fromtimestamp(stripe_invoice["created"], tz=timezone.utc)
         due_date = None
         if stripe_invoice.get("due_date"):
             due_date = datetime.fromtimestamp(stripe_invoice["due_date"], tz=timezone.utc).date()
@@ -130,11 +141,15 @@ class InvoiceService:
 
         if existing:
             existing.subscription_id = subscription.tenant_subscription_mapping_id
+            existing.stripe_subscription_id = stripe_invoice.get("subscription") or subscription.stripe_subscription_id
             existing.amount = amount
+            existing.amount_paid = amount_paid
             existing.tax_amount = tax_amount
             existing.total_amount = total_amount
             existing.currency_id = existing.currency_id or subscription.subscription.currency_id
+            existing.stripe_currency = invoice_currency
             existing.status = invoice_status
+            existing.invoice_date = invoice_date
             existing.period_start = period_start
             existing.period_end = period_end
             existing.due_date = due_date
@@ -157,6 +172,10 @@ class InvoiceService:
         invoice_number = stripe_invoice.get("number")
         if invoice_number:
             invoice.invoice_number = invoice_number
+        invoice.stripe_subscription_id = stripe_invoice.get("subscription") or subscription.stripe_subscription_id
+        invoice.amount_paid = amount_paid
+        invoice.stripe_currency = invoice_currency
+        invoice.invoice_date = invoice_date
 
         return invoice
 

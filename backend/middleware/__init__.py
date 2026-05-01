@@ -16,7 +16,7 @@
 #               and IDE auto-complete expose it correctly.
 # ─────────────────────────────────────────────────────────────────────────────
 
-from .auth_middleware import auth_required, get_current_user, get_current_employee, require_tenant_owner  # [MW-INIT-001, 002]
+from .auth_middleware import auth_required, get_current_user, get_current_employee, require_owner, require_tenant_owner  # [MW-INIT-001, 002]
 from .permission_middleware import permission_required  # [MW-INIT-001] sole source of truth
 from .tenant_context import get_current_tenant_id, inject_tenant_context, tenant_required
 
@@ -25,6 +25,7 @@ __all__ = [
     "get_current_user",
     "get_current_employee",
     "permission_required",
+    "require_owner",
     "require_tenant_owner",    # [MW-INIT-003] was missing
     "tenant_required",
     "get_current_tenant_id",

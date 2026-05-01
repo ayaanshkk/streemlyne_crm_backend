@@ -47,8 +47,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List, Dict
 
 from dateutil.relativedelta import relativedelta
+from flask import current_app, has_app_context
 
-from models import TenantSubscription, SubscriptionPlan
+from database import db
+from models import TenantMaster, TenantSubscription, SubscriptionPlan
 from repositories import TenantRepository, PermissionRepository
 
 # [SUB-006] Single source of truth for trial length.
@@ -89,58 +91,11 @@ class SubscriptionService:
         subscription = self.get_active_subscription(tenant_id)
         subscription = self._sync_subscription_state(subscription)
 
-        if not subscription:
-            from models import SubscriptionPause
+        paused_status = self._get_paused_subscription_status(tenant_id)
+        if paused_status and (subscription is None or subscription.is_active is False):
+            return paused_status
 
-            paused = (
-                SubscriptionPause.query
-                .join(
-                    TenantSubscription,
-                    TenantSubscription.tenant_subscription_mapping_id == SubscriptionPause.tenant_subscription_mapping_id,
-                )
-                .filter(
-                    TenantSubscription.tenant_id == tenant_id,
-                    SubscriptionPause.is_active == True,
-                )
-                .order_by(SubscriptionPause.paused_at.desc())
-                .first()
-            )
-            if paused:
-                paused_subscription = db.session.get(
-                    TenantSubscription,
-                    paused.tenant_subscription_mapping_id,
-                )
-                plan = (
-                    self.get_subscription_plan(paused_subscription.subscription_id)
-                    if paused_subscription else None
-                )
-                return {
-                    "has_subscription": True,
-                    "is_active": False,
-                    "status": "paused",
-                    "plan_name": plan.subscription_name if plan else "Unknown",
-                    "plan_code": plan.subscription_code if plan else None,
-                    "start_date": paused_subscription.subscription_start_date.isoformat() if paused_subscription and paused_subscription.subscription_start_date else None,
-                    "end_date": paused_subscription.subscription_end_date.isoformat() if paused_subscription and paused_subscription.subscription_end_date else None,
-                    "days_remaining": (
-                        (paused_subscription.subscription_end_date - date.today()).days
-                        if paused_subscription and paused_subscription.subscription_end_date
-                        else None
-                    ),
-                    "auto_renew": paused_subscription.auto_renew if paused_subscription else False,
-                    "is_expiring_soon": False,
-                    "is_expired": False,
-                    "trial_end_date": paused_subscription.trial_end_date.isoformat() if paused_subscription and paused_subscription.trial_end_date else None,
-                    "days_remaining_in_trial": paused_subscription.days_remaining_in_trial() if paused_subscription else None,
-                    "stripe_subscription_id": paused_subscription.stripe_subscription_id if paused_subscription else None,
-                    "stripe_price_id": plan.stripe_price_id if plan else None,
-                    "cancel_at_period_end": paused_subscription.cancel_at_period_end if paused_subscription else False,
-                    "current_period_start": paused_subscription.current_period_start.isoformat() if paused_subscription and paused_subscription.current_period_start else None,
-                    "current_period_end": paused_subscription.current_period_end.isoformat() if paused_subscription and paused_subscription.current_period_end else None,
-                    "payment_attempts": paused_subscription.payment_attempts if paused_subscription else 0,
-                    "next_retry_date": paused_subscription.next_retry_date.isoformat() if paused_subscription and paused_subscription.next_retry_date else None,
-                    "pause": paused.to_dict(),
-                }
+        if not subscription:
             return {
                 "has_subscription":  False,
                 "is_active":         False,
@@ -177,10 +132,11 @@ class SubscriptionService:
             "cancel_at_period_end":     subscription.cancel_at_period_end,
             "current_period_start":     subscription.current_period_start.isoformat() if subscription.current_period_start else None,
             "current_period_end":       subscription.current_period_end.isoformat() if subscription.current_period_end else None,
-            "payment_attempts":         subscription.payment_attempts,
-            "next_retry_date":          subscription.next_retry_date.isoformat() if subscription.next_retry_date else None,
             "pause":                    None,
         }
+
+    def _get_paused_subscription_status(self, tenant_id: str) -> Optional[Dict]:
+        return None
 
     def can_access_module(self, tenant_id: str, module_code: str) -> bool:
         """
@@ -255,6 +211,24 @@ class SubscriptionService:
 
         # [FIX-002] Seed module access for the trial plan
         self._reconcile_tenant_modules(tenant_id, base_plan.subscription_id)
+
+        tenant = db.session.get(TenantMaster, tenant_id)
+        if tenant and not tenant.stripe_customer_id:
+            from services.payment_service import PaymentService
+
+            try:
+                PaymentService().ensure_stripe_customer(
+                    tenant,
+                    commit=False,
+                    require_stripe=False,
+                )
+            except Exception as exc:
+                if has_app_context():
+                    current_app.logger.warning(
+                        "[SUBSCRIPTION] Trial provisioning skipped Stripe customer creation for tenant %s: %s",
+                        tenant_id,
+                        exc,
+                    )
 
         # Caller commits atomically with the TenantMaster INSERT
         return trial_sub
@@ -658,22 +632,6 @@ class SubscriptionService:
         ):
             subscription.status    = "expired"
             subscription.is_active = False
-            SubscriptionService._reconcile_tenant_modules(
-                subscription.tenant_id, subscription_id=None
-            )
-            changed = True
-
-        # Dunning retries exhausted: lazily expire if the retry window has passed.
-        elif (
-            subscription.status == "past_due"
-            and subscription.next_retry_date
-            and now > _as_utc(subscription.next_retry_date)
-            and (subscription.payment_attempts or 0) >= 3
-        ):
-            subscription.status = "expired"
-            subscription.is_active = False
-            subscription.auto_renew = False
-            subscription.next_retry_date = None
             SubscriptionService._reconcile_tenant_modules(
                 subscription.tenant_id, subscription_id=None
             )

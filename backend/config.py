@@ -2,6 +2,27 @@
 
 import os
 from datetime import timedelta
+from urllib.parse import urlsplit
+
+
+def _origin_from_url(url: str | None) -> str | None:
+    if not url:
+        return None
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _csv_values(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, "")
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 # ----------------------------------
 # Flask/App Configuration
@@ -28,27 +49,24 @@ class Config:
     # single source of truth and removes the double-lookup in every route.
     STRIPE_SECRET_KEY     = os.environ.get('STRIPE_SECRET_KEY')
     STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
-    STRIPE_SUCCESS_URL    = os.environ.get(
-        'STRIPE_SUCCESS_URL',
-        'http://localhost:3000/subscription/success?session_id={CHECKOUT_SESSION_ID}'
-    )
-    STRIPE_CANCEL_URL     = os.environ.get(
-        'STRIPE_CANCEL_URL',
-        'http://localhost:3000/subscription-required'
-    )
-    SALES_CONTACT_EMAIL   = os.environ.get('SALES_CONTACT_EMAIL', 'sales@streemlyne.com')
+    STRIPE_SUCCESS_URL    = os.environ.get('STRIPE_SUCCESS_URL')
+    STRIPE_CANCEL_URL     = os.environ.get('STRIPE_CANCEL_URL')
+    SALES_CONTACT_EMAIL   = os.environ.get('SALES_CONTACT_EMAIL')
     SENDGRID_API_KEY      = os.environ.get('SENDGRID_API_KEY')
-    BILLING_FROM_EMAIL    = os.environ.get('BILLING_FROM_EMAIL', 'billing@streemlyne.com')
+    BILLING_FROM_EMAIL    = os.environ.get('BILLING_FROM_EMAIL')
     EMAIL_UNSUBSCRIBE_URL = os.environ.get('EMAIL_UNSUBSCRIBE_URL')
     SMTP_HOST             = os.environ.get('SMTP_HOST')
     SMTP_PORT             = int(os.environ.get('SMTP_PORT', '587'))
     SMTP_USERNAME         = os.environ.get('SMTP_USERNAME')
     SMTP_PASSWORD         = os.environ.get('SMTP_PASSWORD')
     SMTP_USE_TLS          = os.environ.get('SMTP_USE_TLS', 'true')
-    STRIPE_PORTAL_RETURN_URL = os.environ.get(
-        'STRIPE_PORTAL_RETURN_URL',
-        'http://localhost:3000/subscription/manage'
-    )
+    STRIPE_PORTAL_RETURN_URL = os.environ.get('STRIPE_PORTAL_RETURN_URL')
+    STRIPE_ALLOWED_RETURN_ORIGINS = tuple(dict.fromkeys(filter(None, (
+        *_csv_values('STRIPE_ALLOWED_RETURN_ORIGINS'),
+        _origin_from_url(STRIPE_SUCCESS_URL),
+        _origin_from_url(STRIPE_CANCEL_URL),
+        _origin_from_url(STRIPE_PORTAL_RETURN_URL),
+    ))))
 
 # ----------------------------------
 # File Upload Configuration

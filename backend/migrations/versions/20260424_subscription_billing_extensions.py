@@ -14,21 +14,7 @@ down_revision = "add_invoice_vat_and_payment_status"
 branch_labels = None
 depends_on = None
 
-
 def upgrade():
-    op.execute(
-        """
-        ALTER TABLE "StreemLyne_MT"."Tenant_Subscription"
-        ADD COLUMN IF NOT EXISTS payment_attempts integer DEFAULT 0
-        """
-    )
-    op.execute(
-        """
-        ALTER TABLE "StreemLyne_MT"."Tenant_Subscription"
-        ADD COLUMN IF NOT EXISTS next_retry_date timestamp with time zone
-        """
-    )
-
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS "StreemLyne_MT"."Subscription_Invoice" (
@@ -241,16 +227,3 @@ def downgrade():
     op.execute('DROP TABLE IF EXISTS "StreemLyne_MT"."Dunning_Config"')
     op.execute('DROP TABLE IF EXISTS "StreemLyne_MT"."Payment_Attempt"')
     op.execute('DROP TABLE IF EXISTS "StreemLyne_MT"."Subscription_Invoice"')
-
-    op.execute(
-        """
-        ALTER TABLE "StreemLyne_MT"."Tenant_Subscription"
-        DROP COLUMN IF EXISTS next_retry_date
-        """
-    )
-    op.execute(
-        """
-        ALTER TABLE "StreemLyne_MT"."Tenant_Subscription"
-        DROP COLUMN IF EXISTS payment_attempts
-        """
-    )

@@ -15,11 +15,8 @@ from flask import current_app
 
 from database import db
 from models import (
-    DunningConfig,
-    PaymentAttempt,
     TenantSubscription,
     SubscriptionPlan,
-    NotificationLog,
 )
 
 
@@ -42,15 +39,6 @@ class DunningService:
         Returns:
             Dict with retry_schedule, max_retries, grace_period_days
         """
-        if plan_id:
-            config = DunningConfig.query.filter_by(plan_id=plan_id, is_active=True).first()
-            if config:
-                return config.to_dict()
-
-        default_config = DunningConfig.query.filter_by(plan_id=None, is_active=True).first()
-        if default_config:
-            return default_config.to_dict()
-
         return {
             "retry_schedule": self.DEFAULT_RETRY_SCHEDULE,
             "max_retries": self.DEFAULT_MAX_RETRIES,
@@ -120,10 +108,6 @@ class DunningService:
         if attempt_number >= max_retries:
             if grace_period_days > 0:
                 expiry_at = datetime.now(timezone.utc) + timedelta(days=grace_period_days)
-                sub.payment_attempts = attempt_number
-                sub.next_retry_date = expiry_at
-                sub.updated_at = datetime.utcnow()
-                db.session.commit()
                 return {
                     "scheduled": False,
                     "reason": "Max retries reached; grace period active",
@@ -142,12 +126,6 @@ class DunningService:
             attempt_number,
             plan_id=sub.subscription_id,
         )
-
-        sub.payment_attempts = attempt_number
-        sub.next_retry_date = retry_date
-        sub.updated_at = datetime.utcnow()
-
-        db.session.commit()
 
         return {
             "scheduled": True,
@@ -175,11 +153,6 @@ class DunningService:
         if not sub:
             return False
 
-        sub.payment_attempts = 0
-        sub.next_retry_date = None
-        sub.updated_at = datetime.utcnow()
-
-        db.session.commit()
         return True
 
     def process_payment_failure(
@@ -201,53 +174,11 @@ class DunningService:
         Returns:
             Dict with action to take (retry, expire, etc.)
         """
-        from services.payment_service import PaymentService
-        from services.invoice_service import InvoiceService
-        from services.notification_service import NotificationService
-        from models import SubscriptionInvoice
-
-        payment_svc = PaymentService()
-        invoice_svc = InvoiceService()
-        notification_svc = NotificationService()
-
-        invoice = db.session.get(SubscriptionInvoice, invoice_id)
-        if not invoice:
-            raise ValueError("Invoice not found")
-
-        subscription = db.session.get(TenantSubscription, invoice.subscription_id)
-        if not subscription:
-            raise ValueError("Subscription not found for invoice")
-
-        failed_count = payment_svc.get_failed_attempts_count(
-            tenant_id,
-            subscription.tenant_subscription_mapping_id,
+        raise NotImplementedError(
+            "Dunning is not implemented until Payment_Attempt and Dunning_Config "
+            "exist in Supabase."
         )
-        new_attempt_number = max(1, failed_count)
 
-        invoice_svc.mark_failed(invoice_id)
-
-        schedule_result = self.schedule_retry(tenant_id, invoice_id, new_attempt_number)
-
-        if schedule_result.get("should_expire"):
-            self._trigger_expiration_flow(tenant_id)
-            notification_svc.send_subscription_expired(tenant_id)
-            return {
-                "action": "expire",
-                "reason": "Max retries exceeded",
-            }
-
-        notification_svc.send_payment_failed(tenant_id, new_attempt_number, failure_reason)
-        retry_date = schedule_result.get("retry_date")
-        if retry_date:
-            retry_at = datetime.fromisoformat(retry_date.replace("Z", "+00:00"))
-            days_until_retry = max(0, (retry_at - datetime.now(timezone.utc)).days)
-            notification_svc.send_dunning_reminder(tenant_id, days_until_retry)
-
-        return {
-            "action": "retry",
-            "scheduled_for": schedule_result.get("retry_date"),
-            "attempt_number": new_attempt_number,
-        }
 
     def _trigger_expiration_flow(self, tenant_id: str) -> None:
         """
@@ -272,7 +203,6 @@ class DunningService:
         sub.status = "expired"
         sub.is_active = False
         sub.auto_renew = False
-        sub.next_retry_date = None
         sub.updated_at = datetime.utcnow()
 
         SubscriptionService._reconcile_tenant_modules(tenant_id, subscription_id=None)
@@ -292,85 +222,13 @@ class DunningService:
         Returns:
             List of tenant IDs that were expired
         """
-        now = datetime.now(timezone.utc)
-
-        past_due_subs = (
-            TenantSubscription.query
-            .filter_by(status="past_due", is_active=True)
-            .all()
-        )
-
-        expired_tenant_ids = []
-
-        for sub in past_due_subs:
-            if sub.next_retry_date and now > sub.next_retry_date:
-                config = self.get_dunning_config(sub.subscription_id)
-                max_retries = config.get("max_retries", self.DEFAULT_MAX_RETRIES)
-
-                if sub.payment_attempts and sub.payment_attempts >= max_retries:
-                    self._trigger_expiration_flow(sub.tenant_id)
-                    expired_tenant_ids.append(sub.tenant_id)
-
-        return expired_tenant_ids
+        return []
 
     def process_scheduled_retries(self) -> List[Dict]:
         """
         Retry payment for all past-due subscriptions whose retry window is due.
         """
-        from models import SubscriptionInvoice
-        from services.payment_service import PaymentService
-
-        now = datetime.now(timezone.utc)
-        due_subs = (
-            TenantSubscription.query
-            .filter(
-                TenantSubscription.status == "past_due",
-                TenantSubscription.is_active == True,
-                TenantSubscription.next_retry_date.isnot(None),
-                TenantSubscription.next_retry_date <= now,
-            )
-            .order_by(TenantSubscription.next_retry_date.asc())
-            .all()
-        )
-
-        results: List[Dict] = []
-        payment_svc = PaymentService()
-
-        for sub in due_subs:
-            invoice = (
-                SubscriptionInvoice.query
-                .filter(
-                    SubscriptionInvoice.tenant_id == sub.tenant_id,
-                    SubscriptionInvoice.subscription_id == sub.tenant_subscription_mapping_id,
-                    SubscriptionInvoice.status.in_(["pending", "failed"]),
-                )
-                .order_by(SubscriptionInvoice.created_at.desc())
-                .first()
-            )
-            if not invoice:
-                results.append({
-                    "tenant_id": sub.tenant_id,
-                    "success": False,
-                    "error": "No retryable invoice found",
-                })
-                continue
-
-            try:
-                retry_result = payment_svc.retry_payment(sub.tenant_id, invoice.invoice_id)
-                results.append({"tenant_id": sub.tenant_id, **retry_result})
-            except Exception as exc:
-                current_app.logger.error(
-                    "[DUNNING] Scheduled retry failed for tenant %s: %s",
-                    sub.tenant_id,
-                    exc,
-                )
-                results.append({
-                    "tenant_id": sub.tenant_id,
-                    "success": False,
-                    "error": str(exc),
-                })
-
-        return results
+        return []
 
     def send_renewal_reminders(self) -> List[str]:
         """
@@ -416,7 +274,7 @@ class DunningService:
         retry_schedule: List[int],
         max_retries: int,
         grace_period_days: int = 0,
-    ) -> DunningConfig:
+    ) -> Dict:
         """
         Create or update dunning configuration.
 
@@ -429,25 +287,10 @@ class DunningService:
         Returns:
             The created or updated DunningConfig
         """
-        config = DunningConfig.query.filter_by(plan_id=plan_id).first()
-
-        if config:
-            config.retry_schedule = retry_schedule
-            config.max_retries = max_retries
-            config.grace_period_days = grace_period_days
-            config.updated_at = datetime.utcnow()
-        else:
-            config = DunningConfig(
-                plan_id=plan_id,
-                retry_schedule=retry_schedule,
-                max_retries=max_retries,
-                grace_period_days=grace_period_days,
-                is_active=True,
-            )
-            db.session.add(config)
-
-        db.session.commit()
-        return config
+        raise NotImplementedError(
+            "Dunning configuration is not implemented until Dunning_Config "
+            "exists in Supabase."
+        )
 
     def get_payment_attempt_summary(self, tenant_id: str) -> Dict:
         """
@@ -459,27 +302,7 @@ class DunningService:
         Returns:
             Dict with attempt counts and totals
         """
-        attempts = (
-            PaymentAttempt.query
-            .filter_by(tenant_id=tenant_id)
-            .order_by(PaymentAttempt.created_at.desc())
-            .all()
+        raise NotImplementedError(
+            "Payment attempt summaries are not implemented until Payment_Attempt "
+            "exists in Supabase."
         )
-
-        total_attempts = len(attempts)
-        failed_attempts = sum(1 for a in attempts if a.status == "failed")
-        succeeded_attempts = sum(1 for a in attempts if a.status == "succeeded")
-
-        total_amount = sum(float(a.amount) for a in attempts if a.status == "succeeded")
-        failed_amount = sum(float(a.amount) for a in attempts if a.status == "failed")
-
-        last_attempt = attempts[0] if attempts else None
-
-        return {
-            "total_attempts": total_attempts,
-            "failed_attempts": failed_attempts,
-            "succeeded_attempts": succeeded_attempts,
-            "total_amount_collected": total_amount,
-            "total_amount_failed": failed_amount,
-            "last_attempt": last_attempt.to_dict() if last_attempt else None,
-        }

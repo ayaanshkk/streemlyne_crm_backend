@@ -32,6 +32,7 @@ Environment variables for Stripe price IDs (set before running in production):
 ─────────────────────────────────────────────────────────────────────────────
 """
 
+import logging
 import os
 import sys
 
@@ -43,6 +44,8 @@ from models import (
     PermissionCatalog, RoleMaster, RolePermissionMapping,
     CurrencyMaster,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def seed_modules():
@@ -130,8 +133,10 @@ def seed_subscription_plans():
     stripe_price_pro     = os.environ.get('STRIPE_PRICE_PRO')     or None
 
     if not stripe_price_starter:
+        logger.warning("STRIPE_PRICE_STARTER not set - Starter plan checkout will fail")
         print("  ⚠  STRIPE_PRICE_STARTER not set — stripe_price_id will be null for Starter plan")
     if not stripe_price_pro:
+        logger.warning("STRIPE_PRICE_PRO not set - Pro plan checkout will fail")
         print("  ⚠  STRIPE_PRICE_PRO not set — stripe_price_id will be null for Pro plan")
 
     plans = [

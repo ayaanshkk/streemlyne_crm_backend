@@ -245,16 +245,13 @@ def create_app(test_config=None):
         CustomerDocuments,
         CustomerPasswordReset,
         DesignationMaster,
-        DunningConfig,
         EmployeeMaster,
         EnergyContractMaster,
         InvoiceDetails,
         InvoiceMaster,
         ModuleMaster,
-        NotificationLog,
-        NotificationPreference,
         OpportunityDetails,
-        PendingPlanChange,
+        ProcessedWebhookEvent,
         PermissionCatalog,
         ProjectDetails,
         ProposalDetails,
@@ -265,7 +262,6 @@ def create_app(test_config=None):
         StageMaster,
         SubscriptionInvoice,
         SubscriptionModuleMapping,
-        SubscriptionPause,
         SubscriptionPlan,
         SupplierMaster,
         TaxMaster,
@@ -276,7 +272,6 @@ def create_app(test_config=None):
         UserMaster,
         UserRoleMapping,
         CaseDocuments,
-        PaymentAttempt,
         Assignment,
     )
 
@@ -325,6 +320,26 @@ def create_app(test_config=None):
 
     for bp in blueprints:
         app.register_blueprint(bp, url_prefix=f"/api{bp.url_prefix}")
+
+    from middleware.subscription_middleware import enforce_subscription
+
+    app.before_request(enforce_subscription)
+
+    # [I2-FIX] Activate rate limiter after all blueprints are registered.
+    # configure_limiter(app) attaches the Limiter to the Flask app and registers
+    # route-specific overrides (e.g. tighter limits on checkout/cancel endpoints).
+    # Default: 100 req/min per user (PRD §8). Set RATELIMIT_STORAGE_URI in .env
+    # to "redis://localhost:6379/0" for multi-worker production deployments.
+    try:
+        from rate_limiter import configure_limiter
+    except ImportError:
+        app.logger.warning(
+            "[RATE_LIMITER] flask-limiter not installed - rate limiting disabled. "
+            "Run: pip install flask-limiter"
+        )
+    else:
+        configure_limiter(app)
+        print("[ok] Rate limiter active (100 req/min per user)")
 
     print("[ok] All blueprints registered")
 

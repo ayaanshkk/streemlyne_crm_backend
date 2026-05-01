@@ -20,8 +20,6 @@ from flask import current_app
 
 from database import db
 from models import (
-    NotificationPreference,
-    NotificationLog,
     TenantMaster,
     TenantSubscription,
 )
@@ -51,28 +49,16 @@ class NotificationService:
 
         Returns list of preference dicts, including defaults for types not explicitly set.
         """
-        prefs = (
-            NotificationPreference.query
-            .filter_by(tenant_id=tenant_id)
-            .all()
-        )
-
-        prefs_map = {p.notification_type: p.to_dict() for p in prefs}
-
-        result = []
-        for notif_type in self.NOTIFICATION_TYPES:
-            if notif_type in prefs_map:
-                result.append(prefs_map[notif_type])
-            else:
-                result.append({
-                    "notification_type": notif_type,
-                    "email_enabled": True,
-                    "in_app_enabled": True,
-                    "sms_enabled": False,
-                    "is_default": True,
-                })
-
-        return result
+        return [
+            {
+                "notification_type": notif_type,
+                "email_enabled": True,
+                "in_app_enabled": True,
+                "sms_enabled": False,
+                "is_default": True,
+            }
+            for notif_type in self.NOTIFICATION_TYPES
+        ]
 
     def update_preferences(
         self,
@@ -89,32 +75,10 @@ class NotificationService:
         Returns:
             True if successful
         """
-        for pref_data in preferences:
-            notification_type = pref_data.get("notification_type")
-            if not notification_type:
-                continue
-
-            pref = NotificationPreference.query.filter_by(
-                tenant_id=tenant_id,
-                notification_type=notification_type,
-            ).first()
-
-            if pref:
-                pref.email_enabled = bool(pref_data.get("email_enabled", pref.email_enabled))
-                pref.in_app_enabled = bool(pref_data.get("in_app_enabled", pref.in_app_enabled))
-                pref.sms_enabled = bool(pref_data.get("sms_enabled", pref.sms_enabled))
-            else:
-                pref = NotificationPreference(
-                    tenant_id=tenant_id,
-                    notification_type=notification_type,
-                    email_enabled=bool(pref_data.get("email_enabled", True)),
-                    in_app_enabled=bool(pref_data.get("in_app_enabled", True)),
-                    sms_enabled=bool(pref_data.get("sms_enabled", False)),
-                )
-                db.session.add(pref)
-
-        db.session.commit()
-        return True
+        raise NotImplementedError(
+            "Notification preferences are not implemented until "
+            "Notification_Preference exists in Supabase."
+        )
 
     def _should_send(
         self,
@@ -133,16 +97,7 @@ class NotificationService:
         Returns:
             True if notification should be sent
         """
-        pref = NotificationPreference.query.filter_by(
-            tenant_id=tenant_id,
-            notification_type=notification_type,
-        ).first()
-
-        if not pref:
-            return True
-
-        channel_field = f"{channel}_enabled"
-        return getattr(pref, channel_field, True)
+        return True
 
     def _log_notification(
         self,
@@ -153,7 +108,7 @@ class NotificationService:
         subject: Optional[str] = None,
         body: Optional[str] = None,
         status: str = "sent",
-    ) -> NotificationLog:
+    ) -> Dict:
         """
         Log a notification to the audit trail.
 
@@ -169,19 +124,18 @@ class NotificationService:
         Returns:
             The created NotificationLog
         """
-        log = NotificationLog(
-            tenant_id=tenant_id,
-            notification_type=notification_type,
-            channel=channel,
-            recipient=recipient,
-            subject=subject,
-            body=body,
-            status=status,
-            sent_at=datetime.utcnow() if status == "sent" else None,
-        )
-        db.session.add(log)
-        db.session.commit()
-        return log
+        payload = {
+            "tenant_id": tenant_id,
+            "notification_type": notification_type,
+            "channel": channel,
+            "recipient": recipient,
+            "subject": subject,
+            "body": body,
+            "status": status,
+            "sent_at": datetime.utcnow().isoformat() if status == "sent" else None,
+        }
+        current_app.logger.info("[NOTIFICATION] %s", payload)
+        return payload
 
     def send_email(
         self,
@@ -259,8 +213,10 @@ class NotificationService:
             current_app.config.get("BILLING_FROM_EMAIL")
             or os.environ.get("BILLING_FROM_EMAIL")
             or current_app.config.get("SALES_CONTACT_EMAIL")
-            or "billing@streemlyne.com"
         )
+        if not default_sender:
+            current_app.logger.warning("[NOTIFICATION] Email sender is not configured")
+            return False
         unsubscribe_url = (
             current_app.config.get("EMAIL_UNSUBSCRIBE_URL")
             or os.environ.get("EMAIL_UNSUBSCRIBE_URL")
@@ -587,11 +543,7 @@ The StreemLyne Team
         Returns:
             List of notification log dicts
         """
-        logs = (
-            NotificationLog.query
-            .filter_by(tenant_id=tenant_id)
-            .order_by(NotificationLog.created_at.desc())
-            .limit(limit)
-            .all()
+        raise NotImplementedError(
+            "Notification history is not implemented until Notification_Log "
+            "exists in Supabase."
         )
-        return [log.to_dict() for log in logs]

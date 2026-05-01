@@ -32,17 +32,13 @@ Set that in your .env / config.py and it will be picked up automatically.
 
 LIMITS IN USE
 ─────────────
-Global default:    200 requests / minute  per user (or IP if no user)
+Global default:    100 requests / minute  per user (or IP if no user)
 Stripe webhook:    unlimited (Stripe's own retry logic handles back-off)
 Checkout:          10 requests / minute   per user  (prevent session spam)
 Cancel:            5  requests / minute   per user
 Auth (login):      20 requests / minute   per IP    (brute-force protection)
 
 PRD §8 requirement: "100 requests / minute per user".
-The default of 200 req/min is deliberately more generous than the PRD's
-100 req/min floor so normal dashboard usage (multiple parallel API calls
-per page load) is never throttled under normal conditions.  Tighten to
-100 req/min by changing DEFAULT_LIMITS below if preferred.
 """
 
 import os
@@ -74,7 +70,7 @@ def _rate_limit_key() -> str:
 
 limiter = Limiter(
     key_func     = _rate_limit_key,
-    default_limits = ["200 per minute"],            # PRD §8 floor; tighten here
+    default_limits = ["100 per minute"],
     storage_uri  = (
         os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
     ),

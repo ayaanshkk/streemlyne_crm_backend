@@ -39,6 +39,7 @@ TEST_TABLES = [
     NotificationLog.__table__,
     SubscriptionPause.__table__,
     PendingPlanChange.__table__,
+    ProcessedWebhookEvent.__table__,
     EmployeeMaster.__table__,
     RoleMaster.__table__,
     UserMaster.__table__,

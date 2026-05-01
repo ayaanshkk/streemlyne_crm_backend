@@ -10,12 +10,12 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone, date
 from typing import Optional, List, Dict
+from urllib.parse import urlsplit
 
 from flask import current_app
 
 from database import db
 from models import (
-    PaymentAttempt,
     TenantSubscription,
     TenantMaster,
     SubscriptionPlan,
@@ -29,6 +29,71 @@ class PaymentService:
 
     def __init__(self):
         pass
+
+    def ensure_stripe_customer(
+        self,
+        tenant: TenantMaster,
+        *,
+        commit: bool = True,
+        require_stripe: bool = True,
+    ) -> Optional[str]:
+        """Return a Stripe customer ID for the tenant, creating one if needed."""
+        if tenant.stripe_customer_id:
+            return tenant.stripe_customer_id
+
+        try:
+            import stripe
+        except ImportError:
+            if require_stripe:
+                raise ImportError("stripe package not installed. Run: pip install stripe")
+            return None
+
+        stripe_key = (
+            current_app.config.get("STRIPE_SECRET_KEY")
+            or os.environ.get("STRIPE_SECRET_KEY")
+        )
+        if not stripe_key:
+            if require_stripe:
+                raise ValueError("STRIPE_SECRET_KEY is not configured")
+            return None
+
+        stripe.api_key = stripe_key
+
+        customer = stripe.Customer.create(
+            name=tenant.tenant_company_name,
+            metadata={"tenant_id": tenant.tenant_id},
+        )
+        tenant.stripe_customer_id = customer.id
+
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+
+        return customer.id
+
+    def _validated_portal_return_url(
+        self,
+        candidate_url: Optional[str],
+        default_return_url: str,
+    ) -> str:
+        if not candidate_url:
+            return default_return_url
+
+        try:
+            parsed = urlsplit(candidate_url)
+        except ValueError as exc:
+            raise ValueError("return_url is not a valid URL") from exc
+
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("return_url must be an absolute http(s) URL")
+
+        allowed_origins = set(current_app.config.get("STRIPE_ALLOWED_RETURN_ORIGINS") or ())
+        candidate_origin = f"{parsed.scheme}://{parsed.netloc}"
+        if candidate_origin not in allowed_origins:
+            raise ValueError("return_url origin is not allowed")
+
+        return candidate_url
 
     def create_checkout_session(self, tenant_id: str, plan: SubscriptionPlan) -> Dict:
         """
@@ -59,28 +124,19 @@ class PaymentService:
         success_url = (
             current_app.config.get("STRIPE_SUCCESS_URL")
             or os.environ.get("STRIPE_SUCCESS_URL")
-            or "http://localhost:3000/subscription/success?session_id={CHECKOUT_SESSION_ID}"
         )
         cancel_url = (
             current_app.config.get("STRIPE_CANCEL_URL")
             or os.environ.get("STRIPE_CANCEL_URL")
-            or "http://localhost:3000/subscription-required"
         )
+        if not success_url or not cancel_url:
+            raise ValueError("STRIPE_SUCCESS_URL and STRIPE_CANCEL_URL must be configured")
 
         tenant = db.session.get(TenantMaster, tenant_id)
         if not tenant:
             raise ValueError(f"Tenant {tenant_id} not found")
 
-        if tenant.stripe_customer_id:
-            customer_id = tenant.stripe_customer_id
-        else:
-            customer = stripe.Customer.create(
-                name=tenant.tenant_company_name,
-                metadata={"tenant_id": tenant_id},
-            )
-            customer_id = customer.id
-            tenant.stripe_customer_id = customer_id
-            db.session.commit()
+        customer_id = self.ensure_stripe_customer(tenant)
 
         try:
             session = stripe.checkout.Session.create(
@@ -95,7 +151,7 @@ class PaymentService:
                     "tenant_id": tenant_id,
                     "plan_code": plan.subscription_code,
                 },
-                idempotency_key=f"checkout:{tenant_id}:{plan.subscription_id}",
+                idempotency_key=f"checkout-{tenant_id}-{plan.subscription_code}",
             )
         except stripe.error.StripeError as exc:
             current_app.logger.error(
@@ -118,7 +174,7 @@ class PaymentService:
         invoice_id: Optional[int] = None,
         failure_reason: Optional[str] = None,
         failure_code: Optional[str] = None,
-    ) -> PaymentAttempt:
+    ) -> Dict:
         """
         Log a payment attempt for tracking and retry logic.
 
@@ -136,33 +192,9 @@ class PaymentService:
         Returns:
             The created PaymentAttempt record
         """
-        existing_attempts = (
-            db.session.query(PaymentAttempt)
-            .filter_by(
-                tenant_id=tenant_id,
-                subscription_id=subscription_id,
-                stripe_payment_intent_id=stripe_payment_intent_id,
-            )
-            .count()
+        raise NotImplementedError(
+            "Payment attempts are not implemented until Payment_Attempt exists in Supabase."
         )
-
-        attempt = PaymentAttempt(
-            tenant_id=tenant_id,
-            subscription_id=subscription_id,
-            stripe_payment_intent_id=stripe_payment_intent_id,
-            invoice_id=invoice_id,
-            attempt_number=existing_attempts + 1,
-            amount=amount,
-            currency_id=currency_id,
-            status=status,
-            failure_reason=failure_reason,
-            failure_code=failure_code,
-        )
-
-        db.session.add(attempt)
-        db.session.commit()
-
-        return attempt
 
     def get_payment_history(
         self,
@@ -176,48 +208,21 @@ class PaymentService:
         Returns:
             Dict with 'items', 'total', 'page', 'per_page', 'pages'
         """
-        query = (
-            db.session.query(PaymentAttempt)
-            .filter_by(tenant_id=tenant_id)
-            .order_by(PaymentAttempt.created_at.desc())
+        raise NotImplementedError(
+            "Payment history is not implemented until Payment_Attempt exists in Supabase."
         )
-
-        total = query.count()
-        attempts = query.offset((page - 1) * per_page).limit(per_page).all()
-
-        return {
-            "items": [att.to_dict() for att in attempts],
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "pages": (total + per_page - 1) // per_page if per_page > 0 else 0,
-        }
 
     def get_recent_attempts(
         self,
         tenant_id: str,
         limit: int = 5,
-    ) -> List[PaymentAttempt]:
+    ) -> List[Dict]:
         """Get the most recent payment attempts for a tenant."""
-        return (
-            db.session.query(PaymentAttempt)
-            .filter_by(tenant_id=tenant_id)
-            .order_by(PaymentAttempt.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        return []
 
     def get_failed_attempts_count(self, tenant_id: str, subscription_id: int) -> int:
         """Get the count of failed attempts for a subscription."""
-        return (
-            db.session.query(PaymentAttempt)
-            .filter_by(
-                tenant_id=tenant_id,
-                subscription_id=subscription_id,
-                status="failed",
-            )
-            .count()
-        )
+        return 0
 
     def create_setup_intent(self, tenant_id: str) -> Dict:
         """
@@ -241,17 +246,7 @@ class PaymentService:
         if not tenant:
             raise ValueError(f"Tenant {tenant_id} not found")
 
-        customer_id = None
-        if tenant.stripe_customer_id:
-            customer_id = tenant.stripe_customer_id
-        else:
-            customer = stripe.Customer.create(
-                name=tenant.tenant_company_name,
-                metadata={"tenant_id": tenant_id},
-            )
-            customer_id = customer.id
-            tenant.stripe_customer_id = customer_id
-            db.session.commit()
+        customer_id = self.ensure_stripe_customer(tenant)
 
         try:
             setup_intent = stripe.SetupIntent.create(
@@ -296,12 +291,17 @@ class PaymentService:
         default_return_url = (
             current_app.config.get("STRIPE_PORTAL_RETURN_URL")
             or os.environ.get("STRIPE_PORTAL_RETURN_URL")
-            or "http://localhost:3000/subscription/manage"
+        )
+        if not default_return_url:
+            raise ValueError("STRIPE_PORTAL_RETURN_URL is not configured")
+        portal_return_url = self._validated_portal_return_url(
+            return_url,
+            default_return_url,
         )
 
         session = stripe.billing_portal.Session.create(
             customer=tenant.stripe_customer_id,
-            return_url=return_url or default_return_url,
+            return_url=portal_return_url,
         )
         return {"portal_url": session.url}
 
@@ -442,6 +442,10 @@ class PaymentService:
         Returns:
             Dict with success status and payment intent details or error
         """
+        raise NotImplementedError(
+            "Manual payment retry is not implemented until Payment_Attempt exists in Supabase."
+        )
+
         try:
             import stripe
         except ImportError:
@@ -540,12 +544,8 @@ class PaymentService:
             invoice.updated_at = datetime.utcnow()
             db.session.commit()
 
-            self.update_subscription_payment_status(tenant_id, "past_due")
-
-            from services.dunning_service import DunningService
             from services.notification_service import NotificationService
 
-            DunningService().schedule_retry(tenant_id, invoice_id, attempt.attempt_number)
             NotificationService().send_payment_failed(
                 tenant_id=tenant_id,
                 attempt_number=attempt.attempt_number,
@@ -570,7 +570,7 @@ class PaymentService:
 
         Args:
             tenant_id: The tenant's unique identifier
-            status: 'active', 'past_due', 'canceled'
+            status: 'active', 'expired', 'canceled'
 
         Returns:
             The updated TenantSubscription or None
@@ -587,9 +587,6 @@ class PaymentService:
 
         subscription.status = status
         subscription.is_active = status not in {"expired", "canceled"}
-        if status == "active":
-            subscription.payment_attempts = 0
-            subscription.next_retry_date = None
         subscription.updated_at = datetime.utcnow()
         db.session.commit()
 
@@ -638,8 +635,6 @@ class PaymentService:
             "recent_attempts": [att.to_dict() for att in recent_attempts],
             "failed_attempts_count": failed_count,
             "subscription_status": subscription.status if subscription else None,
-            "is_past_due": subscription.status == "past_due" if subscription else False,
-            "next_retry_date": subscription.next_retry_date.isoformat() if subscription and subscription.next_retry_date else None,
             "next_billing_date": next_billing_date,
             "next_billing_amount": float(plan.price) if plan and plan.price is not None else None,
             "currency_code": plan.currency.currency_code if plan and plan.currency else None,

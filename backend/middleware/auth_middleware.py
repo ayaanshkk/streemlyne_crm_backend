@@ -1,21 +1,13 @@
 # middleware/auth_middleware.py
 """
 Auth Middleware
-Handles JWT validation and subscription enforcement for every authenticated request.
+Handles JWT validation and request-scoped user context for authenticated requests.
 
 CHANGES vs previous version
 ─────────────────────────────────────────────────────────────────────────────
-[MW-001] Subscription gate added to auth_required.
-         After JWT validation and tenant-active check, we now call
-         SubscriptionService.tenant_has_access(tenant_id).
-         Returns HTTP 402 with a redirect hint when the tenant's subscription
-         is expired or cancelled so the frontend can redirect to
-         /subscription-required.
-
-[MW-002] SUBSCRIPTION_EXEMPT_PATHS — paths that bypass the subscription gate.
-         Subscription-management endpoints (/api/subscriptions/me/*) and the
-         Stripe webhook must be reachable even when the subscription is expired,
-         otherwise an expired tenant can never upgrade or receive webhook events.
+[MW-001] auth_required now only authenticates and populates flask.g.
+         Subscription enforcement lives in subscription_middleware.py so there
+         is a single gate and a single exemption list.
 
 [MW-003] g.tenant_id is now a string throughout (matches TenantMaster.tenant_id
          character varying PK).
@@ -33,31 +25,13 @@ CHANGES vs previous version
 """
 
 from functools import wraps
-from typing import Optional, cast  # [MW-FIX] cast was missing — caused ImportError
+from typing import Optional
 
 import jwt
 from flask import current_app, g, jsonify, request
 
 from database import db
 from models import EmployeeMaster, TenantMaster, UserMaster
-
-# ---------------------------------------------------------------------------
-# [MW-002] Paths that skip the subscription access gate.
-# Matching is prefix-based: any request.path that STARTS WITH one of these
-# strings will bypass the gate.
-# ---------------------------------------------------------------------------
-_SUBSCRIPTION_EXEMPT_PREFIXES = (
-    "/api/subscriptions/me",        # GET status, POST checkout, POST cancel
-    "/api/subscriptions/stripe",    # Stripe webhook — no auth at all
-    "/api/subscriptions/plans",     # Plan catalogue — read-only reference data
-    "/api/auth/",                   # All auth endpoints are public
-    "/api/tenant/info",             # Own-tenant read (non-billing)
-)
-
-#: Role names that are considered "owners" for billing/subscription actions.
-#: [MW-004] Defined at module level so it's shared with tests.
-_OWNER_ROLE_NAMES = frozenset({"Admin", "Super Admin", "Tenant Owner"})
-
 
 def get_current_user() -> Optional[UserMaster]:
     return getattr(g, "current_user", None)
@@ -128,11 +102,6 @@ def _resolve_user_from_token(token: str):
     return user, employee, tenant, None
 
 
-def _subscription_is_exempt(path: str) -> bool:
-    """Return True if the request path should skip the subscription gate."""
-    return any(path.startswith(prefix) for prefix in _SUBSCRIPTION_EXEMPT_PREFIXES)
-
-
 def auth_required(f):
     """
     Decorator: validates JWT and enforces subscription access.
@@ -158,21 +127,6 @@ def auth_required(f):
         if err is not None:
             return err
 
-        # ── [MW-001] Subscription gate ──────────────────────────────────────
-        if not _subscription_is_exempt(request.path):
-            from services.subscription_service import SubscriptionService
-            if not SubscriptionService.tenant_has_access(employee.tenant_id):
-                return jsonify({
-                    "error": "Subscription required",
-                    "message": (
-                        "Your subscription has expired or been cancelled. "
-                        "Please upgrade to continue using the application."
-                    ),
-                    "redirect": "/subscription-required",
-                    "code": "SUBSCRIPTION_EXPIRED",
-                }), 402
-        # ───────────────────────────────────────────────────────────────────
-
         g.current_user     = user
         g.current_employee = employee
         g.user_id          = user.user_id
@@ -184,14 +138,13 @@ def auth_required(f):
     return decorated_function
 
 
-def require_tenant_owner(f):
+def require_owner(f):
     """
     [MW-004] Decorator: must be applied AFTER @auth_required.
-    Returns 403 if the authenticated user does not hold an owner-level role.
+    Returns 403 if the authenticated user is not the tenant owner.
 
     PRD §2.2 — only the Tenant Owner may upgrade, cancel, or manage billing.
 
-    Role names checked: Admin, Super Admin, Tenant Owner.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -199,19 +152,15 @@ def require_tenant_owner(f):
         if user is None:
             return jsonify({"error": "Unauthenticated"}), 401
 
-        # [MW-FIX] cast is now correctly imported at the top of this file.
-        roles = cast(list, user.roles or [])
-        role_names = {r.role_name for r in roles if hasattr(r, "role_name")}
-
-        if not role_names.intersection(_OWNER_ROLE_NAMES):
-            return jsonify({
-                "error": "Forbidden",
-                "message": "Only a tenant administrator can manage the subscription.",
-            }), 403
+        if not getattr(user, "is_owner", False):
+            return jsonify({"error": "owner_required"}), 403
 
         return f(*args, **kwargs)
 
     return decorated
+
+
+require_tenant_owner = require_owner
 
 
 # ---------------------------------------------------------------------------
