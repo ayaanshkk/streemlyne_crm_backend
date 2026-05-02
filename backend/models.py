@@ -987,6 +987,9 @@ class UserMaster(db.Model):
     password    = db.Column(db.String(255))
     created_at  = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at  = db.Column(db.Date, onupdate=datetime.utcnow)
+    tenant_id         = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
+    is_active         = db.Column(db.Boolean, default=False)
+    is_invite_pending = db.Column(db.Boolean, default=False)
 
     # Relationships
     employee = db.relationship('EmployeeMaster', back_populates='user')
@@ -1041,7 +1044,7 @@ class UserMaster(db.Model):
             # True when the user holds at least one owner-level role — used by
             # the frontend to show/hide the Billing menu (PRD §2.2, Design Doc §9)
             'is_owner':      self.is_owner,
-            'is_active':     True,
+            'is_active':     self.is_active,
             'is_verified':   True,
             'created_at':    self.created_at.isoformat() if self.created_at else None,
             'updated_at':    self.updated_at.isoformat() if self.updated_at else None,
@@ -1482,41 +1485,144 @@ class SubscriptionInvoice(db.Model):
         }
 
 
-# TODO: enable these future subscription ORM models when their tables are
-# created in the live Supabase schema. They are intentionally not db.Model
-# subclasses because Payment_Attempt, Dunning_Config, Notification_Preference,
-# Notification_Log, Subscription_Pause, and Pending_Plan_Change are absent from
-# backend/New db schema.sql and would otherwise be queryable in production.
-class _DisabledSubscriptionFeature:
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "This subscription feature is not implemented because its Supabase "
-            "table is not present in the live schema."
-        )
+class PaymentAttempt(db.Model):
+    __tablename__ = 'Payment_Attempt'
+    __table_args__ = (
+        db.Index('idx_payment_attempt_tenant', 'tenant_id', 'created_at'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    payment_attempt_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    subscription_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
+    stripe_payment_intent_id = db.Column(db.String)
+    invoice_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Invoice.invoice_id'))
+    attempt_number = db.Column(db.Integer, nullable=False)
+    amount = db.Column(db.Numeric, nullable=False)
+    currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
+    status = db.Column(db.String, nullable=False)
+    failure_reason = db.Column(db.Text)
+    failure_code = db.Column(db.String)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='payment_attempts')
+    subscription = db.relationship('TenantSubscription', backref='payment_attempts')
+    invoice = db.relationship('SubscriptionInvoice', backref='payment_attempts')
+    currency = db.relationship('CurrencyMaster', backref='payment_attempts')
 
 
-class PaymentAttempt(_DisabledSubscriptionFeature):
-    pass
+class DunningConfig(db.Model):
+    __tablename__ = 'Dunning_Config'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    config_id = db.Column(
+        db.SmallInteger().with_variant(db.Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    plan_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
+    retry_schedule = db.Column(db.JSON, nullable=False, default=lambda: [3, 7])
+    max_retries = db.Column(db.Integer, default=3)
+    grace_period_days = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), onupdate=datetime.utcnow)
+
+    plan = db.relationship('SubscriptionPlan', backref='dunning_configs')
 
 
-class DunningConfig(_DisabledSubscriptionFeature):
-    pass
+class NotificationPreference(db.Model):
+    __tablename__ = 'Notification_Preference'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'notification_type', name='uq_notification_pref_tenant_type'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    preference_id = db.Column(
+        db.SmallInteger().with_variant(db.Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    notification_type = db.Column(db.String, nullable=False)
+    email_enabled = db.Column(db.Boolean, default=True)
+    in_app_enabled = db.Column(db.Boolean, default=True)
+    sms_enabled = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='notification_preferences')
 
 
-class NotificationPreference(_DisabledSubscriptionFeature):
-    pass
+class NotificationLog(db.Model):
+    __tablename__ = 'Notification_Log'
+    __table_args__ = (
+        db.Index('idx_notification_log_tenant', 'tenant_id', 'created_at'),
+        {'schema': 'StreemLyne_MT'},
+    )
+
+    notification_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    notification_type = db.Column(db.String, nullable=False)
+    channel = db.Column(db.String, nullable=False)
+    recipient = db.Column(db.String)
+    subject = db.Column(db.Text)
+    body = db.Column(db.Text)
+    status = db.Column(db.String, default='pending')
+    sent_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    tenant = db.relationship('TenantMaster', backref='notification_logs')
 
 
-class NotificationLog(_DisabledSubscriptionFeature):
-    pass
+class SubscriptionPause(db.Model):
+    __tablename__ = 'Subscription_Pause'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    pause_id = db.Column(
+        db.SmallInteger().with_variant(db.Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    tenant_subscription_mapping_id = db.Column(
+        db.SmallInteger,
+        db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'),
+        nullable=False,
+    )
+    paused_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    resume_at = db.Column(db.DateTime(timezone=True))
+    pause_reason = db.Column(db.String)
+    is_active = db.Column(db.Boolean, default=True)
+
+    subscription = db.relationship('TenantSubscription', backref='pauses')
 
 
-class SubscriptionPause(_DisabledSubscriptionFeature):
-    pass
+class PendingPlanChange(db.Model):
+    __tablename__ = 'Pending_Plan_Change'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
 
+    change_id = db.Column(
+        db.SmallInteger().with_variant(db.Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, unique=True)
+    current_plan_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
+    new_plan_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'), nullable=False)
+    scheduled_for = db.Column(db.Date, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), onupdate=datetime.utcnow)
 
-class PendingPlanChange(_DisabledSubscriptionFeature):
-    pass
+    tenant = db.relationship('TenantMaster', backref='pending_plan_change')
+    current_plan = db.relationship('SubscriptionPlan', foreign_keys=[current_plan_id], backref='pending_changes_from')
+    new_plan = db.relationship('SubscriptionPlan', foreign_keys=[new_plan_id], backref='pending_changes_to')
 
 
 class ProcessedWebhookEvent(db.Model):
@@ -2278,7 +2384,9 @@ def get_new_schema_models() -> list:
         'TenantMaster', 'SubscriptionPlan', 'ModuleMaster',
         'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
         # Subscription Billing (NEW)
-        'SubscriptionInvoice', 'ProcessedWebhookEvent',
+        'SubscriptionInvoice', 'PaymentAttempt', 'DunningConfig',
+        'NotificationPreference', 'NotificationLog', 'SubscriptionPause',
+        'PendingPlanChange', 'ProcessedWebhookEvent',
         # Masters
         'CountryMaster', 'CurrencyMaster', 'DesignationMaster',
         'ServicesMaster', 'UOMMaster', 'StageMaster', 'SupplierMaster',
@@ -2320,7 +2428,9 @@ __all__ = [
     'TenantMaster', 'SubscriptionPlan', 'SubscriptionPlans', 'ModuleMaster',
     'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
     # Subscription Billing (NEW)
-    'SubscriptionInvoice', 'ProcessedWebhookEvent',
+    'SubscriptionInvoice', 'PaymentAttempt', 'DunningConfig',
+    'NotificationPreference', 'NotificationLog', 'SubscriptionPause',
+    'PendingPlanChange', 'ProcessedWebhookEvent',
     # Masters
     'CountryMaster', 'CurrencyMaster', 'DesignationMaster', 'ServicesMaster',
     'UOMMaster', 'StageMaster', 'SupplierMaster', 'RoleMaster',
