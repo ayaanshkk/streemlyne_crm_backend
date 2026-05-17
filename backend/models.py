@@ -988,7 +988,7 @@ class UserMaster(db.Model):
     created_at  = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at  = db.Column(db.Date, onupdate=datetime.utcnow)
     tenant_id         = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
-    is_active         = db.Column(db.Boolean, default=False)
+    is_active = db.Column(db.Boolean, default=True)
     is_invite_pending = db.Column(db.Boolean, default=False)
 
     # Relationships

@@ -121,6 +121,9 @@ CREATE TABLE StreemLyne_MT.Client_Master (
   is_cleansed boolean DEFAULT false,
   stage character varying,
   is_cleansing boolean DEFAULT false,
+  project_types jsonb,
+  client_type character varying,
+  is_draft boolean NOT NULL DEFAULT false,
   CONSTRAINT Client_Master_pkey PRIMARY KEY (client_id),
   CONSTRAINT Client_Master_country_id_fkey FOREIGN KEY (country_id) REFERENCES StreemLyne_MT.Country_Master(country_id),
   CONSTRAINT Client_Master_default_currency_id_fkey FOREIGN KEY (default_currency_id) REFERENCES StreemLyne_MT.Currency_Master(currency_id),
@@ -170,7 +173,10 @@ CREATE TABLE StreemLyne_MT.Customer_Documents (
   uploaded_at timestamp without time zone DEFAULT now(),
   property_id integer,
   document_category character varying,
+  project_id integer,
+  mime_type character varying,
   CONSTRAINT Customer_Documents_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_customer_documents_project FOREIGN KEY (project_id) REFERENCES StreemLyne_MT.Project_Details(project_id),
   CONSTRAINT fk_customer_documents_property FOREIGN KEY (property_id) REFERENCES StreemLyne_MT.Property_Master(property_id)
 );
 CREATE TABLE StreemLyne_MT.Customer_Form_Submissions (
@@ -207,20 +213,6 @@ CREATE TABLE StreemLyne_MT.Customer_Password_Reset (
   used boolean DEFAULT false,
   created_at timestamp without time zone DEFAULT now(),
   CONSTRAINT Customer_Password_Reset_pkey PRIMARY KEY (id)
-);
-CREATE TABLE StreemLyne_MT.Data_Imports (
-  import_id integer NOT NULL DEFAULT nextval('"StreemLyne_MT"."Data_Imports_import_id_seq"'::regclass),
-  tenant_id character varying NOT NULL,
-  filename character varying NOT NULL,
-  import_type character varying NOT NULL,
-  status character varying DEFAULT 'pending'::character varying CHECK (status::text = ANY (ARRAY['pending'::character varying, 'processing'::character varying, 'completed'::character varying, 'failed'::character varying]::text[])),
-  records_processed integer DEFAULT 0,
-  records_failed integer DEFAULT 0,
-  error_log text,
-  imported_by character varying,
-  created_at timestamp without time zone DEFAULT now(),
-  completed_at timestamp without time zone,
-  CONSTRAINT Data_Imports_pkey PRIMARY KEY (import_id)
 );
 CREATE TABLE StreemLyne_MT.Designation_Master (
   designation_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -464,6 +456,7 @@ CREATE TABLE StreemLyne_MT.Opportunity_Details (
   eve_weekend_charge numeric,
   display_order integer,
   is_cleansed boolean DEFAULT false,
+  is_draft boolean NOT NULL DEFAULT false,
   CONSTRAINT Opportunity_Details_pkey PRIMARY KEY (opportunity_id),
   CONSTRAINT fk_opportunity_details_supplier FOREIGN KEY (supplier_id) REFERENCES StreemLyne_MT.Supplier_Master(supplier_id),
   CONSTRAINT fk_opportunity_tenant FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
@@ -471,6 +464,25 @@ CREATE TABLE StreemLyne_MT.Opportunity_Details (
   CONSTRAINT Opportunity_Details_client_id_fkey FOREIGN KEY (client_id) REFERENCES StreemLyne_MT.Client_Master(client_id),
   CONSTRAINT Opportunity_Details_opportunity_owner_employee_id_fkey FOREIGN KEY (opportunity_owner_employee_id) REFERENCES StreemLyne_MT.Employee_Master(employee_id),
   CONSTRAINT Opportunity_Details_currency_id_fkey FOREIGN KEY (currency_id) REFERENCES StreemLyne_MT.Currency_Master(currency_id)
+);
+CREATE TABLE StreemLyne_MT.Payment_Attempt (
+  payment_attempt_id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  tenant_id character varying NOT NULL,
+  subscription_id smallint NOT NULL,
+  stripe_payment_intent_id character varying,
+  invoice_id smallint,
+  attempt_number integer NOT NULL,
+  amount numeric NOT NULL,
+  currency_id smallint NOT NULL,
+  status character varying NOT NULL,
+  failure_reason text,
+  failure_code character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT Payment_Attempt_pkey PRIMARY KEY (payment_attempt_id),
+  CONSTRAINT payment_attempt_tenant_fkey FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
+  CONSTRAINT payment_attempt_subscription_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Tenant_Subscription(tenant_subscription_mapping_id),
+  CONSTRAINT payment_attempt_invoice_fkey FOREIGN KEY (invoice_id) REFERENCES StreemLyne_MT.Subscription_Invoice(invoice_id),
+  CONSTRAINT payment_attempt_currency_fkey FOREIGN KEY (currency_id) REFERENCES StreemLyne_MT.Currency_Master(currency_id)
 );
 CREATE TABLE StreemLyne_MT.Permission_Catalog (
   permission_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -491,7 +503,20 @@ CREATE TABLE StreemLyne_MT.PriceList_Master (
   unit character varying DEFAULT 'each'::character varying,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  item_code character varying,
+  door_type character varying,
+  width integer,
+  height integer,
+  depth integer,
+  brand character varying,
   CONSTRAINT PriceList_Master_pkey PRIMARY KEY (pricelist_id)
+);
+CREATE TABLE StreemLyne_MT.Processed_Webhook_Event (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  stripe_event_id character varying NOT NULL UNIQUE,
+  event_type character varying,
+  processed_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT Processed_Webhook_Event_pkey PRIMARY KEY (id)
 );
 CREATE TABLE StreemLyne_MT.Project_Details (
   project_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -499,7 +524,7 @@ CREATE TABLE StreemLyne_MT.Project_Details (
   opportunity_id smallint,
   project_title character varying NOT NULL,
   project_description character varying,
-  start_date date NOT NULL,
+  start_date date,
   end_date date,
   employee_id smallint NOT NULL,
   created_at timestamp without time zone DEFAULT now(),
@@ -521,6 +546,9 @@ CREATE TABLE StreemLyne_MT.Project_Details (
   priority character varying DEFAULT 'Medium'::character varying,
   notes text,
   stage_id smallint,
+  project_type character varying,
+  stage character varying,
+  date_of_measure date,
   CONSTRAINT Project_Details_pkey PRIMARY KEY (project_id),
   CONSTRAINT fk_project_stage FOREIGN KEY (stage_id) REFERENCES StreemLyne_MT.Stage_Master(stage_id),
   CONSTRAINT Project_Details_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES StreemLyne_MT.Employee_Master(employee_id),
@@ -698,6 +726,9 @@ CREATE TABLE StreemLyne_MT.Quotation_Items (
   needs_manual_pricing boolean DEFAULT false,
   pricelist_id integer,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  discount_type character varying DEFAULT 'none'::character varying,
+  discount_value numeric DEFAULT 0,
+  discounted_amount numeric,
   CONSTRAINT Quotation_Items_pkey PRIMARY KEY (item_id),
   CONSTRAINT fk_quotation_item_quotation FOREIGN KEY (quotation_id) REFERENCES StreemLyne_MT.Quotations(quotation_id),
   CONSTRAINT fk_quotation_item_pricelist FOREIGN KEY (pricelist_id) REFERENCES StreemLyne_MT.PriceList_Master(pricelist_id)
@@ -715,10 +746,28 @@ CREATE TABLE StreemLyne_MT.Quotations (
   employee_id smallint,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  customer_name character varying,
+  customer_address text,
+  customer_phone character varying,
+  customer_email character varying,
+  vat_percentage numeric DEFAULT 20.00,
   CONSTRAINT Quotations_pkey PRIMARY KEY (quotation_id),
   CONSTRAINT fk_quotation_client FOREIGN KEY (client_id) REFERENCES StreemLyne_MT.Client_Master(client_id),
   CONSTRAINT fk_quotation_project FOREIGN KEY (project_id) REFERENCES StreemLyne_MT.Project_Details(project_id),
   CONSTRAINT fk_quotation_employee FOREIGN KEY (employee_id) REFERENCES StreemLyne_MT.Employee_Master(employee_id)
+);
+CREATE TABLE StreemLyne_MT.Renewal_Email_Send_Log (
+  renewal_email_send_log_id bigint NOT NULL DEFAULT nextval('"StreemLyne_MT"."Renewal_Email_Send_Log_renewal_email_send_log_id_seq"'::regclass),
+  tenant_id smallint NOT NULL,
+  energy_contract_master_id smallint NOT NULL,
+  contract_end_date date NOT NULL,
+  bucket_key character varying NOT NULL,
+  recipient_email character varying NOT NULL,
+  provider_message_id character varying,
+  status character varying NOT NULL,
+  error_message text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT Renewal_Email_Send_Log_pkey PRIMARY KEY (renewal_email_send_log_id)
 );
 CREATE TABLE StreemLyne_MT.Role_Master (
   role_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -762,6 +811,29 @@ CREATE TABLE StreemLyne_MT.Stage_Master (
   stage_type smallint NOT NULL,
   CONSTRAINT Stage_Master_pkey PRIMARY KEY (stage_id)
 );
+CREATE TABLE StreemLyne_MT.Subscription_Invoice (
+  invoice_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  tenant_id character varying NOT NULL,
+  subscription_id smallint,
+  stripe_invoice_id character varying UNIQUE,
+  invoice_number character varying NOT NULL UNIQUE,
+  amount numeric NOT NULL,
+  tax_amount numeric DEFAULT 0,
+  total_amount numeric NOT NULL,
+  currency_id smallint NOT NULL,
+  status character varying DEFAULT 'pending'::character varying,
+  period_start date,
+  period_end date,
+  invoice_pdf_url text,
+  due_date date,
+  paid_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone,
+  CONSTRAINT Subscription_Invoice_pkey PRIMARY KEY (invoice_id),
+  CONSTRAINT subscription_invoice_tenant_fkey FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
+  CONSTRAINT subscription_invoice_subscription_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Tenant_Subscription(tenant_subscription_mapping_id),
+  CONSTRAINT subscription_invoice_currency_fkey FOREIGN KEY (currency_id) REFERENCES StreemLyne_MT.Currency_Master(currency_id)
+);
 CREATE TABLE StreemLyne_MT.Subscription_Module_Mapping (
   subscription_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
   subscription_id smallint NOT NULL,
@@ -770,6 +842,16 @@ CREATE TABLE StreemLyne_MT.Subscription_Module_Mapping (
   CONSTRAINT Subscription_Module_Mapping_pkey PRIMARY KEY (subscription_module_mapping_id),
   CONSTRAINT Subscription_Module_Mapping_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id),
   CONSTRAINT Subscription_Module_Mapping_module_id_fkey FOREIGN KEY (module_id) REFERENCES StreemLyne_MT.Module_Master(module_id)
+);
+CREATE TABLE StreemLyne_MT.Subscription_Pause (
+  pause_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  tenant_subscription_mapping_id smallint NOT NULL,
+  paused_at timestamp with time zone NOT NULL,
+  resume_at timestamp with time zone,
+  pause_reason character varying,
+  is_active boolean DEFAULT true,
+  CONSTRAINT Subscription_Pause_pkey PRIMARY KEY (pause_id),
+  CONSTRAINT subscription_pause_subscription_fkey FOREIGN KEY (tenant_subscription_mapping_id) REFERENCES StreemLyne_MT.Tenant_Subscription(tenant_subscription_mapping_id)
 );
 CREATE TABLE StreemLyne_MT.Subscription_Plans (
   subscription_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
@@ -796,7 +878,7 @@ CREATE TABLE StreemLyne_MT.Supplier_Master (
   CONSTRAINT Supplier_Master_pkey PRIMARY KEY (supplier_id)
 );
 CREATE TABLE StreemLyne_MT.Tasks_Master (
-  task_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  task_id character varying NOT NULL DEFAULT gen_random_uuid(),
   tenant_id character varying NOT NULL,
   type character varying DEFAULT 'job'::character varying,
   title character varying NOT NULL,
@@ -820,6 +902,7 @@ CREATE TABLE StreemLyne_MT.Tasks_Master (
   created_at timestamp without time zone DEFAULT now(),
   updated_by_employee_id smallint,
   updated_at timestamp without time zone,
+  work_stage character varying,
   CONSTRAINT Tasks_Master_pkey PRIMARY KEY (task_id),
   CONSTRAINT fk_tasks_assigned_to FOREIGN KEY (assigned_to_employee_id) REFERENCES StreemLyne_MT.Employee_Master(employee_id),
   CONSTRAINT fk_tasks_client FOREIGN KEY (client_id) REFERENCES StreemLyne_MT.Client_Master(client_id),

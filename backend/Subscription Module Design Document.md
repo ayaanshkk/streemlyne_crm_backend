@@ -260,12 +260,10 @@ Using Stripe:
 
 ## Role-Based Access Control
 
-- Only the **Tenant Owner** can upgrade a plan, manage billing, or cancel a subscription
-- Other users within the tenant:
-  - Can view current subscription status
-  - Cannot interact with upgrade, billing, or cancellation flows
-- Unauthorized upgrade attempts return a `403` response from the backend
-- The upgrade modal and sidebar subscription button must be hidden or disabled for non-owner users
+- Any authenticated tenant user can upgrade a plan, manage billing, or cancel a subscription
+- No role restriction applies to billing actions
+- Unauthenticated upgrade attempts return a `401` response from the backend
+- The upgrade modal and sidebar subscription button are visible and enabled for all authenticated users
 
 ---
 
@@ -277,7 +275,7 @@ Using Stripe:
 | Payment success but webhook delayed   | Show a loading/pending state; do not block access until confirmed      |
 | User closes browser during checkout   | Subscription remains unchanged; no partial state written               |
 | Multiple users in same tenant         | Subscription status applies globally to all users in the tenant        |
-| Unauthorized upgrade attempt          | Return 403; show error message to non-owner users                      |
+| Unauthenticated upgrade attempt       | Return 401; redirect to login                                          |
 
 ---
 
@@ -320,7 +318,7 @@ UX:
 - clear CTAs
 - modal works correctly — dismissible during trial, locked when expired
 - no confusion
-- Tenant Owner restriction enforced on upgrade flow
+- Any authenticated user can access upgrade flow
 
 Integration:
 - Stripe works for Starter and Pro plans

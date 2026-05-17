@@ -2,7 +2,7 @@
 User Repository
 Handles user authentication database operations
 """
-
+#C:\streemlyne_crm_backend\backend\repositories\user_repository.py
 from models import UserMaster, EmployeeMaster
 from .base_repository import BaseRepository
 from typing import Optional
@@ -15,18 +15,13 @@ class UserRepository(BaseRepository):
         super().__init__(UserMaster)
     
     def get_by_username(self, user_name: str) -> Optional[UserMaster]:
-        """
-        Find user by username
-        
-        Args:
-            user_name: Username to search for
-        
-        Returns:
-            UserMaster instance or None
-        """
-        return self.session.query(UserMaster).filter(
+        query = self.session.query(UserMaster).filter(
             UserMaster.user_name == user_name
-        ).first()
+        )
+        print(f"[DEBUG] SQL: {query}")          # ← add this
+        result = query.first()
+        print(f"[DEBUG] result: {result}")      # ← add this
+        return result
     
     def get_by_employee_id(self, employee_id: int) -> Optional[UserMaster]:
         """

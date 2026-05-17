@@ -46,7 +46,6 @@ def _validate_password(password: str) -> tuple[bool, str]:
         return False, "Password must contain at least one number"
     return True, "OK"
 
-
 # ─────────────────────────────────────────
 # Internal Staff Auth  (User_Master)
 # ─────────────────────────────────────────
@@ -60,12 +59,16 @@ def login():
     Body: { "user_name": "jdoe", "password": "Secret123" }
     """
     data = request.get_json() or {}
+    print(f"[DEBUG] login attempt: user_name={data.get('user_name')!r}")
+
+
 
     if not data.get('user_name') or not data.get('password'):
         return jsonify({'error': 'user_name and password are required'}), 400
 
     from repositories import UserRepository
     user = UserRepository().authenticate(data['user_name'], data['password'])
+    print(f"[DEBUG] user found: {user}")
 
     if not user:
         return jsonify({'error': 'Invalid credentials'}), 401
@@ -363,4 +366,3 @@ def customer_reset_password():
     db.session.commit()
 
     return jsonify({'message': 'Password reset successfully'}), 200
-

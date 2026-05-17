@@ -143,7 +143,7 @@ The subscription module handles:
 │                                                                              │
 │   ┌──────────────┐     ┌──────────────────┐     ┌────────────────────────┐  │
 │   │  User Selects│────►│ POST /me/checkout│────►│ Validate:             │  │
-│   │  STARTER/PRO │     │ plan_code=STARTER│     │ • Is tenant owner?    │  │
+│   │  STARTER/PRO │     │ plan_code=STARTER│     │ • Is user authenticated? │  │
 │   │              │     │                  │     │ • Plan exists?        │  │
 │   └──────────────┘     └────────┬─────────┘     │ • stripe_price_id set?│  │
 │                                 │                └───────────┬────────────┘  │
@@ -1202,7 +1202,7 @@ CREATE TABLE StreemLyne_MT.Notification_Log (
 ### 13.1 Current Endpoints
 
 ```yaml
-# Self-Service Endpoints (authenticated, tenant owner only)
+# Self-Service Endpoints (authenticated users)
 GET    /api/subscriptions/me
   - Returns full subscription status for current tenant
   - Exempt from subscription gate (expired tenants can access)
@@ -1212,12 +1212,12 @@ POST   /api/subscriptions/me/checkout
   - Creates Stripe Checkout Session or returns sales URL for CUSTOM
   - Body: { plan_code: "STARTER" | "PRO" | "CUSTOM" }
   - Returns: { checkout_url } or { contact_url, is_custom: true }
-  - Restricted to tenant owner
+  - Requires authentication; no role restriction
 
 POST   /api/subscriptions/me/cancel
   - Cancel subscription at period end
   - Returns: { message, cancel_at, cancel_at_period_end }
-  - Restricted to tenant owner
+  - Requires authentication; no role restriction
 
 # Plan Management (admin)
 GET    /api/subscriptions/plans

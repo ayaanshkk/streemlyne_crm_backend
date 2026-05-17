@@ -46,12 +46,14 @@ Environment variables required:
 
 import os
 from datetime import date, datetime, timezone
+import json
 
 from flask import Blueprint, abort, current_app, g, jsonify, request
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 
 from database import db
-from middleware import auth_required, permission_required, require_tenant_owner
+from middleware import auth_required, permission_required
 from models import (
     ModuleMaster,
     ProcessedWebhookEvent,
@@ -107,7 +109,6 @@ def get_my_subscription():
 
 @subscription_bp.route("/me/checkout", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def create_checkout_session():
     """
     [SUB-R-006] Create a Stripe Checkout Session (STARTER / PRO) or return
@@ -120,7 +121,7 @@ def create_checkout_session():
         STARTER/PRO: { "checkout_url": "https://checkout.stripe.com/…" }
         CUSTOM:      { "contact_url": "mailto:...", "is_custom": true }
 
-    Restricted to Tenant Owner (PRD §2.2).
+    Authenticated tenant users may initiate checkout.
     Exempt from subscription gate so expired tenants can upgrade.
     """
     data      = request.get_json() or {}
@@ -182,14 +183,13 @@ def create_checkout_session():
 
 @subscription_bp.route("/me/cancel", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def cancel_my_subscription():
     """
     [SUB-R-007] Cancel the calling tenant's subscription at period end.
     POST /api/subscriptions/me/cancel
 
     PRD §4.5: Access continues until the billing period ends.
-    Restricted to Tenant Owner (PRD §2.2).
+    Authenticated tenant users may cancel.
     """
     sub = (
         TenantSubscription.query
@@ -269,7 +269,6 @@ def cancel_my_subscription():
 
 @subscription_bp.route("/me/invoices", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def list_my_invoices():
     """
     List tenant's subscription invoices.
@@ -298,7 +297,6 @@ def list_my_invoices():
 
 @subscription_bp.route("/me/invoices/<int:invoice_id>", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_my_invoice(invoice_id: int):
     """
     Get invoice details.
@@ -318,7 +316,6 @@ def get_my_invoice(invoice_id: int):
 
 @subscription_bp.route("/me/invoices/<int:invoice_id>/pdf", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_my_invoice_pdf(invoice_id: int):
     """
     Download invoice PDF or generate it on-demand.
@@ -367,7 +364,6 @@ def get_my_invoice_pdf(invoice_id: int):
 
 @subscription_bp.route("/me/payment-methods", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def list_my_payment_methods():
     """
     List stored payment methods for the tenant.
@@ -384,7 +380,6 @@ def list_my_payment_methods():
 
 @subscription_bp.route("/me/payment-methods", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def create_setup_intent():
     """
     Create a Stripe SetupIntent for adding a new payment method.
@@ -411,7 +406,6 @@ def create_setup_intent():
 
 @subscription_bp.route("/me/payment-methods/<payment_method_id>", methods=["DELETE"])
 @auth_required
-@require_tenant_owner
 def remove_payment_method(payment_method_id: str):
     """
     Remove a payment method.
@@ -431,7 +425,6 @@ def remove_payment_method(payment_method_id: str):
 
 @subscription_bp.route("/me/payment-methods/<payment_method_id>/default", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def set_default_payment_method(payment_method_id: str):
     """
     Set a payment method as the default for subscriptions.
@@ -453,7 +446,6 @@ def set_default_payment_method(payment_method_id: str):
 
 @subscription_bp.route("/me/payment-history", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_my_payment_history():
     """
     Get payment attempt history for the tenant.
@@ -467,7 +459,6 @@ def get_my_payment_history():
 
 @subscription_bp.route("/me/payment-summary", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_my_payment_summary():
     """
     Get payment summary including payment methods and recent attempts.
@@ -486,10 +477,9 @@ def get_my_payment_summary():
 
 @subscription_bp.route("/me/customer-portal", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def create_customer_portal_session():
     """
-    Create a Stripe Billing Portal session for the tenant owner.
+    Create a Stripe Billing Portal session for the tenant.
     POST /api/subscriptions/me/customer-portal
     """
     from services.payment_service import PaymentService
@@ -521,7 +511,6 @@ def create_customer_portal_session():
 
 @subscription_bp.route("/me/pause", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_pause_status():
     """
     Get the current subscription pause state for the tenant.
@@ -531,7 +520,6 @@ def get_pause_status():
 
 @subscription_bp.route("/me/pause", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def pause_my_subscription():
     """
     Pause an active paid subscription.
@@ -541,7 +529,6 @@ def pause_my_subscription():
 
 @subscription_bp.route("/me/resume", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def resume_my_subscription():
     """
     Resume a paused subscription.
@@ -592,21 +579,21 @@ def stripe_webhook():
         if webhook_secret:
             event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
         else:
-            import json
             event = stripe.Event.construct_from(json.loads(payload), stripe_key)
             current_app.logger.warning("[STRIPE] Webhook signature verification disabled (test mode)")
     except (ValueError, stripe.error.SignatureVerificationError) as exc:
         current_app.logger.warning("[STRIPE] Webhook signature error: %s", exc)
         return jsonify({"error": "Invalid webhook signature"}), 400
 
-    event_type = event["type"]
-    event_data = event["data"]["object"]
+    event_dict = json.loads(json.dumps(event, default=str))
+    event_type = event_dict["type"]
+    event_data = event_dict["data"]["object"]
     current_app.logger.info("[STRIPE] Webhook received: %s", event_type)
 
     # [I1-FIX] Idempotency: short-circuit if this event was already processed.
     # Stripe retries on 5xx/timeout. Without this guard, duplicate events cause
     # double invoice rows, double emails, and double notifications.
-    stripe_event_id = event.get("id")
+    stripe_event_id = event_dict.get("id")
     if stripe_event_id:
         existing = (
             ProcessedWebhookEvent.query
@@ -1295,7 +1282,6 @@ def renew_tenant_subscription(tenant_id: str):
 
 @subscription_bp.route("/me/downgrade", methods=["POST"])
 @auth_required
-@require_tenant_owner
 def schedule_downgrade():
     """
     Schedule a plan downgrade at period end.
@@ -1308,7 +1294,6 @@ def schedule_downgrade():
 
 @subscription_bp.route("/me/pending-changes", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_pending_changes():
     """
     Get pending plan changes for the tenant.
@@ -1320,7 +1305,6 @@ def get_pending_changes():
 
 @subscription_bp.route("/me/pending-changes", methods=["DELETE"])
 @auth_required
-@require_tenant_owner
 def cancel_pending_downgrade():
     """
     Cancel pending downgrade.
@@ -1334,7 +1318,6 @@ def cancel_pending_downgrade():
 
 @subscription_bp.route("/me/notification-preferences", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_notification_preferences():
     """
     Get notification preferences for the tenant.
@@ -1346,7 +1329,6 @@ def get_notification_preferences():
 
 @subscription_bp.route("/me/notification-preferences", methods=["PUT"])
 @auth_required
-@require_tenant_owner
 def update_notification_preferences():
     """
     Update notification preferences.
@@ -1362,10 +1344,9 @@ def update_notification_preferences():
 
 @subscription_bp.route("/me/notification-history", methods=["GET"])
 @auth_required
-@require_tenant_owner
 def get_notification_history():
     """
-    Get recent notification history for the tenant owner.
+    Get recent notification history for the tenant.
     """
     return _future_subscription_feature_response("Notification history")
 

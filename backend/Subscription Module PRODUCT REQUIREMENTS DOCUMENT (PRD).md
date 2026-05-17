@@ -51,14 +51,11 @@ The Subscription Module enables monetization of the CRM by managing tenant-level
 
 ## 2.2 User Roles
 
-* Only **Tenant Owner** can:
+* Any authenticated tenant user can:
 
   * Upgrade plan
   * Manage subscription
-* Other users:
-
-  * Can view status
-  * Cannot modify billing
+* Role restrictions do not apply to billing actions
 
 ---
 
@@ -421,13 +418,13 @@ Handle events:
 
 ## 7.3 Role Restriction
 
-* Only tenant owner can upgrade
+* Any authenticated tenant user can upgrade or manage the subscription
 
 ---
 
 ### Acceptance Criteria
 
-* Unauthorized users cannot upgrade
+* Unauthenticated requests cannot upgrade (auth still required)
 * Cross-tenant access is impossible
 
 ---
@@ -485,9 +482,9 @@ Handle events:
 
 ---
 
-### 5. Unauthorized upgrade attempt
+### 5. Unauthenticated upgrade attempt
 
-* Return 403
+* Return 401
 
 ---
 
