@@ -116,37 +116,26 @@ class EmployeeService:
         return employee
     
     def create_user_account(self, employee_id: int, user_name: str, password: str) -> UserMaster:
-        """
-        Create a user account for an employee
-        
-        Args:
-            employee_id: Employee ID
-            user_name: Username for login
-            password: Plain text password
-        
-        Returns:
-            Created UserMaster instance
-        
-        Raises:
-            ValueError: If employee not found or already has user account
-        """
-        # Check if employee exists
         employee = self.get_employee(employee_id)
         if not employee:
             raise ValueError(f"Employee {employee_id} not found")
         
-        # Check if employee already has user account
         existing_user = self.user_repo.get_by_employee_id(employee_id)
         if existing_user:
             raise ValueError(f"Employee already has a user account")
         
-        # Check if username already exists
         existing_username = self.user_repo.get_by_username(user_name)
         if existing_username:
             raise ValueError(f"Username '{user_name}' already exists")
-        
-        # Create user
-        return self.user_repo.create_user(employee_id, user_name, password)
+
+        return self.user_repo.create_user(
+            employee_id,
+            user_name,
+            password,
+            is_active=True,
+            tenant_id=employee.tenant_id,
+            is_invite_pending=False,
+        )
     
     def get_employee_summary(self, employee_id: int) -> Optional[Dict]:
         """

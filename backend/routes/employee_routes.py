@@ -25,6 +25,7 @@ from models import EmployeeMaster, DesignationMaster
 from middleware import auth_required, permission_required
 from datetime import datetime
 
+employee_bp = Blueprint('employee', __name__, url_prefix='/api/employees')
 employee_bp = Blueprint('employee', __name__, url_prefix='/employees')
 
 # ─────────────────────────────────────────
@@ -117,7 +118,6 @@ def get_employee(employee_id: int):
     """
     employee = _get_or_404(employee_id)
     return jsonify(_employee_dict(employee)), 200
-
 
 @employee_bp.route('/<int:employee_id>', methods=['PUT'])
 @auth_required

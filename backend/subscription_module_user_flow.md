@@ -1,0 +1,1318 @@
+# Streemlyne CRM - Subscription Module User Flow
+
+---
+
+## Document Overview
+
+### 1.1 Purpose
+
+This document provides a comprehensive mapping of the complete subscription lifecycle within the Streemlyne CRM system. It covers all user interactions, system processes, state transitions, and integration points required to understand and implement the subscription module.
+
+### 1.2 Scope
+
+The subscription module handles:
+- Tenant-based subscription management (multi-tenant CRM)
+- 7-day free trial with automatic provisioning
+- Three plan tiers: Starter, Pro, Custom
+- Stripe payment integration
+- Full application blocking post-expiry
+- Module-based access control
+
+### 1.3 Architecture Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SUBSCRIPTION MODULE ARCHITECTURE                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐      ┌─────────────┐      ┌─────────────┐                 │
+│  │  FRONTEND   │◄────►│   BACKEND   │◄────►│   STRIPE    │                 │
+│  │  (Next.js)  │      │   (Flask)   │      │   (Payment) │                 │
+│  └─────────────┘      └─────────────┘      └─────────────┘                 │
+│        │                    │                    │                         │
+│        │              ┌─────┴─────┐              │                         │
+│        │              │  Middleware│              │                         │
+│        │              │ • auth     │              │                         │
+│        │              │ • subscription │          │                         │
+│        │              │ • rate_limit  │          │                         │
+│        │              └─────────────┘              │                         │
+│        │                    │                                             │
+│        └────────────────────┼─────────────────────────────────────────────┘│
+│                             │                                               │
+│                    ┌────────▼────────┐                                      │
+│                    │    DATABASE     │                                      │
+│                    │  (PostgreSQL)   │                                      │
+│                    │ • Tenant_Master │                                      │
+│                    │ • Tenant_Sub... │                                      │
+│                    │ • Subscription..│                                      │
+│                    │ • Module_Master │                                      │
+│                    └─────────────────┘                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. User Subscription Initiation Flow
+
+### 2.1 Signup Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          TENANT REGISTRATION & TRIAL START                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────────────┐   │
+│   │  User    │────►│  Submit  │────►│ Backend  │────►│ Tenant_Master    │   │
+│   │  Signs   │     │ Register │     │ Creates  │     │ Created          │   │
+│   │  Up      │     │  Form    │     │ Tenant   │     │ stripe_customer_ │   │
+│   │          │     │          │     │          │     │ id (optional)    │   │
+│   └──────────┘     └──────────┘     └──────────┘     └────────┬─────────┘   │
+│                                                                │             │
+│                                                                ▼             │
+│                                                   ┌─────────────────────┐   │
+│                                                   │ create_trial_sub-   │   │
+│                                                   │ scription() called  │   │
+│                                                   └──────────┬──────────┘   │
+│                                                              │               │
+│                           ┌──────────────────────────────────┼─────────────┐ │
+│                           │                                  │             │ │
+│                           ▼                                  ▼             │ │
+│                  ┌─────────────────┐              ┌───────────────────┐   │ │
+│                  │ Tenant_Sub...   │              │ _reconcile_tenant │   │ │
+│                  │ status='trial'  │              │ _modules()        │   │ │
+│                  │ trial_end_date= │              │ Seeds module      │   │ │
+│                  │   now + 7 days  │              │ access for plan   │   │ │
+│                  │ is_active=true  │              └───────────────────┘   │ │
+│                  └────────┬────────┘                                       │ │
+│                           │                                                │ │
+│                           ▼                                                │ │
+│                  ┌─────────────────┐                                       │ │
+│                  │ Trial Banner    │◄────── User sees dashboard            │ │
+│                  │ "X days left"   │         with full access              │ │
+│                  └─────────────────┘                                       │ │
+│                                                                            │ │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 Plan Selection Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              PLAN SELECTION FLOW                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Entry Points:                                                              │
+│   • Trial Banner → "Upgrade Now"                                             │
+│   • Sidebar dropdown → "Upgrade (X days left)"                               │
+│   • Block page → "Upgrade Now"                                               │
+│   • /pricing page (standalone)                                               │
+│                                                                              │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐   │
+│   │  User Clicks │────►│  UpgradeModal│────►│ subscriptionApi.         │   │
+│   │  Upgrade     │     │  Opens       │     │ getPlans()               │   │
+│   │              │     │              │     │ GET /subscriptions/plans │   │
+│   └──────────────┘     └──────────────┘     └────────────┬─────────────┘   │
+│                                                          │                  │
+│                                                          ▼                  │
+│                                                 ┌─────────────────────┐     │
+│                                                 │ Plans returned:     │     │
+│                                                 │ • STARTER           │     │
+│                                                 │ • PRO (highlighted) │     │
+│                                                 │ • CUSTOM            │     │
+│                                                 └─────────────────────┘     │
+│                                                                              │
+│   Plan Display Logic:                                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                   │   │
+│   │  │  STARTER    │  │     PRO     │  │   CUSTOM    │                   │   │
+│   │  │  $X/mo      │  │   $Y/mo     │  │    $Z/mo    │                   │   │
+│   │  │             │◄─│  (badge:    │  │             │                   │   │
+│   │  │ [Select]    │  │  "Popular") │  │ [Contact]   │                   │   │
+│   │  └─────────────┘  └─────────────┘  └─────────────┘                   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.3 Payment Entry Flow (Starter/Pro via Stripe)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           PAYMENT ENTRY FLOW                                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌──────────────┐     ┌──────────────────┐     ┌────────────────────────┐  │
+│   │  User Selects│────►│ POST /me/checkout│────►│ Validate:             │  │
+│   │  STARTER/PRO │     │ plan_code=STARTER│     │ • Is user authenticated? │  │
+│   │              │     │                  │     │ • Plan exists?        │  │
+│   └──────────────┘     └────────┬─────────┘     │ • stripe_price_id set?│  │
+│                                 │                └───────────┬────────────┘  │
+│                                 ▼                            │               │
+│                    ┌────────────────────┐         ┌─────────────────────┐   │
+│                    │ Create Stripe      │         │ For CUSTOM plan:    │   │
+│                    │ Checkout Session   │         │ Return mailto:sales │   │
+│                    │                    │         │ (NO Stripe)         │   │
+│                    │ • customer_id from │         └─────────────────────┘   │
+│                    │   Tenant_Master    │                                  │
+│                    │ • line_items with  │                                  │
+│                    │   stripe_price_id  │                                  │
+│                    │ • success_url      │                                  │
+│                    │ • cancel_url       │                                  │
+│                    │ • metadata:        │                                  │
+│                    │   tenant_id,       │                                  │
+│                    │   plan_code        │                                  │
+│                    └────────┬───────────┘                                  │
+│                             │                                               │
+│                             ▼                                               │
+│                    ┌────────────────────┐                                   │
+│                    │ Redirect to        │                                   │
+│                    │ Stripe Checkout    │                                   │
+│                    │ window.location =  │                                   │
+│                    │ session.url        │                                   │
+│                    └────────────────────┘                                   │
+│                                                                              │
+│   User fills payment details on Stripe's hosted page                         │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Subscription State Transitions
+
+### 3.1 State Definitions
+
+| State | Description | Access Level | Transition Triggers |
+|-------|-------------|--------------|---------------------|
+| `trialing` | Free 7-day trial active | Full access | Initial signup |
+| `active` | Paid subscription | Full access | Payment successful |
+| `expired` | Trial ended without payment OR paid plan lapsed | No access | Trial end date passed; payment failure |
+| `canceled` | Subscription ended after billing period | No access | Cancel at period end; Stripe subscription.deleted |
+| `past_due` | Payment failed, retry in progress | Limited (grace period) | Recurring charge failed |
+
+### 3.2 State Transition Matrix
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         STATE TRANSITION DIAGRAM                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│                           ┌──────────────┐                                  │
+│                           │   TRIALING   │                                  │
+│                           │  (7 days)    │                                  │
+│                           └──────┬───────┘                                  │
+│                                  │                                          │
+│           ┌──────────────────────┼──────────────────────┐                  │
+│           │                      │                      │                  │
+│           ▼                      ▼                      ▼                  │
+│    ┌─────────────┐       ┌─────────────┐       ┌─────────────┐            │
+│    │  Trial Ends │       │ Upgrade to  │       │  Trial Ends │            │
+│    │  (no pay)   │       │  PAID PLAN  │       │  (inactive) │            │
+│    └──────┬──────┘       └──────┬──────┘       └──────┬──────┘            │
+│           │                     │                     │                    │
+│           ▼                     │                     ▼                    │
+│    ┌─────────────┐              │              ┌─────────────┐            │
+│    │   EXPIRED   │◄─────────────┤              │  EXPIRED    │            │
+│    │  (blocked)  │              │              │  (blocked)  │            │
+│    └──────┬──────┘              │              └─────────────┘            │
+│           │                     │                     │                    │
+│           │                     │                     │                    │
+│           │         ┌───────────┴───────────┐        │                    │
+│           │         │                       │        │                    │
+│           ▼         ▼                       │        │                    │
+│    ┌─────────────┐                     │        │                    │
+│    │  User       │                     │        │                    │
+│    │  Upgrades   │                     │        │                    │
+│    └──────┬──────┘                     │        │                    │
+│           │                           │        │                    │
+│           ▼                           │        │                    │
+│    ┌─────────────┐                    │        │                    │
+│    │   ACTIVE    │                    │        │                    │
+│    │  (paid)     │                    │        │                    │
+│    └──────┬──────┘                    │        │                    │
+│           │                           │        │                    │
+│    ┌──────┴──────┐              ┌─────┴────────┴─────┐              │
+│    │             │              │                    │              │
+│    ▼             ▼              │                    ▼              │
+│ ┌──────┐   ┌──────────┐         │              ┌─────────────┐     │
+│ │Cancel│   │Past Due  │         │              │  EXPIRED    │     │
+│ │ at   │   │(payment  │         │              │  (blocked)  │     │
+│ │period│   │ failed)  │         │              └─────────────┘     │
+│ │ end  │   └────┬─────┘         │                    │              │
+│ └──┬───┘        │               │                    │              │
+│    │            ▼               │                    │              │
+│    │     ┌─────────────┐        │                    │              │
+│    │     │ Payment     │        │                    │              │
+│    │     │ Succeeds    │        │                    │              │
+│    │     └──────┬──────┘        │                    │              │
+│    │            │               │                    │              │
+│    ▼            ▼               │                    │              │
+│ ┌─────────────────────────────┐  │                    │              │
+│ │        CANCELLED            │  │                    │              │
+│ │    (access until period end)│  │                    │              │
+│ └──────────────┬──────────────┘  │                    │              │
+│                │                 │                    │              │
+│                ▼                 │                    │              │
+│         ┌─────────────┐         │                    │              │
+│         │ Period Ends │─────────┴────────────────────┘              │
+│         │ Subscription │                                              │
+│         │ Terminated   │                                              │
+│         └─────────────┘                                              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3 Transition Conditions
+
+```python
+# State Transition Logic (from subscription_service.py)
+
+def _sync_subscription_state(subscription):
+    """
+    Lazily persist time-driven lifecycle transitions.
+    Called on every authenticated request.
+    """
+
+    # Trial expiry: trialing + trial_end_date passed → expired
+    if subscription.status == "trialing" and subscription.trial_end_date:
+        if now > subscription.trial_end_date:
+            subscription.status = "expired"
+            subscription.is_active = False
+            _reconcile_tenant_modules(subscription.tenant_id, subscription_id=None)
+
+    # Cancel-at-period-end: period ended → canceled
+    if subscription.cancel_at_period_end and subscription.current_period_end:
+        if now > subscription.current_period_end:
+            subscription.status = "canceled"
+            subscription.is_active = False
+            _reconcile_tenant_modules(subscription.tenant_id, subscription_id=None)
+
+    # Active without auto-renew: period ended → expired
+    if subscription.status == "active" and subscription.subscription_end_date:
+        if today > subscription.subscription_end_date and not subscription.auto_renew:
+            subscription.status = "expired"
+            subscription.is_active = False
+            _reconcile_tenant_modules(subscription.tenant_id, subscription_id=None)
+```
+
+---
+
+## 4. Payment Processing Flow
+
+### 4.1 Initial Charge Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         INITIAL CHARGE FLOW                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   1. User completes Stripe Checkout                                           │
+│      └─► Stripe charges payment method                                        │
+│                                                                              │
+│   2. Stripe sends webhook: checkout.session.completed                         │
+│      ┌────────────────────────────────────────────────────────────────────┐  │
+│      │ POST /api/subscriptions/stripe/webhook                             │  │
+│      │ {                                                                  │  │
+│      │   "type": "checkout.session.completed",                           │  │
+│      │   "data": {                                                        │  │
+│      │     "object": {                                                     │  │
+│      │       "metadata": { "tenant_id": "...", "plan_code": "PRO" },      │  │
+│      │       "subscription": "sub_xxx"                                    │  │
+│      │     }                                                               │  │
+│      │   }                                                                 │  │
+│      │ }                                                                   │  │
+│      └────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                          │
+│                                    ▼                                          │
+│   3. _handle_checkout_completed() processes:                                  │
+│      ┌────────────────────────────────────────────────────────────────────┐  │
+│      │ • Update Tenant_Subscription:                                     │  │
+│      │   - status = 'active'                                             │  │
+│      │   - is_active = true                                              │  │
+│      │   - stripe_subscription_id = event.subscription                    │  │
+│      │   - subscription_start_date = today                               │  │
+│      │   - subscription_end_date = today + billing_cycle                  │  │
+│      │   - current_period_start = now                                    │  │
+│      │   - current_period_end = end_of_period                            │  │
+│      │                                                                     │  │
+│      │ • Call _reconcile_tenant_modules()                                │  │
+│      │   - Update Tenant_Module_Mapping to match plan modules            │  │
+│      │                                                                     │  │
+│      │ • db.session.commit()                                             │  │
+│      └────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 Recurring Billing Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         RECURRING BILLING FLOW                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Monthly (or per billing_cycle):                                             │
+│                                                                              │
+│   ┌──────────────┐         ┌──────────────┐         ┌──────────────┐        │
+│   │ Stripe       │         │ Invoice      │         │ Webhook:     │        │
+│   │ Generates    │────────►│ Created      │────────►│ invoice.paid │        │
+│   │ Invoice      │         │              │         │              │        │
+│   └──────────────┘         └──────────────┘         └──────┬───────┘        │
+│                                                            │                 │
+│                                                            ▼                 │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ _handle_invoice_paid():                                              │  │
+│   │                                                                        │  │
+│   │ • Find Tenant_Subscription by stripe_subscription_id                 │  │
+│   │ • Update billing period:                                             │  │
+│   │   - current_period_start = period.start                              │  │
+│   │   - current_period_end = period.end                                  │  │
+│   │   - subscription_end_date = period.end                               │  │
+│   │ • Set status = 'active', is_active = true                           │  │
+│   │ • db.session.commit()                                                │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3 Retry Logic Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                            RETRY LOGIC FLOW                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Payment Failed Event                                                       │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Stripe attempts charge → Card declined / Insufficient funds          │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                          │
+│                                    ▼                                          │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Webhook: invoice.payment_failed                                      │  │
+│   │                                                                        │  │
+│   │ Actions:                                                              │  │
+│   │ 1. Log payment failure to Payment_Attempts table                      │  │
+│   │ 2. Update Tenant_Subscription: status = 'past_due'                   │  │
+│   │ 3. Send notification to tenant (email + in-app)                       │  │
+│   │ 4. Schedule retry according to dunning policy                         │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                          │
+│                                    ▼                                          │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Dunning Schedule (configurable):                                      │  │
+│   │                                                                        │  │
+│   │ Retry 1: Day 1    → Notification: "Payment failed, retrying in 3 days"│  │
+│   │ Retry 2: Day 4    → Notification: "Payment retry in 3 days"           │  │
+│   │ Retry 3: Day 7    → Final retry                                       │  │
+│   │                                                                        │  │
+│   │ If all retries fail:                                                  │  │
+│   │   → subscription.status = 'expired'                                   │  │
+│   │   → Suspend access                                                    │  │
+│   │   → Send "Subscription expired" notification                          │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.4 Webhook Handling Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          WEBHOOK HANDLING FLOW                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   POST /api/subscriptions/stripe/webhook                                      │
+│   Headers: Stripe-Signature                                                   │
+│                                                                              │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │                                                                   │    │  │
+│   │   ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │    │  │
+│   │   │ Verify Signature│───►│ Parse Event Type│───►│ Route to     │ │    │  │
+│   │   │                 │    │                 │    │ Handler      │ │    │  │
+│   │   └─────────────────┘    └─────────────────┘    └──────┬───────┘ │    │  │
+│   │                                                          │        │    │  │
+│   │   ┌──────────────────────────────────────────────────────┼───────┐│    │  │
+│   │   │                                                      │       ││    │  │
+│   │   ▼                                                      ▼       ▼│    │  │
+│   │ ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────┐│    │  │
+│   │ │ checkout.        │  │ invoice.         │  │ customer.          ││    │  │
+│   │ │ session.         │  │ paid             │  │ subscription.      ││    │  │
+│   │ │ completed        │  │                  │  │ deleted            ││    │  │
+│   │ │                  │  │                  │  │                    ││    │  │
+│   │ │ → Activate sub   │  │ → Renew/extend   │  │ → Cancel sub       ││    │  │
+│   │ │ → Reconcile mods │  │ → Update period  │  │ → Strip modules    ││    │  │
+│   │ └──────────────────┘  └──────────────────┘  └────────────────────┘│    │  │
+│   │                                                                   │    │  │
+│   └───────────────────────────────────────────────────────────────────┘    │  │
+│                                                                              │
+│   Error Handling:                                                             │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │ • Invalid signature → 400 Bad Request                                 │  │
+│   │ • Processing error → 500 + rollback transaction                       │  │
+│   │ • Unhandled event type → Log and ignore (200 OK)                      │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Subscription Upgrade/Downgrade Flow
+
+### 5.1 Upgrade Flow (Same Billing Cycle - Prorated)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           UPGRADE FLOW                                        │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   User currently on: STARTER ($29/mo)                                         │
+│   Upgrading to: PRO ($79/mo)                                                  │
+│                                                                              │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐   │
+│   │  User Opens  │────►│  Selects PRO │────►│  subscriptionApi.        │   │
+│   │  UpgradeModal│     │  Plan        │     │  createCheckout('PRO')   │   │
+│   └──────────────┘     └──────────────┘     └────────────┬─────────────┘   │
+│                                                         │                   │
+│                                                         ▼                   │
+│                                              ┌─────────────────────────┐    │
+│                                              │ POST /me/checkout       │    │
+│                                              │                         │    │
+│                                              │ { plan_code: 'PRO' }    │    │
+│                                              │                         │    │
+│                                              │ New Stripe Checkout     │    │
+│                                              │ Session created         │    │
+│                                              └────────────┬────────────┘    │
+│                                                           │                  │
+│   ┌───────────────────────────────────────────────────────┴──────────────┐  │
+│   │ On checkout.session.completed:                                       │  │
+│   │                                                                        │  │
+│   │ 1. Update Tenant_Subscription:                                       │  │
+│   │    - subscription_id → PRO plan ID                                    │  │
+│   │    - status = 'active'                                                │  │
+│   │                                                                        │  │
+│   │ 2. Call _reconcile_tenant_modules(tenant_id, PRO_subscription_id)    │  │
+│   │    - Add any NEW modules from PRO plan                                │  │
+│   │    - Remove modules not in PRO plan                                   │  │
+│   │                                                                        │  │
+│   │ 3. Stripe handles proration:                                          │  │
+│   │    - Credits unused time on STARTER                                   │  │
+│   │    - Charges prorated amount for PRO                                  │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Downgrade Flow (End-of-Period)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          DOWNGRADE FLOW                                        │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Policy: Downgrades take effect at end of current billing period            │
+│   (No immediate proration - simpler implementation)                          │
+│                                                                              │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐   │
+│   │  User Opens  │────►│  Selects     │────►│  subscriptionApi.        │   │
+│   │  Manage Sub  │     │  STARTER     │     │  scheduleDowngrade()     │   │
+│   │  Page        │     │  (downgrade) │     │  POST /me/downgrade      │   │
+│   └──────────────┘     └──────────────┘     └────────────┬─────────────┘   │
+│                                                         │                   │
+│                                                         ▼                   │
+│                                              ┌─────────────────────────┐    │
+│                                              │ Backend:                │    │
+│                                              │ • Record downgrade      │    │
+│                                              │   request               │    │
+│                                              │ • effective_date =      │    │
+│                                              │   current_period_end    │    │
+│                                              │ • Plan change applied   │    │
+│                                              │   at period end via     │    │
+│                                              │   _sync_subscription_   │    │
+│                                              │   state()               │    │
+│                                              └─────────────────────────┘    │
+│                                                                              │
+│   At Period End:                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ _sync_subscription_state() detects:                                   │  │
+│   │ • current_period_end <= today                                         │  │
+│   │ • downgrade_scheduled = true                                          │  │
+│   │                                                                        │  │
+│   │ Actions:                                                               │  │
+│   │ • subscription_id → NEW plan ID                                        │  │
+│   │ • Call _reconcile_tenant_modules(tenant_id, NEW_plan_id)             │  │
+│   │ • Reset downgrade_scheduled flag                                       │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Cancellation Flow
+
+### 6.1 End-of-Period Cancellation (Default)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    END-OF-PERIOD CANCELLATION FLOW                            │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   PRD §4.5: "Access continues until billing period ends"                     │
+│                                                                              │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐   │
+│   │  User Clicks│────►│  POST /me/   │────►│  SubscriptionService.    │   │
+│   │  Cancel     │     │  cancel      │     │  cancel_subscription()   │   │
+│   └──────────────┘     └──────────────┘     └────────────┬─────────────┘   │
+│                                                         │                   │
+│                                                         ▼                   │
+│                                              ┌─────────────────────────┐    │
+│                                              │ Set on Tenant_Sub:      │    │
+│                                              │ • cancel_at_period_end  │    │
+│                                              │   = true                │    │
+│                                              │ • auto_renew = false    │    │
+│                                              │ • is_active = true      │    │
+│                                              │   (still active!)       │    │
+│                                              │ • status = 'active'     │    │
+│                                              │   (NOT canceled yet!)   │    │
+│                                              └────────────┬────────────┘    │
+│                                                           │                  │
+│   User retains full access until:                        │                  │
+│   ┌──────────────────────────────────────────────────────┴──────────────┐  │
+│   │ At Period End:                                                      │  │
+│   │ _sync_subscription_state() detects:                                 │  │
+│   │ • cancel_at_period_end = true                                       │  │
+│   │ • current_period_end <= now                                         │  │
+│   │                                                                      │  │
+│   │ Actions:                                                            │  │
+│   │ • status = 'canceled'                                               │  │
+│   │ • is_active = false                                                 │  │
+│   │ • auto_renew = false                                                │  │
+│   │ • _reconcile_tenant_modules(tenant_id, None)                        │  │
+│   │   → Remove non-core modules                                         │  │
+│   └─────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Immediate Cancellation (Admin Override)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      IMMEDIATE CANCELLATION FLOW                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Admin action only (sales/support override)                                 │
+│                                                                              │
+│   POST /api/subscriptions/tenants/{tenant_id}/cancel (admin endpoint)        │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Admin clicks "Cancel Immediately"                                    │  │
+│   │                                                                        │  │
+│   │ Backend:                                                              │  │
+│   │ • If Stripe subscription exists:                                      │  │
+│   │   stripe.Subscription.delete(stripe_subscription_id)                 │  │
+│   │   → Triggers webhook: customer.subscription.deleted                  │  │
+│   │                                                                        │  │
+│   │ • If manual plan:                                                     │  │
+│   │   status = 'canceled'                                                 │  │
+│   │   is_active = false                                                   │  │
+│   │   _reconcile_tenant_modules(tenant_id, None)                         │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 7. Plan/Pricing Tier Configuration Flow
+
+### 7.1 Plan Creation Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           PLAN CREATION FLOW                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Admin creates new subscription plan                                         │
+│                                                                              │
+│   POST /api/subscriptions/plans                                               │
+│   {                                                                          │
+│     "subscription_code": "ENTERPRISE",                                        │
+│     "subscription_name": "Enterprise",                                        │
+│     "description": "Full CRM for large teams",                               │
+│     "price": 199.00,                                                         │
+│     "currency_id": 1,                                                        │
+│     "billing_cycle": 1,                    // 1=monthly, 12=yearly          │
+│     "is_base_plan": false,                                                   │
+│     "is_active": true,                                                       │
+│     "stripe_price_id": "price_xxx"          // null for custom              │
+│   }                                                                          │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Backend Validation:                                                  │  │
+│   │ • Required fields present                                           │  │
+│   │ • subscription_code unique?                                         │  │
+│   │ • subscription_name unique?                                         │  │
+│   │ • stripe_price_id valid for paid plans?                             │  │
+│   │ • currency exists?                                                   │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                          │
+│                                    ▼                                          │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Database:                                                             │  │
+│   │ INSERT INTO Subscription_Plans (...)                                 │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 7.2 Module-Plan Mapping Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      MODULE-PLAN MAPPING FLOW                                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Admin assigns modules to a plan                                             │
+│                                                                              │
+│   POST /api/subscriptions/plans/{subscription_id}/modules/{module_id}         │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ INSERT INTO Subscription_Module_Mapping                              │  │
+│   │ (subscription_id, module_id, created_at)                             │  │
+│   │ VALUES (1, 5, now())                                                 │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│   Effect: Future tenant upgrades to this plan will include module 5          │
+│                                                                              │
+│   Note: Does NOT retroactively add module to existing tenants                │
+│         (use _reconcile_tenant_modules() for that)                           │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. Invoice Generation and Delivery Flow
+
+### 8.1 Invoice Creation Trigger
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         INVOICE GENERATION FLOW                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Trigger Points:                                                             │
+│   • checkout.session.completed (initial charge)                               │
+│   • invoice.paid (recurring charge)                                           │
+│   • Manual invoice generation (admin)                                         │
+│                                                                              │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │ webhook: invoice.paid                                                  │  │
+│   │                                                                        │  │
+│   │ invoice_data = {                                                       │  │
+│   │   "invoice_id": "inv_xxx",                                            │  │
+│   │   "amount_paid": 79.00,                                               │  │
+│   │   "currency": "gbp",                                                  │  │
+│   │   "period_start": 1704067200,                                         │  │
+│   │   "period_end": 1706745600,                                           │  │
+│   │   "stripe_subscription_id": "sub_xxx",                                │  │
+│   │   "tenant_id": metadata.tenant_id                                     │  │
+│   │ }                                                                      │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                  │                                             │
+│                                  ▼                                             │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │ CREATE INVOICE RECORD                                                  │  │
+│   │                                                                        │  │
+│   │ INSERT INTO Invoices (                                                │  │
+│   │   invoice_number, tenant_id, subscription_id,                         │  │
+│   │   amount, currency_id, status, period_start, period_end,              │  │
+│   │   stripe_invoice_id, created_at                                       │  │
+│   │ ) VALUES (                                                            │  │
+│   │   'INV-001', 'tenant_xxx', 1, 79.00, 1, 'paid',                       │  │
+│   │   '2024-01-01', '2024-01-31', 'inv_xxx', now()                        │  │
+│   │ )                                                                     │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Invoice Delivery Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         INVOICE DELIVERY FLOW                                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐   │
+│   │  Invoice     │────►│  Generate    │────►│  Email Service           │   │
+│   │  Created     │     │  PDF         │     │  Send to tenant          │   │
+│   └──────────────┘     └──────────────┘     └────────────┬─────────────┘   │
+│                                  │                         │                  │
+│                                  ▼                         ▼                  │
+│                         ┌──────────────┐          ┌──────────────┐          │
+│                         │ Store PDF in │          │ Notification │          │
+│                         │ blob storage │          │ logged       │          │
+│                         └──────────────┘          └──────────────┘          │
+│                                                                              │
+│   Invoice Record Updated:                                                     │
+│   • invoice_pdf_url = blob storage URL                                       │
+│   • delivery_status = 'delivered'                                            │
+│   • delivered_at = now()                                                     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. Trial-to-Paid Conversion Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                       TRIAL-TO-PAID CONVERSION FLOW                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Timeline:                                                                  │
+│   Day 0: Tenant created → Trial starts automatically                         │
+│   Day 1-7: Trial period (user can access full CRM)                           │
+│   Day 7: Trial ends                                                           │
+│                                                                              │
+│   CONVERSION HAPPENS WHEN:                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Option A: User upgrades during trial                                 │  │
+│   │   • User clicks "Upgrade" before trial ends                          │  │
+│   │   • Redirect to Stripe Checkout                                      │  │
+│   │   • On success: status = 'active', trial_end_date cleared            │  │
+│   │   • Trial is converted early                                         │  │
+│   │                                                                    │  │
+│   │ Option B: Trial expires, user upgrades                              │  │
+│   │   • Trial ends → status = 'expired' → App blocked                   │  │
+│   │   • User sees block page                                             │  │
+│   │   • User clicks "Upgrade" → Stripe Checkout → Success               │  │
+│   │   • status = 'active'                                                │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│   Flow Diagram:                                                               │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐  │
+│   │ TRIAL   │───►│ TRIAL   │───►│ EXPIRED │───►│ UPGRADE │───►│ ACTIVE  │  │
+│   │ Day 1   │    │ Day 7   │    │ Blocked │    │ Started │    │ Paid!   │  │
+│   └─────────┘    └────┬────┘    └─────────┘    └────┬────┘    └─────────┘  │
+│                       │                              │                        │
+│                       │ User upgrades ───────────────┘                        │
+│                       │ before expiry                                         │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 10. Payment Failure Handling and Dunning Flow
+
+### 10.1 Payment Failure Detection
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      PAYMENT FAILURE DETECTION FLOW                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Stripe Event: invoice.payment_failed                                        │
+│                                                                              │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │ Payload:                                                             │  │
+│   │ {                                                                   │  │
+│   │   "type": "invoice.payment_failed",                                 │  │
+│   │   "data": {                                                          │  │
+│   │     "object": {                                                      │  │
+│   │       "id": "in_xxx",                                               │  │
+│   │       "subscription": "sub_xxx",                                    │  │
+│   │       "attempt_count": 1,                                           │  │
+│   │       "next_payment_attempt": 1706832000,                           │  │
+│   │       "customer_email": "tenant@company.com",                       │  │
+│   │       "amount_due": 7900,                                           │  │
+│   │       "currency": "gbp"                                             │  │
+│   │     }                                                                │  │
+│   │   }                                                                  │  │
+│   │ }                                                                    │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                          │
+│                                    ▼                                          │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │ Actions:                                                              │  │
+│   │ 1. Log to Payment_Attempts table                                     │  │
+│   │ 2. Update Tenant_Subscription:                                       │  │
+│   │    • status = 'past_due'                                             │  │
+│   │    • payment_attempts = attempt_count                                │  │
+│   │    • next_retry_date = next_payment_attempt                          │  │
+│   │ 3. Create notification record                                        │  │
+│   │ 4. Trigger dunning email sequence                                    │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 Dunning Timeline
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                            DUNNING TIMELINE                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Day 0: Payment fails                                                        │
+│   │                                                                           │
+│   │   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │   │ Day 0: "Payment Failed - First Notice"                          │   │
+│   │   │ • We charge failed. Please update payment method.              │   │
+│   │   │ • Retry in 3 days                                               │   │
+│   │   └─────────────────────────────────────────────────────────────────┘   │
+│   │                                                                           │
+│   │   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │   │ Day 3: "Payment Retry - Second Notice"                         │   │
+│   │   │ • We will retry payment in 24 hours                            │   │
+│   │   │ • Update payment method to avoid service interruption          │   │
+│   │   └─────────────────────────────────────────────────────────────────┘   │
+│   │                                                                           │
+│   │   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │   │ Day 4: Final Retry                                             │   │
+│   │   │ • Stripe attempts charge again                                 │   │
+│   │   │ • If successful → status = 'active', notify success            │   │
+│   │   │ • If fails → proceed to suspension                             │   │
+│   │   └─────────────────────────────────────────────────────────────────┘   │
+│   │                                                                           │
+│   ▼                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────────┐ │
+│   │ Day 7 (if all retries fail):                                           │ │
+│   │ • status = 'expired'                                                   │ │
+│   │ • is_active = false                                                    │ │
+│   │ • _reconcile_tenant_modules(tenant_id, None) → strip modules          │ │
+│   │ • Send "Subscription Expired" notification                             │ │
+│   │ • Block all access except /subscription-required page                  │ │
+│   └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│   Configurable Parameters (Dunning_Config table):                             │
+│   • retry_interval_days: [3, 1]                                              │
+│   • max_retries: 3                                                           │
+│   • grace_period_days: 0                                                      │
+│   • notification_templates: {fail, retry, expired}                            │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 11. Subscription Renewal Reminders and Notifications Flow
+
+### 11.1 Renewal Reminder Schedule
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          RENEWAL REMINDER SCHEDULE                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Reminders sent before subscription expiry:                                  │
+│                                                                              │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │                    RENEWAL REMINDER TIMELINE                          │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐  │
+│   │ -30 days│───►│ -14 days│───►│  -7 days│───►│  -3 days│───►│  -1 day │  │
+│   │         │    │         │    │         │    │         │    │         │  │
+│   │ Annual  │    │ "Your   │    │ "Trial  │    │ "1 week │    │ "Last   │  │
+│   │ renewal │    │  sub    │    │  ends   │    │  left"  │    │  chance"│  │
+│   │ notice  │    │  renews │    │  soon"  │    │         │    │         │  │
+│   │         │    │  soon"  │    │         │    │         │    │         │  │
+│   └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘  │
+│                                                                              │
+│   For TRIALING subscriptions (more urgent):                                   │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐                                  │
+│   │ -5 days │───►│ -2 days │───►│ Expires │                                  │
+│   │         │    │         │    │  Today  │                                  │
+│   │ "2 days │    │ "Final  │    │         │                                  │
+│   │  left"  │    │ Warning"│    │ Block   │                                  │
+│   └─────────┘    └─────────┘    │ Applied │                                  │
+│                                 └─────────┘                                  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 Notification Channels
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         NOTIFICATION DELIVERY FLOW                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌───────────────────────────────────────────────────────────────────────┐  │
+│   │                    NOTIFICATION TRIGGERS                              │  │
+│   └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│   ┌───────────────┐    ┌───────────────┐    ┌───────────────┐              │
+│   │ Email         │    │ In-App        │    │ SMS (optional)│              │
+│   │ Notifications │    │ Notifications │    │               │              │
+│   └───────┬───────┘    └───────┬───────┘    └───────┬───────┘              │
+│           │                    │                    │                       │
+│           ▼                    ▼                    ▼                       │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │ Notification Service                                                 │  │
+│   │ • Determines channels based on user preferences                      │  │
+│   │ • Renders template for each channel                                  │  │
+│   │ • Queues for delivery                                                │  │
+│   │ • Logs delivery status                                               │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│   Notification Types:                                                         │
+│   • trial_expiring_soon (X days)                                             │
+│   • payment_failed                                                           │
+│   • payment_succeeded                                                        │
+│   • subscription_canceled                                                    │
+│   • subscription_expired                                                     │
+│   • subscription_renewed                                                     │
+│   • upgrade_reminder                                                         │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 12. Database Schema Reference
+
+### 12.1 Current Subscription Tables
+
+```sql
+-- Tenant_Master (existing - relevant columns)
+CREATE TABLE StreemLyne_MT.Tenant_Master (
+    tenant_id character varying NOT NULL UNIQUE,
+    tenant_company_name character varying UNIQUE,
+    stripe_customer_id character varying UNIQUE,  -- For Stripe linking
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (tenant_id)
+);
+
+-- Subscription_Plans (existing)
+CREATE TABLE StreemLyne_MT.Subscription_Plans (
+    subscription_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
+    subscription_code character varying NOT NULL UNIQUE,  -- 'STARTER', 'PRO', 'CUSTOM'
+    subscription_name character varying NOT NULL UNIQUE,
+    description character varying,
+    is_base_plan boolean NOT NULL,
+    is_active boolean NOT NULL,
+    billing_cycle smallint NOT NULL,  -- 1=monthly, 3=quarterly, 12=yearly
+    price numeric NOT NULL,
+    currency_id smallint NOT NULL,
+    stripe_price_id character varying,  -- NULL for CUSTOM plan
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (subscription_id)
+);
+
+-- Tenant_Subscription (existing)
+CREATE TABLE StreemLyne_MT.Tenant_Subscription (
+    tenant_subscription_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
+    tenant_id character varying NOT NULL,
+    subscription_id smallint NOT NULL,
+    subscription_start_date date,
+    subscription_end_date date,
+    is_active boolean,
+    auto_renew boolean,
+    status USER-DEFINED NOT NULL DEFAULT 'trialing',  -- trialing/active/expired/canceled
+    trial_end_date timestamp with time zone,
+    stripe_subscription_id character varying UNIQUE,
+    cancel_at_period_end boolean DEFAULT false,
+    current_period_start timestamp without time zone,
+    current_period_end timestamp without time zone,
+    created_at timestamp without time zone NOT NULL,
+    updated_at timestamp without time zone,
+    PRIMARY KEY (tenant_subscription_mapping_id),
+    FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
+    FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id)
+);
+
+-- Subscription_Module_Mapping (existing - plan definitions)
+CREATE TABLE StreemLyne_MT.Subscription_Module_Mapping (
+    subscription_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    subscription_id smallint NOT NULL,
+    module_id smallint NOT NULL,
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (subscription_module_mapping_id),
+    FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id),
+    FOREIGN KEY (module_id) REFERENCES StreemLyne_MT.Module_Master(module_id)
+);
+
+-- Tenant_Module_Mapping (existing - actual tenant access)
+CREATE TABLE StreemLyne_MT.Tenant_Module_Mapping (
+    tenant_module_mapping_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    tenant_id character varying NOT NULL,
+    module_id smallint NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_module_mapping_id),
+    FOREIGN KEY (module_id) REFERENCES StreemLyne_MT.Module_Master(module_id),
+    FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id)
+);
+```
+
+### 12.2 Proposed New Tables
+
+```sql
+-- Invoice_Master (PROPOSED - for invoice tracking)
+CREATE TABLE StreemLyne_MT.Invoice_Master (
+    invoice_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    invoice_number character varying NOT NULL UNIQUE,  -- 'INV-YYYY-001'
+    tenant_id character varying NOT NULL,
+    subscription_id smallint,
+    stripe_invoice_id character varying UNIQUE,
+    amount numeric NOT NULL,
+    tax_amount numeric DEFAULT 0,
+    total_amount numeric NOT NULL,
+    currency_id smallint NOT NULL,
+    status character varying DEFAULT 'pending',  -- pending/paid/failed/void
+    period_start date,
+    period_end date,
+    invoice_pdf_url text,
+    due_date date,
+    paid_at timestamp without time zone,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp without time zone,
+    PRIMARY KEY (invoice_id),
+    FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id),
+    FOREIGN KEY (subscription_id) REFERENCES StreemLyne_MT.Subscription_Plans(subscription_id)
+);
+
+-- Payment_Attempt (PROPOSED - for payment retry tracking)
+CREATE TABLE StreemLyne_MT.Payment_Attempt (
+    payment_attempt_id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    tenant_id character varying NOT NULL,
+    subscription_id smallint NOT NULL,
+    stripe_payment_intent_id character varying,
+    invoice_id smallint,
+    attempt_number integer NOT NULL,
+    amount numeric NOT NULL,
+    currency_id smallint NOT NULL,
+    status character varying NOT NULL,  -- pending/succeeded/failed
+    failure_reason text,
+    failure_code character varying,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    PRIMARY KEY (payment_attempt_id),
+    FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id)
+);
+
+-- Dunning_Config (PROPOSED - dunning policy settings)
+CREATE TABLE StreemLyne_MT.Dunning_Config (
+    config_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL UNIQUE,
+    plan_id smallint,  -- NULL = default config
+    retry_schedule jsonb NOT NULL,  -- e.g., [3, 7, 14] days
+    max_retries integer DEFAULT 3,
+    grace_period_days integer DEFAULT 0,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone
+);
+
+-- Notification_Preference (PROPOSED - user notification settings)
+CREATE TABLE StreemLyne_MT.Notification_Preference (
+    preference_id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    tenant_id character varying NOT NULL,
+    notification_type character varying NOT NULL,
+    email_enabled boolean DEFAULT true,
+    in_app_enabled boolean DEFAULT true,
+    sms_enabled boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    PRIMARY KEY (preference_id),
+    FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id)
+);
+
+-- Notification_Log (PROPOSED - notification history)
+CREATE TABLE StreemLyne_MT.Notification_Log (
+    notification_id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    tenant_id character varying NOT NULL,
+    notification_type character varying NOT NULL,
+    channel character varying NOT NULL,  -- email/in_app/sms
+    recipient character varying,  -- email address or phone
+    subject text,
+    body text,
+    status character varying DEFAULT 'pending',  -- pending/sent/failed
+    sent_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now(),
+    PRIMARY KEY (notification_id),
+    FOREIGN KEY (tenant_id) REFERENCES StreemLyne_MT.Tenant_Master(tenant_id)
+);
+```
+
+### 12.3 Entity Relationship Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      SUBSCRIPTION MODULE - ER DIAGRAM                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────┐         ┌───────────────────┐                       │
+│  │   Tenant_Master   │         │ Subscription_Plans│                       │
+│  ├───────────────────┤         ├───────────────────┤                       │
+│  │ PK tenant_id      │         │ PK subscription_id│                       │
+│  │    stripe_customer│         │    subscription_  │                       │
+│  └─────────┬─────────┘         │    code           │                       │
+│            │                   │    stripe_price_id│                       │
+│            │ 1:N               └─────────┬─────────┘                       │
+│            │                            │ 1:N                              │
+│            ▼                            ▼                                  │
+│  ┌───────────────────┐         ┌───────────────────┐                       │
+│  │Tenant_Subscription│         │Subscription_     │                       │
+│  ├───────────────────┤         │Module_Mapping     │                       │
+│  │PK mapping_id      │         ├───────────────────┤                       │
+│  │FK tenant_id ──────┼────────►│FK subscription_id│                       │
+│  │FK subscription_id │         │FK module_id      │                       │
+│  │    status         │         └───────────────────┘                       │
+│  │    trial_end_date │                                       ▲             │
+│  │    stripe_sub_id  │                                       │             │
+│  │    cancel_at_     │         ┌───────────────────┐          │             │
+│  │    period_end     │         │  Tenant_Module_   │          │             │
+│  └─────────┬─────────┘         │  Mapping          │──────────┘             │
+│            │                   ├───────────────────┤                       │
+│            │ 1:N               │FK tenant_id      │                       │
+│            │                   │FK module_id      │                       │
+│            ▼                   └─────────┬─────────┘                       │
+│  ┌───────────────────┐                   ▲                                 │
+│  │  Payment_Attempt  │                   │                                 │
+│  ├───────────────────┤                   │                                 │
+│  │PK attempt_id      │         ┌───────────────────┐                       │
+│  │FK tenant_id       │         │  Module_Master    │                       │
+│  │FK subscription_id │         ├───────────────────┤                       │
+│  │    status         │         │PK module_id       │                       │
+│  │    attempt_number │         │    is_core        │                       │
+│  └───────────────────┘         └───────────────────┘                       │
+│                                                                             │
+│  ┌───────────────────┐         ┌───────────────────┐                       │
+│  │   Invoice_Master  │         │Notification_Log   │                       │
+│  ├───────────────────┤         ├───────────────────┤                       │
+│  │PK invoice_id      │         │PK notification_id │                       │
+│  │    invoice_number │         │    tenant_id      │                       │
+│  │FK tenant_id       │         │    channel        │                       │
+│  │    status         │         │    status         │                       │
+│  │    amount         │         └───────────────────┘                       │
+│  └───────────────────┘                                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 13. API Reference Summary
+
+### 13.1 Current Endpoints
+
+```yaml
+# Self-Service Endpoints (authenticated users)
+GET    /api/subscriptions/me
+  - Returns full subscription status for current tenant
+  - Exempt from subscription gate (expired tenants can access)
+  Response: { status, plan_name, trial_end_date, days_remaining_in_trial, ... }
+
+POST   /api/subscriptions/me/checkout
+  - Creates Stripe Checkout Session or returns sales URL for CUSTOM
+  - Body: { plan_code: "STARTER" | "PRO" | "CUSTOM" }
+  - Returns: { checkout_url } or { contact_url, is_custom: true }
+  - Requires authentication; no role restriction
+
+POST   /api/subscriptions/me/cancel
+  - Cancel subscription at period end
+  - Returns: { message, cancel_at, cancel_at_period_end }
+  - Requires authentication; no role restriction
+
+# Plan Management (admin)
+GET    /api/subscriptions/plans
+  - List all subscription plans
+  - Query: include_inactive=true
+
+GET    /api/subscriptions/plans/{id}
+  - Get plan details with modules
+
+POST   /api/subscriptions/plans
+  - Create new plan (permission: subscription.create_plan)
+
+PUT    /api/subscriptions/plans/{id}
+  - Update plan (permission: subscription.create_plan)
+
+POST   /api/subscriptions/plans/{id}/modules/{module_id}
+  - Add module to plan (permission: subscription.manage_modules)
+
+DELETE /api/subscriptions/plans/{id}/modules/{module_id}
+  - Remove module from plan (permission: subscription.manage_modules)
+
+# Tenant Subscription Management (admin)
+GET    /api/subscriptions/tenants/{tenant_id}
+  - Get tenant's subscription history (permission: subscription.view)
+
+POST   /api/subscriptions/tenants/{tenant_id}
+  - Assign subscription to tenant (permission: subscription.create)
+
+POST   /api/subscriptions/tenants/{tenant_id}/cancel
+  - Cancel tenant's subscription (permission: subscription.cancel)
+
+POST   /api/subscriptions/tenants/{tenant_id}/renew
+  - Renew tenant's subscription (permission: subscription.create)
+
+# Stripe Webhooks
+POST   /api/subscriptions/stripe/webhook
+  - Handles: checkout.session.completed, invoice.paid, customer.subscription.deleted
+```
+
+### 13.2 Proposed New Endpoints
+
+```yaml
+# Invoice Endpoints
+GET    /api/subscriptions/me/invoices
+  - List tenant's invoices
+  - Response: [{ invoice_number, amount, status, period_start, period_end, ... }]
+
+GET    /api/subscriptions/me/invoices/{invoice_id}
+  - Get invoice details
+
+GET    /api/subscriptions/me/invoices/{invoice_id}/pdf
+  - Download invoice PDF
+
+# Payment Management
+POST   /api/subscriptions/me/payment-methods
+  - Update payment method (creates Stripe SetupIntent)
+
+DELETE /api/subscriptions/me/payment-methods/{payment_method_id}
+  - Remove payment method
+
+# Subscription Management
+POST   /api/subscriptions/me/downgrade
+  - Schedule downgrade at period end
+  - Body: { plan_code: "STARTER" }
+
+GET    /api/subscriptions/me/pending-changes
+  - Get pending plan changes
+
+DELETE /api/subscriptions/me/pending-changes
+  - Cancel pending downgrade
+
+# Dunning (Admin)
+GET    /api/subscriptions/tenants/{tenant_id}/payment-history
+  - Get tenant's payment attempts
+
+POST   /api/subscriptions/tenants/{tenant_id}/retry-payment
+  - Manually retry payment
+
+# Dunning Config (Admin)
+GET    /api/subscriptions/config/dunning
+  - Get dunning configuration
+
+PUT    /api/subscriptions/config/dunning
+  - Update dunning configuration
+
+# Notification Preferences
+GET    /api/subscriptions/me/notification-preferences
+  - Get notification settings
+
+PUT    /api/subscriptions/me/notification-preferences
+  - Update notification settings
+```
+
+---
+
+**Document Version**: 1.0
+**Created**: 2024
+**Last Updated**: 2024

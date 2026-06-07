@@ -46,6 +46,7 @@ def list_clients():
       name      – partial match on client_company_name
       country_id – filter by country
     """
+    # Removed debug logging
     query = ClientMaster.query.filter_by(tenant_id=g.tenant_id)
 
     name_q = request.args.get('name')
@@ -56,6 +57,9 @@ def list_clients():
     if country_id:
         query = query.filter_by(country_id=country_id)
 
+    clients = query.order_by(ClientMaster.created_at.desc()).all()
+    # Removed debug logging
+    return jsonify([_client_dict(c) for c in clients]), 200
     # ✅ Order by creation date or ID to maintain consistent numbering
     clients = query.order_by(ClientMaster.created_at.asc()).all()
     
@@ -403,6 +407,7 @@ def _client_dict(c: ClientMaster) -> dict:
         'default_currency_id':  c.default_currency_id,
         'client_website':       c.client_website,
         'created_at':           c.created_at.isoformat() if c.created_at else None,
+        # Legacy aliases (kept for front-end backwards compatibility)
         
         # ✅ Stage (but not display_id - that's added by the route)
         'stage':          c.stage,

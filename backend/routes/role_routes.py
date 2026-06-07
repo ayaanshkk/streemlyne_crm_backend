@@ -18,6 +18,35 @@ Schema alignment (StreemLyne_MT):
   User_Role_Mapping:
     user_id (PK composite), role_id (PK composite)
     — no surrogate key, no created_at in schema
+
+CHANGES vs previous version
+─────────────────────────────────────────────────────────────────────────────
+[ROLE-001] SECURITY FIX — Restored all @permission_required decorators that
+           were previously commented out. Any authenticated user could
+           previously create, update, or delete roles and permissions, and
+           assign/revoke roles to any user — including escalating their own
+           privileges. All mutation endpoints are now gated.
+
+           Endpoints secured and their required permission:
+             POST   /api/roles                              → role.create
+             PUT    /api/roles/<id>                         → role.update
+             DELETE /api/roles/<id>                         → role.delete
+             POST   /api/roles/<id>/permissions             → role.assign_permission
+             POST   /api/roles/<id>/permissions/bulk        → role.assign_permission
+             DELETE /api/roles/<id>/permissions/<perm_id>   → role.revoke_permission
+             POST   /api/roles/permissions                  → role.manage_permissions
+             DELETE /api/roles/permissions/<perm_id>        → role.manage_permissions
+             POST   /api/roles/users/<user_id>              → role.assign_user
+             POST   /api/roles/users/<user_id>/bulk         → role.assign_user
+             DELETE /api/roles/users/<user_id>/<role_id>    → role.revoke_user
+
+           Read-only endpoints remain open to all authenticated users:
+             GET /api/roles
+             GET /api/roles/<id>
+             GET /api/roles/<id>/permissions
+             GET /api/roles/permissions
+             GET /api/roles/users/<user_id>
+─────────────────────────────────────────────────────────────────────────────
 """
 
 from flask import Blueprint, request, jsonify, g, abort
@@ -46,12 +75,13 @@ def list_roles():
 
 @role_bp.route('', methods=['POST'])
 @auth_required
-# @permission_required('role.create')
+@permission_required('role.create')  # [ROLE-001] restored
 def create_role():
     """
     Create a new role.
     POST /api/roles
     Body: { "role_name": "Billing Manager", "role_description": "...", "is_system": false }
+    Restricted to users with role.create permission.
     """
     data = request.get_json() or {}
 
@@ -99,13 +129,14 @@ def get_role(role_id: int):
 
 @role_bp.route('/<int:role_id>', methods=['PUT'])
 @auth_required
-# @permission_required('role.update')
+@permission_required('role.update')  # [ROLE-001] restored
 def update_role(role_id: int):
     """
     Update a non-system role.
     PUT /api/roles/<role_id>
     Body: { "role_name": "...", "role_description": "..." }
     System roles (is_system=true) are protected and cannot be renamed.
+    Restricted to users with role.update permission.
     """
     role = _role_or_404(role_id)
 
@@ -130,12 +161,13 @@ def update_role(role_id: int):
 
 @role_bp.route('/<int:role_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('role.delete')
+@permission_required('role.delete')  # [ROLE-001] restored
 def delete_role(role_id: int):
     """
     Delete a non-system role.
     DELETE /api/roles/<role_id>
     Returns 403 for system roles, 409 if users are still assigned this role.
+    Restricted to users with role.delete permission.
     """
     role = _role_or_404(role_id)
 
@@ -180,12 +212,13 @@ def get_role_permissions(role_id: int):
 
 @role_bp.route('/<int:role_id>/permissions', methods=['POST'])
 @auth_required
-# @permission_required('role.assign_permission')
+@permission_required('role.assign_permission')  # [ROLE-001] restored
 def assign_permission(role_id: int):
     """
     Assign a permission to a role.
     POST /api/roles/<role_id>/permissions
     Body: { "permission_code": "client.create" }
+    Restricted to users with role.assign_permission permission.
     """
     _role_or_404(role_id)
     data = request.get_json() or {}
@@ -221,7 +254,7 @@ def assign_permission(role_id: int):
 
 @role_bp.route('/<int:role_id>/permissions/bulk', methods=['POST'])
 @auth_required
-# @permission_required('role.assign_permission')
+@permission_required('role.assign_permission')  # [ROLE-001] restored
 def bulk_assign_permissions(role_id: int):
     """
     Replace all permissions on a role in one call.
@@ -230,6 +263,7 @@ def bulk_assign_permissions(role_id: int):
 
     Existing mappings are removed and the supplied set is applied atomically.
     Useful for the role editor UI — avoids many individual assign/revoke calls.
+    Restricted to users with role.assign_permission permission.
     """
     _role_or_404(role_id)
     data = request.get_json() or {}
@@ -271,11 +305,12 @@ def bulk_assign_permissions(role_id: int):
 
 @role_bp.route('/<int:role_id>/permissions/<int:permission_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('role.revoke_permission')
+@permission_required('role.revoke_permission')  # [ROLE-001] restored
 def revoke_permission(role_id: int, permission_id: int):
     """
     Remove a permission from a role.
     DELETE /api/roles/<role_id>/permissions/<permission_id>
+    Restricted to users with role.revoke_permission permission.
     """
     mapping = RolePermissionMapping.query.filter_by(
         role_id=role_id, permission_id=permission_id
@@ -309,12 +344,13 @@ def list_permissions():
 
 @role_bp.route('/permissions', methods=['POST'])
 @auth_required
-# @permission_required('role.manage_permissions')
+@permission_required('role.manage_permissions')  # [ROLE-001] restored
 def create_permission():
     """
     Register a new permission in the catalogue.
     POST /api/roles/permissions
     Body: { "permission_code": "report.export", "description": "Can export reports" }
+    Restricted to users with role.manage_permissions permission.
     """
     data = request.get_json() or {}
 
@@ -341,12 +377,13 @@ def create_permission():
 
 @role_bp.route('/permissions/<int:permission_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('role.manage_permissions')
+@permission_required('role.manage_permissions')  # [ROLE-001] restored
 def delete_permission(permission_id: int):
     """
     Delete a permission from the catalogue.
     DELETE /api/roles/permissions/<permission_id>
     Returns 409 if any role still uses this permission.
+    Restricted to users with role.manage_permissions permission.
     """
     perm = PermissionCatalog.query.get(permission_id)
     if not perm:
@@ -383,12 +420,13 @@ def get_user_roles(user_id: int):
 
 @role_bp.route('/users/<int:user_id>', methods=['POST'])
 @auth_required
-# @permission_required('role.assign_user')
+@permission_required('role.assign_user')  # [ROLE-001] restored
 def assign_role_to_user(user_id: int):
     """
     Assign a role to a user.
     POST /api/roles/users/<user_id>
     Body: { "role_id": 3 }
+    Restricted to users with role.assign_user permission.
     """
     data = request.get_json() or {}
 
@@ -416,12 +454,13 @@ def assign_role_to_user(user_id: int):
 
 @role_bp.route('/users/<int:user_id>/bulk', methods=['POST'])
 @auth_required
-# @permission_required('role.assign_user')
+@permission_required('role.assign_user')  # [ROLE-001] restored
 def bulk_assign_user_roles(user_id: int):
     """
     Replace all roles for a user in one atomic call.
     POST /api/roles/users/<user_id>/bulk
     Body: { "role_ids": [1, 3, 5] }
+    Restricted to users with role.assign_user permission.
     """
     data = request.get_json() or {}
     role_ids = data.get('role_ids', [])
@@ -452,11 +491,12 @@ def bulk_assign_user_roles(user_id: int):
 
 @role_bp.route('/users/<int:user_id>/<int:role_id>', methods=['DELETE'])
 @auth_required
-# @permission_required('role.revoke_user')
+@permission_required('role.revoke_user')  # [ROLE-001] restored
 def revoke_role_from_user(user_id: int, role_id: int):
     """
     Remove a role from a user.
     DELETE /api/roles/users/<user_id>/<role_id>
+    Restricted to users with role.revoke_user permission.
     """
     mapping = UserRoleMapping.query.filter_by(
         user_id=user_id, role_id=role_id
