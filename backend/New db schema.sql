@@ -3,7 +3,7 @@
 
 CREATE TABLE StreemLyne_MT.Action_Items (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  tenant_id character varying NOT NULL,      
+  tenant_id character varying NOT NULL,
   client_id smallint NOT NULL,
   stage character varying NOT NULL,
   priority character varying DEFAULT 'Medium'::character varying CHECK (priority::text = ANY (ARRAY['Low'::character varying, 'Medium'::character varying, 'High'::character varying]::text[])),
@@ -986,5 +986,3 @@ CREATE TABLE StreemLyne_MT.User_Role_Mapping (
   role_id integer NOT NULL,
   CONSTRAINT User_Role_Mapping_pkey PRIMARY KEY (user_id, role_id)
 );
-
-

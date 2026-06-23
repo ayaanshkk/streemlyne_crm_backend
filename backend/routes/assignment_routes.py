@@ -1,389 +1,316 @@
-from flask import Blueprint, request, jsonify, g
-from datetime import datetime, date
+"""
+Assignment Routes
+Handles scheduling of tasks, meetings, calls, deliveries, and notes
+against the calendar for the current tenant.
+
+Endpoints:
+  GET    /api/assignments              — list (filter by month, project_id, client_id)
+  POST   /api/assignments              — create
+  GET    /api/assignments/<id>         — get single
+  PUT    /api/assignments/<id>         — update
+  DELETE /api/assignments/<id>         — delete
+
+Schema (assignments table):
+  assignment_id, tenant_id, type, title, date, staff_name,
+  project_id (FK → Project_Details), client_id (FK → Client_Master),
+  estimated_hours, notes, priority, status, created_at, updated_at
+
+Frontend field aliases:
+  frontend.job_id      → backend.project_id
+  frontend.customer_id → backend.client_id
+  (both aliases are handled transparently in request parsing + response)
+"""
+
+from flask import Blueprint, request, jsonify, g, abort
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import extract
 from database import db
-from models import Assignment, TeamMember, Job, Customer
-from tenant_middleware import require_tenant as token_required
+from models import Assignment
+from middleware import auth_required
+from datetime import datetime, date
+
+assignment_bp = Blueprint('assignments', __name__, url_prefix='/assignments')
+
+# Valid assignment types — matches frontend AssignmentType union
+VALID_TYPES = {'meeting', 'call', 'task', 'delivery', 'note'}
 
 
-assignment_bp = Blueprint("assignment", __name__, url_prefix="/assignments")
+# ─────────────────────────────────────────
+# GET /api/assignments
+# ─────────────────────────────────────────
 
+@assignment_bp.route('', methods=['GET'])
+@auth_required
+def list_assignments():
+    """
+    List assignments for the current tenant.
 
-# ✅ VALID ASSIGNMENT FIELDS - Based on working project
-VALID_ASSIGNMENT_FIELDS = [
-    'type', 'title', 'date', 'start_date', 'end_date', 'customer_name',
-    'user_id', 'team_member', 'job_id', 'customer_id', 'job_type',
-    'start_time', 'end_time', 'estimated_hours',
-    'notes', 'priority', 'status', 'staff_name', 'staff_id'
-]
+    Query parameters:
+      month       — YYYY-MM  filter to a specific calendar month (e.g. 2025-03)
+      project_id  — integer  filter by linked project / job
+      client_id   — integer  filter by linked client
+      date        — YYYY-MM-DD  filter to exact date
 
-
-def filter_assignment_data(data):
-    """Filter request data to only include valid Assignment fields"""
-    filtered = {}
-    for key in VALID_ASSIGNMENT_FIELDS:
-        if key in data:
-            filtered[key] = data[key]
-    return filtered
-
-
-# -----------------------------
-# GET assignments for a month
-# -----------------------------
-@assignment_bp.route("", methods=["GET"])
-@token_required  # ✅ ADDED
-def get_assignments():
-    """Get all assignments, optionally filtered by month"""
-    month = request.args.get("month")  # YYYY-MM
-
-    # ✅ FILTER BY TENANT
+    Returns array of assignment objects.
+    """
     query = Assignment.query.filter_by(tenant_id=g.tenant_id)
 
-    if month:
+    # ── Month filter (most common calendar use-case) ──────────────────────
+    month_param = request.args.get('month')     # e.g. "2025-03"
+    if month_param:
         try:
-            year, month_num = map(int, month.split("-"))
-            start_date = date(year, month_num, 1)
-            if month_num == 12:
-                end_date = date(year + 1, 1, 1)
-            else:
-                end_date = date(year, month_num + 1, 1)
-
+            year, month = month_param.split('-')
             query = query.filter(
-                Assignment.date >= start_date,
-                Assignment.date < end_date
+                extract('year',  Assignment.date) == int(year),
+                extract('month', Assignment.date) == int(month),
             )
+        except (ValueError, AttributeError):
+            return jsonify({'error': 'month must be in YYYY-MM format'}), 400
+
+    # ── Exact date filter ─────────────────────────────────────────────────
+    date_param = request.args.get('date')
+    if date_param:
+        try:
+            parsed_date = datetime.strptime(date_param, '%Y-%m-%d').date()
+            query = query.filter_by(date=parsed_date)
         except ValueError:
-            return jsonify({"error": "Invalid month format. Use YYYY-MM"}), 400
+            return jsonify({'error': 'date must be in YYYY-MM-DD format'}), 400
 
-    assignments = query.order_by(Assignment.date.desc()).all()
-    return jsonify([a.to_dict() for a in assignments])
+    # ── Optional FK filters ───────────────────────────────────────────────
+    project_id = request.args.get('project_id', type=int)
+    if project_id:
+        query = query.filter_by(project_id=project_id)
+
+    # Accept both frontend aliases
+    client_id = (
+        request.args.get('client_id', type=int) or
+        request.args.get('customer_id', type=int)
+    )
+    if client_id:
+        query = query.filter_by(client_id=client_id)
+
+    assignments = query.order_by(Assignment.date.asc()).all()
+    return jsonify([_assignment_dict(a) for a in assignments]), 200
 
 
-# -----------------------------
-# CREATE assignment
-# -----------------------------
-@assignment_bp.route("", methods=["POST"])
-@token_required  # ✅ ADDED
+# ─────────────────────────────────────────
+# POST /api/assignments
+# ─────────────────────────────────────────
+
+@assignment_bp.route('', methods=['POST'])
+@auth_required
 def create_assignment():
-    """Create a new assignment"""
-    data = request.json
-    
-    # ✅ FIRST: Check if data exists
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
+    """
+    Create a new assignment.
 
-    print(f"📥 RAW data received: {data}")
-    print(f"🏢 Tenant ID: {g.tenant_id}")  # ✅ ADDED
-    
-    # ✅ Filter out invalid fields
-    data = filter_assignment_data(data)
-    print(f"📥 Creating assignment with filtered data: {data}")
+    Required body fields:
+      type   — meeting | call | task | delivery | note
+      title  — display title
+      date   — YYYY-MM-DD
 
-    # ✅ PARSE DATE FIELDS - Handle both old and new format
-    date_value = None
-    start_date_value = None
-    end_date_value = None
-    
-    if data.get('start_date'):
-        try:
-            start_date_value = datetime.strptime(data['start_date'], '%Y-%m-%d').date()
-            date_value = start_date_value  # Also set date for backward compatibility
-        except Exception as e:
-            print(f"❌ Error parsing start_date: {e}")
-            return jsonify({'error': 'Invalid start_date format'}), 400
-    elif data.get('date'):
-        try:
-            date_value = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            start_date_value = date_value  # Also set start_date
-        except Exception as e:
-            print(f"❌ Error parsing date: {e}")
-            return jsonify({'error': 'Invalid date format'}), 400
-    else:
-        return jsonify({'error': 'start_date or date is required'}), 400
-    
-    # ✅ ✅ ✅ VALIDATE: No past dates (AFTER parsing, not before)
-    today = date.today()
-    if date_value < today:
-        error_msg = f'Cannot schedule in the past. Date {date_value} is before today ({today})'
-        print(f"❌ {error_msg}")
-        return jsonify({'error': error_msg}), 400
-    
-    if data.get('end_date'):
-        try:
-            end_date_value = datetime.strptime(data['end_date'], '%Y-%m-%d').date()
-            # Also validate end_date
-            if end_date_value < today:
-                return jsonify({
-                    'error': f'End date {end_date_value} cannot be in the past'
-                }), 400
-        except Exception as e:
-            print(f"❌ Error parsing end_date: {e}")
-            return jsonify({'error': 'Invalid end_date format'}), 400
-    else:
-        end_date_value = start_date_value  # Default: end_date = start_date
+    Optional body fields:
+      staff_name, job_id (project_id alias), customer_id (client_id alias),
+      estimated_hours, notes, priority, status
+    """
+    data = request.get_json() or {}
 
-    # ✅ Handle staff assignment
-    staff_name = data.get("staff_name") or data.get("team_member")
-    staff_id = None
-    
-    if staff_name:
-        staff_name = staff_name.strip()
-        # ✅ FILTER BY TENANT
-        member = TeamMember.query.filter(
-            TeamMember.tenant_id == g.tenant_id,
-            TeamMember.name.ilike(staff_name)
-        ).first()
+    # ── Validation ────────────────────────────────────────────────────────
+    errors = {}
+    if not (data.get('title') or '').strip():
+        errors['title'] = 'title is required'
+    if not data.get('date'):
+        errors['date'] = 'date is required'
+    assignment_type = data.get('type', 'task')
+    if assignment_type not in VALID_TYPES:
+        assignment_type = 'task'   # graceful fallback matching frontend behaviour
+    if errors:
+        return jsonify({'error': 'Validation failed', 'details': errors}), 400
 
-        if not member:
-            member = TeamMember(
-                name=staff_name, 
-                active=True,
-                tenant_id=g.tenant_id  # ✅ ADDED
-            )
-            db.session.add(member)
-            db.session.flush()  # Get ID before commit
-        
-        staff_id = member.id
+    # ── Date parse ────────────────────────────────────────────────────────
+    parsed_date = _parse_date(data['date'])
+    if not parsed_date:
+        return jsonify({'error': 'date must be in YYYY-MM-DD format'}), 400
 
-    # ✅ GET CUSTOMER NAME
-    customer_name = data.get('customer_name')
-    customer_id = data.get('customer_id')
-    if customer_id and not customer_name:
-        # ✅ FILTER BY TENANT
-        customer = Customer.query.filter_by(
-            id=customer_id,
-            tenant_id=g.tenant_id
-        ).first()
-        if customer:
-            customer_name = customer.name
+    # ── Resolve FK aliases ────────────────────────────────────────────────
+    # Frontend sends job_id; schema column is project_id
+    # Frontend sends customer_id; schema column is client_id
+    project_id = (
+        data.get('project_id') or
+        data.get('job_id')
+    )
+    client_id = (
+        data.get('client_id') or
+        data.get('customer_id')
+    )
 
-    # Parse times if provided (optional for meetings)
-    start_time = None
-    end_time = None
-    if data.get('start_time'):
-        try:
-            start_time = datetime.strptime(data['start_time'], '%H:%M').time()
-        except ValueError:
-            print(f"Invalid start_time format: {data['start_time']}")
-    
-    if data.get('end_time'):
-        try:
-            end_time = datetime.strptime(data['end_time'], '%H:%M').time()
-        except ValueError:
-            print(f"Invalid end_time format: {data['end_time']}")
+    a = Assignment(
+        tenant_id       = g.tenant_id,
+        type            = assignment_type,
+        title           = data['title'].strip(),
+        date            = parsed_date,
+        staff_name      = data.get('staff_name'),
+        project_id      = int(project_id) if project_id else None,
+        client_id       = int(client_id)  if client_id  else None,
+        estimated_hours = data.get('estimated_hours'),
+        notes           = data.get('notes'),
+        priority        = data.get('priority', 'Medium'),
+        status          = data.get('status', 'Scheduled'),
+    )
 
-    # Calculate hours
-    estimated_hours = data.get('estimated_hours')
-    if isinstance(estimated_hours, str):
-        try:
-            estimated_hours = float(estimated_hours) if estimated_hours else None
-        except ValueError:
-            estimated_hours = None
-
-    # ✅ Create assignment with date range support AND tenant_id
     try:
-        assignment = Assignment(
-            tenant_id=g.tenant_id,  # ✅ CRITICAL FIX - ADDED THIS
-            type=data.get('type', 'task'),  # ✅ Changed default from 'job' to 'task'
-            title=data.get('title', ''),
-            date=date_value,
-            start_date=start_date_value,
-            end_date=end_date_value,
-            customer_name=customer_name,
-            staff_id=staff_id,
-            team_member=staff_name,
-            job_id=data.get('job_id'),
-            customer_id=customer_id,
-            start_time=start_time,
-            end_time=end_time,
-            estimated_hours=estimated_hours,
-            notes=data.get('notes', ''),
-            priority=data.get('priority', 'Medium'),
-            status=data.get('status', 'Scheduled'),
-            job_type=data.get('job_type'),
-            created_by=g.user.get_full_name() if hasattr(g, 'user') else None  # ✅ ADDED
-        )
-        
-        db.session.add(assignment)
+        db.session.add(a)
         db.session.commit()
-
-        print(f"✅ Assignment created: {assignment.id}")
-        return jsonify(assignment.to_dict()), 201
-
-    except Exception as e:
+    except IntegrityError as exc:
         db.session.rollback()
-        print(f"❌ Error creating assignment: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Invalid project_id or client_id reference', 'detail': str(exc)}), 409
+
+    return jsonify(_assignment_dict(a)), 201
 
 
-# -----------------------------
-# UPDATE assignment
-# -----------------------------
-@assignment_bp.route("/<assignment_id>", methods=["PUT"])
-@token_required  # ✅ ADDED
-def update_assignment(assignment_id):
-    """Update an existing assignment"""
-    # ✅ FILTER BY TENANT
-    assignment = Assignment.query.filter_by(
-        id=assignment_id,
-        tenant_id=g.tenant_id
+# ─────────────────────────────────────────
+# GET /api/assignments/<id>
+# ─────────────────────────────────────────
+
+@assignment_bp.route('/<int:assignment_id>', methods=['GET'])
+@auth_required
+def get_assignment(assignment_id: int):
+    """GET /api/assignments/<assignment_id>"""
+    a = _get_or_404(assignment_id)
+    return jsonify(_assignment_dict(a)), 200
+
+
+# ─────────────────────────────────────────
+# PUT /api/assignments/<id>
+# ─────────────────────────────────────────
+
+@assignment_bp.route('/<int:assignment_id>', methods=['PUT'])
+@auth_required
+def update_assignment(assignment_id: int):
+    """
+    Update an assignment.
+    PUT /api/assignments/<assignment_id>
+    Body: any subset of the create fields.
+    """
+    a = _get_or_404(assignment_id)
+    data = request.get_json() or {}
+
+    if 'type' in data and data['type'] in VALID_TYPES:
+        a.type = data['type']
+
+    if 'title' in data and data['title'].strip():
+        a.title = data['title'].strip()
+
+    if 'date' in data:
+        parsed = _parse_date(data['date'])
+        if not parsed:
+            return jsonify({'error': 'date must be in YYYY-MM-DD format'}), 400
+        a.date = parsed
+
+    if 'staff_name' in data:
+        a.staff_name = data['staff_name']
+
+    # Accept both frontend aliases for the FK fields
+    if 'project_id' in data or 'job_id' in data:
+        raw = data.get('project_id') or data.get('job_id')
+        a.project_id = int(raw) if raw else None
+
+    if 'client_id' in data or 'customer_id' in data:
+        raw = data.get('client_id') or data.get('customer_id')
+        a.client_id = int(raw) if raw else None
+
+    for field in ('estimated_hours', 'notes', 'priority', 'status'):
+        if field in data:
+            setattr(a, field, data[field])
+
+    a.updated_at = datetime.utcnow()
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({'error': 'Invalid project_id or client_id reference', 'detail': str(exc)}), 409
+
+    return jsonify(_assignment_dict(a)), 200
+
+
+# ─────────────────────────────────────────
+# DELETE /api/assignments/<id>
+# ─────────────────────────────────────────
+
+@assignment_bp.route('/<int:assignment_id>', methods=['DELETE'])
+@auth_required
+def delete_assignment(assignment_id: int):
+    """DELETE /api/assignments/<assignment_id>"""
+    a = _get_or_404(assignment_id)
+    db.session.delete(a)
+    db.session.commit()
+    return jsonify({'message': 'Assignment deleted'}), 200
+
+
+# ─────────────────────────────────────────
+# Private helpers
+# ─────────────────────────────────────────
+
+def _get_or_404(assignment_id: int) -> Assignment:
+    """Fetch assignment scoped to current tenant or raise 404."""
+    a = Assignment.query.filter_by(
+        assignment_id=assignment_id,
+        tenant_id=g.tenant_id,
     ).first()
-    
-    if not assignment:
-        print(f"❌ Assignment {assignment_id} not found for tenant {g.tenant_id}")
-        return jsonify({"error": "Assignment not found"}), 404
-    
-    data = request.json
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
+    if not a:
+        abort(404, description='Assignment not found')
+    return a
 
-    print(f"📝 RAW update data received: {data}")
-    
-    # ✅ Filter out invalid fields
-    data = filter_assignment_data(data)
-    print(f"📝 Updating assignment {assignment_id} with filtered data: {data}")
 
+def _parse_date(value) -> date | None:
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    # Handle ISO datetime strings from frontend (e.g. "2025-03-15T00:00:00")
+    raw = str(value).split('T')[0]
     try:
-        if 'type' in data:
-            assignment.type = data['type']
-        if 'title' in data:
-            assignment.title = data['title']
-        
-        # ✅ Handle date updates for drag and drop
-        if 'start_date' in data and data['start_date']:
-            assignment.start_date = datetime.strptime(data['start_date'], '%Y-%m-%d').date()
-            assignment.date = assignment.start_date  # Keep date in sync
-            print(f"📅 Updated start_date to: {assignment.start_date}")
-        elif 'date' in data and data['date']:
-            assignment.date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            if not assignment.start_date:
-                assignment.start_date = assignment.date
-            print(f"📅 Updated date to: {assignment.date}")
-        
-        if 'end_date' in data and data['end_date']:
-            assignment.end_date = datetime.strptime(data['end_date'], '%Y-%m-%d').date()
-            print(f"📅 Updated end_date to: {assignment.end_date}")
-        elif 'start_date' in data and not ('end_date' in data):
-            # If only start_date provided, set end_date same as start_date
-            assignment.end_date = assignment.start_date
-            print(f"📅 Set end_date same as start_date: {assignment.end_date}")
-        
-        if 'start_time' in data:
-            try:
-                assignment.start_time = datetime.strptime(data['start_time'], '%H:%M').time() if data['start_time'] else None
-            except ValueError:
-                print(f"Invalid start_time: {data['start_time']}")
-        
-        if 'end_time' in data:
-            try:
-                assignment.end_time = datetime.strptime(data['end_time'], '%H:%M').time() if data['end_time'] else None
-            except ValueError:
-                print(f"Invalid end_time: {data['end_time']}")
-        
-        if 'estimated_hours' in data:
-            estimated_hours = data['estimated_hours']
-            try:
-                assignment.estimated_hours = float(estimated_hours) if isinstance(estimated_hours, str) else estimated_hours
-            except (ValueError, TypeError):
-                print(f"Invalid estimated_hours: {estimated_hours}")
-        
-        if 'notes' in data:
-            assignment.notes = data['notes']
-        if 'priority' in data:
-            assignment.priority = data['priority']
-        if 'status' in data:
-            assignment.status = data['status']
-        if 'job_type' in data:
-            assignment.job_type = data['job_type']
-        if 'job_id' in data:
-            assignment.job_id = data['job_id']
-        
-        # ✅ Update customer
-        if 'customer_id' in data:
-            assignment.customer_id = data['customer_id']
-            if data['customer_id']:
-                # ✅ FILTER BY TENANT
-                customer = Customer.query.filter_by(
-                    id=data['customer_id'],
-                    tenant_id=g.tenant_id
-                ).first()
-                if customer:
-                    assignment.customer_name = customer.name
-        
-        if 'customer_name' in data:
-            assignment.customer_name = data['customer_name']
-        
-        # ✅ Update staff assignment
-        if 'staff_name' in data or 'team_member' in data:
-            staff_name = (data.get('staff_name') or data.get('team_member', '')).strip()
-            if staff_name:
-                # ✅ FILTER BY TENANT
-                member = TeamMember.query.filter(
-                    TeamMember.tenant_id == g.tenant_id,
-                    TeamMember.name.ilike(staff_name)
-                ).first()
-
-                if not member:
-                    member = TeamMember(
-                        name=staff_name, 
-                        active=True,
-                        tenant_id=g.tenant_id  # ✅ ADDED
-                    )
-                    db.session.add(member)
-                    db.session.flush()
-
-                assignment.staff_id = member.id
-                assignment.team_member = staff_name
-        
-        assignment.updated_at = datetime.utcnow()
-        assignment.updated_by = g.user.get_full_name() if hasattr(g, 'user') else None  # ✅ ADDED
-        
-        db.session.commit()
-        
-        print(f"✅ Assignment {assignment_id} updated successfully")
-        return jsonify(assignment.to_dict())
-        
-    except Exception as e:
-        db.session.rollback()
-        print(f"❌ Error updating assignment: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return None
 
 
-# -----------------------------
-# DELETE assignment
-# -----------------------------
-@assignment_bp.route("/<assignment_id>", methods=["DELETE"])
-@token_required  # ✅ ADDED
-def delete_assignment(assignment_id):
-    """Delete an assignment"""
-    # ✅ FILTER BY TENANT
-    assignment = Assignment.query.filter_by(
-        id=assignment_id,
-        tenant_id=g.tenant_id
-    ).first()
-    
-    if not assignment:
-        print(f"❌ Assignment {assignment_id} not found for tenant {g.tenant_id}")
-        return jsonify({"error": "Assignment not found"}), 404
-    
-    try:
-        print(f"🗑️ Deleting assignment {assignment_id}")
-        db.session.delete(assignment)
-        db.session.commit()
-        print(f"✅ Assignment {assignment_id} deleted")
-        
-        # ✅ Always return JSON
-        return jsonify({
-            'message': 'Assignment deleted successfully',
-            'id': assignment_id
-        }), 200
-    
-    except Exception as e:
-        db.session.rollback()
-        print(f"❌ Error deleting assignment: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+def _assignment_dict(a: Assignment) -> dict:
+    """
+    Serialise an Assignment to a dict.
+    Exposes both schema names and frontend aliases so the frontend
+    never needs to remap field names on reads.
+    """
+    return {
+        # Primary key
+        'id':             a.assignment_id,   # frontend alias
+        'assignment_id':  a.assignment_id,
+
+        # Core fields
+        'type':           a.type,
+        'title':          a.title,
+        'date':           a.date.isoformat() if a.date else None,
+        'staff_name':     a.staff_name,
+
+        # FK fields — exposed with both schema name and frontend alias
+        'project_id':     a.project_id,
+        'job_id':         a.project_id,      # frontend alias
+        'client_id':      a.client_id,
+        'customer_id':    a.client_id,       # frontend alias
+
+        # Optional fields
+        'estimated_hours': a.estimated_hours,
+        'notes':           a.notes,
+        'priority':        a.priority,
+        'status':          a.status,
+
+        # Joined display fields (populated when relationship is loaded)
+        'customer_name': (
+            a.client.client_contact_name or a.client.client_company_name
+            if a.client else None
+        ),
+
+        # Timestamps
+        'created_at': a.created_at.isoformat() if a.created_at else None,
+        'updated_at': a.updated_at.isoformat() if a.updated_at else None,
+    }
