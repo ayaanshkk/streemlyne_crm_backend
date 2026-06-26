@@ -144,7 +144,7 @@ class PaymentService:
                 payment_method_types=["card"],
                 line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
                 mode="subscription",
-                success_url=success_url + "?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+                success_url=success_url.split("?")[0] + "?checkout=success&session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=cancel_url,
                 client_reference_id=tenant_id,
                 metadata={
