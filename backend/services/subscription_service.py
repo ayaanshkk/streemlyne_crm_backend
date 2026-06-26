@@ -74,7 +74,7 @@ class SubscriptionService:
 
     def get_subscription_plan(self, subscription_id: int) -> Optional[SubscriptionPlan]:
         """Return a SubscriptionPlan by PK."""
-        return self.tenant_repo.session.query(SubscriptionPlan).get(subscription_id)
+        return self.tenant_repo.session.query(SubscriptionPlan).get(subscription_id) u
 
     def get_all_plans(self) -> List[SubscriptionPlan]:
         """Return all active subscription plans."""
