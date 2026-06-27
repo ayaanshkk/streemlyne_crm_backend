@@ -585,15 +585,15 @@ def stripe_webhook():
         current_app.logger.warning("[STRIPE] Webhook signature error: %s", exc)
         return jsonify({"error": "Invalid webhook signature"}), 400
 
-    event_dict = json.loads(json.dumps(event, default=str))
-    event_type = event_dict["type"]
-    event_data = event_dict["data"]["object"]
+    event_type = event.type
+    event_data = _stripe_obj_to_dict(event.data.object)
+    event_dict = {"id": event.id, "type": event_type}
     current_app.logger.info("[STRIPE] Webhook received: %s", event_type)
 
     # [I1-FIX] Idempotency: short-circuit if this event was already processed.
     # Stripe retries on 5xx/timeout. Without this guard, duplicate events cause
     # double invoice rows, double emails, and double notifications.
-    stripe_event_id = event_dict.get("id")
+    stripe_event_id = event.id
     if stripe_event_id:
         existing = (
             ProcessedWebhookEvent.query
@@ -653,17 +653,16 @@ def stripe_webhook():
 
     return jsonify({"received": True}), 200
 
-
 def _handle_checkout_completed(session):
-    """
-    checkout.session.completed → activate subscription and reconcile modules.
-
-    [FIX-R-001] After updating the subscription row, calls
-    _reconcile_tenant_modules() so Tenant_Module_Mapping is correct
-    immediately after a successful Stripe checkout — no manual sync needed.
-    """
-    tenant_id     = (session.get("metadata") or {}).get("tenant_id")
-    plan_code     = (session.get("metadata") or {}).get("plan_code")
+    metadata = session.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            metadata = {}
+    
+    tenant_id = metadata.get("tenant_id")
+    plan_code = metadata.get("plan_code")
     stripe_sub_id = session.get("subscription")
 
     if not tenant_id:
@@ -693,7 +692,8 @@ def _handle_checkout_completed(session):
 
     stripe_sub = None
     if stripe_sub_id and STRIPE_AVAILABLE:
-        stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
+        stripe_sub_obj = stripe.Subscription.retrieve(stripe_sub_id)
+        stripe_sub = _stripe_obj_to_dict(stripe_sub_obj)
 
     sub.status                 = stripe_sub.get("status", "active") if stripe_sub else "active"
     sub.is_active              = sub.status in {"active", "trialing"}
@@ -741,11 +741,22 @@ def _handle_invoice_paid(invoice):
         return
 
     period_start_ts = period_end_ts = None
-    lines = invoice.get("lines", {}).get("data", [])
+    lines = invoice.get("lines", {})
+    if isinstance(lines, str):
+        try:
+            lines = json.loads(lines)
+        except Exception:
+            lines = {}
+    lines = lines.get("data", [])
     if lines:
-        period          = lines[0].get("period", {})
+        period = lines[0].get("period", {})
+        if isinstance(period, str):
+            try:
+                period = json.loads(period)
+            except Exception:
+                period = {}
         period_start_ts = period.get("start")
-        period_end_ts   = period.get("end")
+        period_end_ts = period.get("end")
 
     from services.invoice_service import InvoiceService
     from services.notification_service import NotificationService
@@ -799,7 +810,8 @@ def _handle_invoice_paid(invoice):
     # Also applies to invoice.paid (not just checkout.session.completed).
     if stripe_sub_id and STRIPE_AVAILABLE:
         try:
-            stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
+            stripe_sub_obj = stripe.Subscription.retrieve(stripe_sub_id)
+            stripe_sub = _stripe_obj_to_dict(stripe_sub_obj)
             sub.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end", False))
             sub.auto_renew = not sub.cancel_at_period_end
         except stripe.error.StripeError as exc:
@@ -1599,3 +1611,13 @@ def _tenant_sub_dict(s: TenantSubscription) -> dict:
         "created_at":                     s.created_at.isoformat() if s.created_at else None,
         "updated_at":                     s.updated_at.isoformat() if s.updated_at else None,
     }
+
+def _stripe_obj_to_dict(obj):
+    """Recursively convert Stripe objects to plain dicts."""
+    if hasattr(obj, '_data'):
+        return {k: _stripe_obj_to_dict(v) for k, v in obj._data.items()}
+    elif isinstance(obj, dict):
+        return {k: _stripe_obj_to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_stripe_obj_to_dict(i) for i in obj]
+    return obj

@@ -10,11 +10,12 @@ Schema alignment (StreemLyne_MT):
   - Customer_Auth     : customer_user_id, client_id, tenant_id (varchar), email, password_hash, is_active, created_at
   - Customer_Password_Reset : id, customer_user_id, token, expires_at, used, created_at
 
-CHANGES vs previous version
+CHANGES
 ─────────────────────────────────────────────────────────────────────────────
-[AUTH-001] tenant_id is now stored and forwarded as a STRING (varchar slug).
-           The old code called int(data['tenant_id']) which would crash for
-           slugs like "acme-ltd-a3f8c2" and was inconsistent with the DB PK.
+[AUTH-001] tenant_id is stored/forwarded as a STRING (varchar slug).
+[AUTH-002] /auth/login now accepts username OR email as the login identifier.
+[AUTH-003] /auth/register stores username for individual accounts.
+[AUTH-004] /auth/check-username endpoint added for real-time availability.
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -46,6 +47,20 @@ def _validate_password(password: str) -> tuple[bool, str]:
         return False, "Password must contain at least one number"
     return True, "OK"
 
+
+def _validate_username(username: str) -> tuple[bool, str]:
+    """Returns (is_valid, message). Only lowercase letters, numbers, underscores allowed."""
+    if not username:
+        return False, "Username is required"
+    if len(username) < 3:
+        return False, "Username must be at least 3 characters"
+    if len(username) > 30:
+        return False, "Username must be 30 characters or fewer"
+    if not re.match(r'^[a-z0-9_]+$', username):
+        return False, "Username may only contain lowercase letters, numbers, and underscores"
+    return True, "OK"
+
+
 # ─────────────────────────────────────────
 # Internal Staff Auth  (User_Master)
 # ─────────────────────────────────────────
@@ -54,20 +69,44 @@ def _validate_password(password: str) -> tuple[bool, str]:
 def login():
     """
     Authenticate internal staff.
+    Accepts username OR email as the login identifier.
 
     POST /api/auth/login
     Body: { "user_name": "jdoe", "password": "Secret123" }
+      OR  { "username": "jdoe", "password": "Secret123" }
+      OR  { "email": "jdoe@example.com", "password": "Secret123" }
     """
     data = request.get_json() or {}
-    print(f"[DEBUG] login attempt: user_name={data.get('user_name')!r}")
 
+    # Accept all three identifier fields — normalise to user_name
+    identifier = (
+        data.get('user_name') or
+        data.get('username') or
+        data.get('email') or
+        ''
+    ).strip()
+    password = data.get('password', '')
 
+    if not identifier or not password:
+        return jsonify({'error': 'Login identifier (username or email) and password are required'}), 400
 
-    if not data.get('user_name') or not data.get('password'):
-        return jsonify({'error': 'user_name and password are required'}), 400
+    print(f"[DEBUG] login attempt: identifier={identifier!r}")
 
     from repositories import UserRepository
-    user = UserRepository().authenticate(data['user_name'], data['password'])
+    repo = UserRepository()
+
+    # Try by username first, then by email if it looks like an email
+    user = repo.authenticate(identifier, password)
+
+    # If authenticate only handles user_name, fall back to email lookup
+    if not user and '@' in identifier:
+        # Look up the user by email via Employee_Master, then authenticate
+        employee = EmployeeMaster.query.filter_by(email=identifier.lower()).first()
+        if employee:
+            user_by_email = UserMaster.query.filter_by(employee_id=employee.employee_id).first()
+            if user_by_email and user_by_email.check_password(password):
+                user = user_by_email
+
     print(f"[DEBUG] user found: {user}")
 
     if not user:
@@ -85,18 +124,82 @@ def login():
     }), 200
 
 
+@auth_bp.route('/check-username', methods=['POST'])
+def check_username():
+    """
+    Check whether a username is available.
+
+    POST /api/auth/check-username
+    Body: { "username": "johndoe" }
+    Returns: { "available": true/false, "message": "..." }
+    """
+    data = request.get_json() or {}
+    username = (data.get('username') or '').lower().strip()
+
+    if not username:
+        return jsonify({'available': False, 'message': 'Username is required'}), 400
+
+    is_valid, msg = _validate_username(username)
+    if not is_valid:
+        return jsonify({'available': False, 'message': msg}), 200
+
+    # Check User_Master.user_name for collision
+    existing = UserMaster.query.filter_by(user_name=username).first()
+    if existing:
+        return jsonify({'available': False, 'message': 'Username is already taken'}), 200
+
+    return jsonify({'available': True, 'message': 'Username is available'}), 200
+
+
 @auth_bp.route('/register', methods=['POST'])
 def register():
+    """
+    Register a new internal user / tenant.
+
+    POST /api/auth/register
+    Body (individual): {
+        "first_name": "John", "last_name": "Doe",
+        "email": "john@example.com", "password": "Secret123",
+        "username": "johndoe",          ← required for individual accounts
+        "account_type": "individual"
+    }
+    Body (company): {
+        "first_name": "Jane", "last_name": "Smith",
+        "email": "jane@acme.com", "password": "Secret123",
+        "company_name": "Acme Ltd",
+        "account_type": "company"
+    }
+    """
     data = request.get_json() or {}
 
-    # Build employee_name from first/last if employee_name not provided
+    account_type = data.get('account_type', 'individual')  # 'individual' | 'company' | 'join_company'
+
+    # Build employee_name from first/last if not supplied directly
     if not data.get('employee_name') and (data.get('first_name') or data.get('last_name')):
         data['employee_name'] = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
 
-    # Auto-generate user_name from email if not provided
-    if not data.get('user_name') and data.get('email'):
-        data['user_name'] = data['email'].split('@')[0]
+    # ── Determine user_name ──────────────────────────────────────────────────
+    if account_type == 'individual':
+        # Individual accounts MUST supply a username
+        username = (data.get('username') or '').lower().strip()
+        if not username:
+            return jsonify({'error': 'username is required for individual accounts'}), 400
 
+        is_valid, msg = _validate_username(username)
+        if not is_valid:
+            return jsonify({'error': msg}), 400
+
+        # Check uniqueness
+        if UserMaster.query.filter_by(user_name=username).first():
+            return jsonify({'error': 'Username is already taken'}), 409
+
+        data['user_name'] = username
+    else:
+        # Company / join_company: auto-generate from email if not provided
+        if not data.get('user_name'):
+            data['user_name'] = (data.get('email', '')).split('@')[0]
+
+    # ── Common required fields ───────────────────────────────────────────────
     required = ['employee_name', 'email', 'user_name', 'password']
     missing = [f for f in required if not data.get(f)]
     if missing:
@@ -107,7 +210,7 @@ def register():
         return jsonify({'error': msg}), 400
 
     try:
-        # No tenant_id = new signup → create tenant first
+        # ── Tenant setup ─────────────────────────────────────────────────────
         if not data.get('tenant_id'):
             from services.tenant_service import TenantService
             company_name = (data.get('company_name') or '').strip() or data['employee_name']
@@ -117,6 +220,7 @@ def register():
             g.tenant_id = str(data['tenant_id'])
             tenant = None
 
+        # ── Create employee + user account ───────────────────────────────────
         from services import EmployeeService
         svc = EmployeeService()
         employee = svc.create_employee(
@@ -133,6 +237,7 @@ def register():
 
         token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         return jsonify({
+            'success': True,
             'message': 'Registration successful',
             'token': token,
             'user': user.to_dict(),
@@ -147,12 +252,10 @@ def register():
         return jsonify({'error': 'Email or username already exists'}), 409
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-    except Exception as e:
-        db.session.rollback()
         import traceback
-        traceback.print_exc()   # ← prints full traceback to terminal
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
 
 @auth_bp.route('/me', methods=['GET'])
 @auth_required
@@ -170,8 +273,6 @@ def change_password():
 
     POST /api/auth/change-password
     Body: { "current_password": "...", "new_password": "..." }
-
-    Note: User_Master.updated_at is a DATE column in the schema.
     """
     data = request.get_json() or {}
     user = get_current_user()
@@ -187,7 +288,6 @@ def change_password():
         return jsonify({'error': msg}), 400
 
     user.set_password(data['new_password'])
-    # updated_at is a DATE column in User_Master — store today's date
     user.updated_at = date.today()
     db.session.commit()
 
@@ -237,8 +337,6 @@ def customer_register():
 
     POST /api/auth/customer/register
     Body: { "email": "...", "password": "...", "client_id": 5, "tenant_id": "acme-ltd-a3f8c2" }
-
-    Validates that the referenced Client_Master row exists before creating the account.
     """
     data = request.get_json() or {}
 
@@ -256,7 +354,6 @@ def customer_register():
     if CustomerAuth.query.filter_by(email=email).first():
         return jsonify({'error': 'Email is already registered'}), 409
 
-    # Validate FK → Client_Master (also confirms client belongs to the stated tenant)
     from models import ClientMaster
     client = ClientMaster.query.filter_by(
         client_id=data['client_id'],
@@ -310,7 +407,6 @@ def customer_forgot_password():
     ).first()
 
     if customer_user:
-        # Invalidate any existing unused tokens for this user
         CustomerPasswordReset.query.filter_by(
             customer_user_id=customer_user.customer_user_id,
             used=False
@@ -326,7 +422,6 @@ def customer_forgot_password():
         db.session.add(reset)
         db.session.commit()
 
-        # TODO: dispatch reset email containing the token
         current_app.logger.info(f"[AUTH] Password reset requested for {email}")
 
     return jsonify({'message': 'If that email exists, a reset link has been sent.'}), 200

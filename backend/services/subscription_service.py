@@ -89,7 +89,20 @@ class SubscriptionService:
         All pre-existing keys are preserved unchanged.
         """
         subscription = self.get_active_subscription(tenant_id)
+        current_app.logger.info(
+            "[DEBUG] Raw subscription for %s: id=%s status=%s is_active=%s",
+            tenant_id,
+            subscription.tenant_subscription_mapping_id if subscription else None,
+            subscription.status if subscription else None,
+            subscription.is_active if subscription else None,
+        )
         subscription = self._sync_subscription_state(subscription)
+        current_app.logger.info(
+            "[DEBUG] After sync for %s: status=%s is_active=%s",
+            tenant_id,
+            subscription.status if subscription else None,
+            subscription.is_active if subscription else None,
+        )
 
         paused_status = self._get_paused_subscription_status(tenant_id)
         if paused_status and (subscription is None or subscription.is_active is False):

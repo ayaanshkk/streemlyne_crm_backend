@@ -144,14 +144,14 @@ class PaymentService:
                 payment_method_types=["card"],
                 line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
                 mode="subscription",
-                success_url=success_url,
+                success_url=success_url.split("?")[0] + "?checkout=success&session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=cancel_url,
                 client_reference_id=tenant_id,
                 metadata={
                     "tenant_id": tenant_id,
                     "plan_code": plan.subscription_code,
                 },
-                idempotency_key=f"checkout-{tenant_id}-{plan.subscription_code}",
+                idempotency_key=f"checkout-{tenant_id}-{plan.subscription_code}-{int(datetime.now().timestamp())}",
             )
         except stripe.error.StripeError as exc:
             current_app.logger.error(

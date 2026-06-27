@@ -42,6 +42,14 @@ class Config:
     JWT_TOKEN_LOCATION = ['headers']
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24) # Example: 24 hours
 
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_size": 3,
+        "max_overflow": 2,
+        "pool_timeout": 30,
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+
     # ── Stripe ─────────────────────────────────────────────────────────────
     # Values are read from .env at startup.  The routes call
     # current_app.config.get('STRIPE_SECRET_KEY') first, then fall back to
@@ -67,6 +75,7 @@ class Config:
         _origin_from_url(STRIPE_CANCEL_URL),
         _origin_from_url(STRIPE_PORTAL_RETURN_URL),
     ))))
+
 
 # ----------------------------------
 # File Upload Configuration

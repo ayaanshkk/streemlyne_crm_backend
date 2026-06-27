@@ -67,6 +67,7 @@ import os
 import uuid
 from datetime import datetime, date, timezone
 from typing import cast
+from xmlrpc.client import DateTime
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import Enum as SAEnum, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -827,6 +828,7 @@ class ClientMaster(db.Model):
     client_website     = db.Column(db.String(255))
     created_at         = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     stage              = db.Column(db.String(50), nullable=True)
+    stage_updated_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     # Relationships
     tenant           = db.relationship('TenantMaster', back_populates='clients')

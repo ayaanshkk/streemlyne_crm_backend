@@ -296,6 +296,9 @@ def create_app(test_config=None):
     from routes.role_routes import role_bp
     from routes.subscription_routes import subscription_bp
     from routes.tenant_routes import tenant_bp
+    from routes.team_routes import team_bp
+    from routes.dashboard_routes import dashboard_bp
+    from routes.pipeline_routes import pipeline_bp
 
     blueprints = [
         auth_bp,
@@ -316,6 +319,9 @@ def create_app(test_config=None):
         core_bp,
         assignment_bp,
         ai_bp,
+        dashboard_bp,
+        pipeline_bp,
+        team_bp,
     ]
 
     for bp in blueprints:
