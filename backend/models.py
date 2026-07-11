@@ -2263,7 +2263,7 @@ class ChatMessage(db.Model):
 
 class ChatHistory(db.Model):
     """Denormalised blob storage of an entire conversation's message list."""
-    __tablename__ = 'chat_history'
+    __tablename__ = 'Chat_History'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     id         = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)

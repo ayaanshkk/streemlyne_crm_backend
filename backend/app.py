@@ -232,54 +232,8 @@ def create_app(test_config=None):
     _start_subscription_scheduler(app)
     print("[boot] Loading models...")
 
-    from models import (
-        ChatConversation,
-        ChatHistory,
-        ChatMessage,
-        ClientInteractions,
-        ClientMaster,
-        ContactMethodMaster,
-        CountryMaster,
-        CurrencyMaster,
-        CustomerAuth,
-        CustomerDocuments,
-        CustomerPasswordReset,
-        DesignationMaster,
-        EmployeeMaster,
-        EnergyContractMaster,
-        InvoiceDetails,
-        InvoiceMaster,
-        ModuleMaster,
-        OpportunityDetails,
-        ProcessedWebhookEvent,
-        PermissionCatalog,
-        ProjectDetails,
-        ProposalDetails,
-        ProposalMaster,
-        RoleMaster,
-        RolePermissionMapping,
-        ServicesMaster,
-        StageMaster,
-        SubscriptionInvoice,
-        SubscriptionModuleMapping,
-        SubscriptionPlan,
-        SupplierMaster,
-        TaxMaster,
-        TenantModuleMapping,
-        TenantSubscription,
-        TenantMaster,
-        UOMMaster,
-        UserMaster,
-        UserRoleMapping,
-        CaseDocuments,
-        Assignment,
-    )
-
-    print("[ok] All models loaded")
-
-    print("[boot] Registering blueprints...")
     from routes.ai_routes import ai_bp
-    from routes.assignment_routes import assignment_bp
+    from backend.routes.calendar_routes import calendar_bp
     from routes.auth_routes import auth_bp
     from routes.chat_routes import chat_bp
     from routes.client_routes import client_bp
@@ -317,7 +271,7 @@ def create_app(test_config=None):
         form_bp,
         chat_bp,
         core_bp,
-        assignment_bp,
+        calendar_bp,
         ai_bp,
         dashboard_bp,
         pipeline_bp,
