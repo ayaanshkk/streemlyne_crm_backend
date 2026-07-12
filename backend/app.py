@@ -233,7 +233,7 @@ def create_app(test_config=None):
     print("[boot] Loading models...")
 
     from routes.ai_routes import ai_bp
-    from backend.routes.calendar_routes import calendar_bp
+    from routes.calendar_routes import calendar_bp
     from routes.auth_routes import auth_bp
     from routes.chat_routes import chat_bp
     from routes.client_routes import client_bp
@@ -241,7 +241,6 @@ def create_app(test_config=None):
     from routes.core_routes import core_bp
     from routes.document_routes import document_bp
     from routes.employee_routes import employee_bp
-    from routes.form_routes import form_bp
     from routes.invoice_routes import invoice_bp
     from routes.master_routes import master_bp
     from routes.opportunity_routes import opportunity_bp
@@ -268,7 +267,6 @@ def create_app(test_config=None):
         invoice_bp,
         document_bp,
         master_bp,
-        form_bp,
         chat_bp,
         core_bp,
         calendar_bp,
@@ -279,7 +277,8 @@ def create_app(test_config=None):
     ]
 
     for bp in blueprints:
-        app.register_blueprint(bp, url_prefix=f"/api{bp.url_prefix}")
+        prefix = bp.url_prefix or ""
+        app.register_blueprint(bp, url_prefix=f"/api{prefix}")
 
     from middleware.subscription_middleware import enforce_subscription
 

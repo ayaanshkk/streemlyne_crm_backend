@@ -556,3 +556,197 @@ def _interaction_dict(i: ClientInteractions) -> dict:
         'reminder_date':  i.reminder_date.isoformat() if i.reminder_date else None,
         'created_at':     i.created_at.isoformat() if i.created_at else None,
     }
+
+# ─────────────────────────────────────────
+# Documents
+# ─────────────────────────────────────────
+
+@client_bp.route('/<int:client_id>/documents', methods=['GET'])
+@auth_required
+def list_documents(client_id: int):
+    """
+    List all documents uploaded for a client.
+    GET /api/clients/<client_id>/documents
+    """
+    _get_or_404(client_id)
+
+    from models import CustomerDocuments
+    docs = (
+        CustomerDocuments.query
+        .filter_by(client_id=client_id)
+        .order_by(CustomerDocuments.uploaded_at.desc())
+        .all()
+    )
+
+    return jsonify([
+        {
+            'id':         str(d.id),
+            'filename':   d.file_name,
+            'url':        d.file_url,
+            'created_at': d.uploaded_at.isoformat() if d.uploaded_at else None,
+            'notes':      None,
+        }
+        for d in docs
+    ]), 200
+
+
+@client_bp.route('/<int:client_id>/documents', methods=['POST'])
+@auth_required
+def upload_document(client_id: int):
+    """
+    Upload a document for a client.
+    POST /api/clients/<client_id>/documents  (multipart/form-data)
+    """
+    _get_or_404(client_id)
+
+    from flask import current_app
+    from werkzeug.utils import secure_filename
+    from models import CustomerDocuments
+    import os
+
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'error': 'No file provided'}), 400
+
+    filename = secure_filename(file.filename)
+    upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+    client_folder = os.path.join(upload_folder, f'client_{client_id}')
+    os.makedirs(client_folder, exist_ok=True)
+
+    file.save(os.path.join(client_folder, filename))
+
+    base_url = os.getenv('BACKEND_URL', 'http://127.0.0.1:5000')
+    file_url = f"{base_url}/uploads/client_{client_id}/{filename}"
+
+    doc = CustomerDocuments(
+        client_id=client_id,
+        file_name=filename,
+        file_url=file_url,
+    )
+    db.session.add(doc)
+    db.session.commit()
+
+    return jsonify({
+        'document': {
+            'id':         str(doc.id),
+            'filename':   doc.file_name,
+            'url':        doc.file_url,
+            'created_at': doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+            'notes':      None,
+        }
+    }), 201
+
+
+@client_bp.route('/<int:client_id>/documents/<int:doc_id>', methods=['DELETE'])
+@auth_required
+def delete_document(client_id: int, doc_id: int):
+    """
+    Delete a document.
+    DELETE /api/clients/<client_id>/documents/<doc_id>
+    """
+    _get_or_404(client_id)
+
+    from flask import current_app
+    from models import CustomerDocuments
+    import os
+
+    doc = CustomerDocuments.query.filter_by(id=doc_id, client_id=client_id).first()
+    if not doc:
+        return jsonify({'error': 'Document not found'}), 404
+
+    # Remove physical file if stored locally
+    try:
+        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+        file_path = os.path.join(upload_folder, f'client_{client_id}', doc.file_name)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception:
+        pass
+
+    db.session.delete(doc)
+    db.session.commit()
+    return jsonify({'message': 'Document deleted'}), 200
+
+
+# ─────────────────────────────────────────
+# Financial Documents
+# ─────────────────────────────────────────
+
+@client_bp.route('/<int:client_id>/financial-documents', methods=['GET'])
+@auth_required
+def list_financial_documents(client_id: int):
+    """
+    Return all proposals (quotations) and invoices for a client,
+    combined into a single list ordered newest first.
+
+    GET /api/clients/<client_id>/financial-documents
+
+    Uses the same tenant-scoping approach as proposal_routes and
+    invoice_routes — both tables scope via Client_Master.tenant_id.
+
+    Response shape matches the frontend FinancialDocument interface:
+      { id, type, title, reference, total, amount_paid, balance,
+        status, created_at }
+    """
+    # Verify client belongs to this tenant
+    _get_or_404(client_id)
+
+    from models import ProposalMaster, InvoiceMaster
+
+    docs = []
+
+    # ── Proposals / Quotations ────────────────────────────────────────────
+    # proposal_routes scopes via Client_Master join; mirror that here.
+    proposals = (
+        ProposalMaster.query
+        .filter_by(client_id=client_id)
+        .order_by(ProposalMaster.created_at.desc())
+        .all()
+    )
+
+    for p in proposals:
+        total = float(p.total_amount) if p.total_amount is not None else 0.0
+        docs.append({
+            'id':          p.proposal_id,
+            'type':        'quotation',
+            'title':       f"Quote {p.quote_id or f'#{p.proposal_id}'}",
+            'reference':   str(p.quote_id) if p.quote_id else f"#{p.proposal_id}",
+            'total':       total,
+            'amount_paid': 0.0,
+            'balance':     total,
+            'status':      'draft',
+            'created_at':  p.created_at.isoformat() if p.created_at else None,
+        })
+
+    # ── Invoices ──────────────────────────────────────────────────────────
+    # invoice_routes scopes via or_(client_id, project_id) through
+    # Client_Master. For the customer detail page we only need client_id.
+    invoices = (
+        InvoiceMaster.query
+        .filter_by(client_id=client_id)
+        .order_by(InvoiceMaster.created_at.desc())
+        .all()
+    )
+
+    for inv in invoices:
+        total       = float(inv.total_amount) if inv.total_amount is not None else 0.0
+        paid_status = (inv.payment_status or 'not paid').lower()
+        amount_paid = total if paid_status == 'paid' else 0.0
+        balance     = 0.0  if paid_status == 'paid' else total
+
+        docs.append({
+            'id':          inv.invoice_id,
+            'type':        'invoice',
+            'title':       f"Invoice #{inv.invoice_number}",
+            'reference':   inv.invoice_number,
+            'total':       total,
+            'amount_paid': amount_paid,
+            'balance':     balance,
+            'status':      paid_status,
+            'created_at':  inv.created_at.isoformat() if inv.created_at else None,
+        })
+
+    # Newest first across both types
+    docs.sort(key=lambda d: d['created_at'] or '', reverse=True)
+
+    return jsonify(docs), 200

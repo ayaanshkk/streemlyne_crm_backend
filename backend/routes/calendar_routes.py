@@ -25,10 +25,10 @@ from flask import Blueprint, request, jsonify, g
 from sqlalchemy import text
 from datetime import datetime, date
 
-from ..db import SessionLocal
-from .auth_helpers import token_required, require_tenant
+from database import db
+from middleware import auth_required
 
-calendar_bp = Blueprint('calendar', __name__)
+calendar_bp = Blueprint('calendar', __name__, url_prefix='')
 
 VALID_TYPES = {'meeting', 'call', 'task', 'delivery', 'note'}
 
@@ -38,9 +38,8 @@ VALID_TYPES = {'meeting', 'call', 'task', 'delivery', 'note'}
 # ─────────────────────────────────────────────────────────────────────────────
 
 @calendar_bp.route('/assignments', methods=['GET'])
-@token_required
-@require_tenant
-def list_assignments(tenant_id, employee_id):
+@auth_required
+def list_assignments():
     """
     List assignments for the current tenant.
 
@@ -50,10 +49,9 @@ def list_assignments(tenant_id, employee_id):
       project_id  — int            filter by project / job
       client_id   — int            filter by client
     """
-    session = SessionLocal()
     try:
         where_conditions = ["t.tenant_id = :tenant_id"]
-        params = {'tenant_id': str(tenant_id)}
+        params = {'tenant_id': str(g.tenant_id)}
 
         # ── Month filter ──────────────────────────────────────────────────
         month_param = request.args.get('month')
@@ -73,7 +71,7 @@ def list_assignments(tenant_id, employee_id):
         date_param = request.args.get('date')
         if date_param:
             try:
-                datetime.strptime(date_param, '%Y-%m-%d')   # validate only
+                datetime.strptime(date_param, '%Y-%m-%d')
                 where_conditions.append("t.start_date = :exact_date")
                 params['exact_date'] = date_param
             except ValueError:
@@ -120,7 +118,7 @@ def list_assignments(tenant_id, employee_id):
             ORDER BY t.start_date ASC, t.start_time ASC NULLS LAST
         """)
 
-        result = session.execute(query, params)
+        result = db.session.execute(query, params)
         rows = result.fetchall()
 
         return jsonify([_row_to_dict(r) for r in rows]), 200
@@ -129,8 +127,6 @@ def list_assignments(tenant_id, employee_id):
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,9 +134,8 @@ def list_assignments(tenant_id, employee_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @calendar_bp.route('/assignments', methods=['POST'])
-@token_required
-@require_tenant
-def create_assignment(tenant_id, employee_id):
+@auth_required
+def create_assignment():
     """
     Create a new assignment.
 
@@ -148,7 +143,6 @@ def create_assignment(tenant_id, employee_id):
     Optional: staff_name, job_id/project_id, customer_id/client_id,
               estimated_hours, notes, priority, status
     """
-    session = SessionLocal()
     try:
         data = request.get_json() or {}
 
@@ -169,6 +163,9 @@ def create_assignment(tenant_id, employee_id):
         # ── Resolve FK aliases ────────────────────────────────────────────
         project_id = data.get('project_id') or data.get('job_id')
         client_id  = data.get('client_id')  or data.get('customer_id')
+
+        # ── employee_id for created_by (required NOT NULL column) ─────────
+        employee_id = getattr(g.current_user, 'employee_id', None)
 
         insert_query = text("""
             INSERT INTO "StreemLyne_MT"."Tasks_Master" (
@@ -193,8 +190,8 @@ def create_assignment(tenant_id, employee_id):
                 created_at, updated_at
         """)
 
-        result = session.execute(insert_query, {
-            'tenant_id':       str(tenant_id),
+        result = db.session.execute(insert_query, {
+            'tenant_id':       str(g.tenant_id),
             'type':            assignment_type,
             'title':           title,
             'start_date':      parsed_date.isoformat(),
@@ -208,18 +205,16 @@ def create_assignment(tenant_id, employee_id):
             'status':          data.get('status', 'Scheduled'),
             'created_by':      employee_id,
         })
-        session.commit()
+        db.session.commit()
 
         row = result.fetchone()
         return jsonify(_row_to_dict(row)), 201
 
     except Exception as e:
-        session.rollback()
+        db.session.rollback()
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,18 +222,16 @@ def create_assignment(tenant_id, employee_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @calendar_bp.route('/assignments/<task_id>', methods=['GET'])
-@token_required
-@require_tenant
-def get_assignment(task_id, tenant_id, employee_id):
+@auth_required
+def get_assignment(task_id):
     """GET /api/assignments/<task_id>"""
-    session = SessionLocal()
     try:
-        row = _fetch_task(session, task_id, tenant_id)
+        row = _fetch_task(task_id, g.tenant_id)
         if not row:
             return jsonify({'error': 'Assignment not found'}), 404
         return jsonify(_row_to_dict(row)), 200
-    finally:
-        session.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,26 +239,24 @@ def get_assignment(task_id, tenant_id, employee_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @calendar_bp.route('/assignments/<task_id>', methods=['PUT'])
-@token_required
-@require_tenant
-def update_assignment(task_id, tenant_id, employee_id):
+@auth_required
+def update_assignment(task_id):
     """
     Update an assignment.
     PUT /api/assignments/<task_id>
     Body: any subset of the create fields.
     """
-    session = SessionLocal()
     try:
-        if not _fetch_task(session, task_id, tenant_id):
+        if not _fetch_task(task_id, g.tenant_id):
             return jsonify({'error': 'Assignment not found'}), 404
 
         data = request.get_json() or {}
+        employee_id = getattr(g.current_user, 'employee_id', None)
 
-        # Build SET clause dynamically — only update fields that are present
         set_parts = ["updated_by_employee_id = :updated_by", "updated_at = NOW()"]
         params = {
             'task_id':    task_id,
-            'tenant_id':  str(tenant_id),
+            'tenant_id':  str(g.tenant_id),
             'updated_by': employee_id,
         }
 
@@ -318,19 +309,17 @@ def update_assignment(task_id, tenant_id, employee_id):
                 created_at, updated_at
         """)
 
-        result = session.execute(update_query, params)
-        session.commit()
+        result = db.session.execute(update_query, params)
+        db.session.commit()
 
         row = result.fetchone()
         return jsonify(_row_to_dict(row)), 200
 
     except Exception as e:
-        session.rollback()
+        db.session.rollback()
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,20 +327,18 @@ def update_assignment(task_id, tenant_id, employee_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @calendar_bp.route('/assignments/<task_id>', methods=['DELETE'])
-@token_required
-@require_tenant
-def delete_assignment(task_id, tenant_id, employee_id):
+@auth_required
+def delete_assignment(task_id):
     """DELETE /api/assignments/<task_id>"""
-    session = SessionLocal()
     try:
-        result = session.execute(
+        result = db.session.execute(
             text("""
                 DELETE FROM "StreemLyne_MT"."Tasks_Master"
                 WHERE task_id = :task_id AND tenant_id = :tenant_id
             """),
-            {'task_id': task_id, 'tenant_id': str(tenant_id)},
+            {'task_id': task_id, 'tenant_id': str(g.tenant_id)},
         )
-        session.commit()
+        db.session.commit()
 
         if result.rowcount == 0:
             return jsonify({'error': 'Assignment not found'}), 404
@@ -359,19 +346,17 @@ def delete_assignment(task_id, tenant_id, employee_id):
         return jsonify({'message': 'Assignment deleted'}), 200
 
     except Exception as e:
-        session.rollback()
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Private helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_task(session, task_id: str, tenant_id):
+def _fetch_task(task_id: str, tenant_id):
     """Return the Tasks_Master row or None — always scoped to tenant."""
-    result = session.execute(
+    result = db.session.execute(
         text("""
             SELECT
                 task_id, type, title,
@@ -409,38 +394,24 @@ def _row_to_dict(row) -> dict:
         return {}
 
     r = dict(row._mapping)
-
     date_val = r.get('date') or r.get('start_date')
 
     return {
-        # Primary key — exposed as both 'id' (frontend) and 'assignment_id' (compat)
         'id':             r.get('task_id'),
         'assignment_id':  r.get('task_id'),
-
-        # Core fields
         'type':           r.get('type'),
         'title':          r.get('title'),
         'date':           date_val.isoformat() if isinstance(date_val, date) else date_val,
-
-        # staff_name alias — Tasks_Master stores this as team_member
-        'staff_name':     r.get('staff_name'),   # already aliased in SELECT
-
-        # FK fields — both schema name and frontend alias
+        'staff_name':     r.get('staff_name'),
         'project_id':     r.get('project_id'),
-        'job_id':         r.get('project_id'),   # frontend alias
+        'job_id':         r.get('project_id'),
         'client_id':      r.get('client_id'),
-        'customer_id':    r.get('client_id'),    # frontend alias
-
-        # Display field stored directly on Tasks_Master
+        'customer_id':    r.get('client_id'),
         'customer_name':  r.get('customer_name'),
-
-        # Optional fields
         'estimated_hours': r.get('estimated_hours'),
         'notes':           r.get('notes'),
         'priority':        r.get('priority'),
         'status':          r.get('status'),
-
-        # Timestamps
         'created_at': r.get('created_at').isoformat() if r.get('created_at') else None,
         'updated_at': r.get('updated_at').isoformat() if r.get('updated_at') else None,
     }
