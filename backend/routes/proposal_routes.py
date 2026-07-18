@@ -105,10 +105,12 @@ def create_proposal():
 
     # Validate detail lines before writing anything
     for idx, item in enumerate(data.get('details', [])):
-        if not item.get('service_id') or item.get('quantity') is None or not item.get('uom_id'):
+        if not item.get('service_name') and not item.get('service_id'):
             return jsonify({
-                'error': f'Detail line {idx + 1} requires service_id, quantity, and uom_id'
+                'error': f'Detail line {idx + 1} requires at least a service_name or service_id'
             }), 400
+        if item.get('quantity') is None:
+            return jsonify({'error': f'Detail line {idx + 1} requires quantity'}), 400
 
     # Verify client belongs to current tenant if supplied
     if data.get('client_id'):
@@ -119,6 +121,7 @@ def create_proposal():
             return jsonify({'error': 'Invalid client_id for this tenant'}), 400
 
     proposal = ProposalMaster(
+        tenant_id        = g.tenant_id,
         client_id        = data.get('client_id'),
         project_id       = data.get('project_id'),
         tax_id           = data['tax_id'],
@@ -142,7 +145,7 @@ def create_proposal():
         for item in data.get('details', []):
             detail = ProposalDetails(
                 proposal_id=proposal.proposal_id,
-                service_id=item['service_id'],
+                service_id=item.get('service_id'),
                 quantity = Decimal(str(item['quantity'])),
                 amount = Decimal(str(item['amount'])) if item.get('amount') else None,
                 uom_id=item['uom_id'],
@@ -278,7 +281,7 @@ def add_detail_line(proposal_id: int):
 
     detail = ProposalDetails(
         proposal_id=proposal_id,
-        service_id=data['service_id'],
+        service_id=item.get('service_id'),
         quantity=Decimal(str(data['quantity'])),
         amount=Decimal(str(data['amount'])) if data.get('amount') else None,
         uom_id=data['uom_id'],
@@ -358,29 +361,13 @@ def remove_detail_line(proposal_id: int, detail_id: int):
 # ─────────────────────────────────────────
 
 def _get_or_404(proposal_id: int) -> ProposalMaster:
-    """
-    Fetch a proposal scoped to the current tenant via Client_Master join.
-    Falls back to an unscoped lookup for proposals with no client_id
-    (e.g. project-only proposals) — acceptable since project → client → tenant
-    forms an equivalent chain.
-    """
-    proposal = (
-        ProposalMaster.query
-        .outerjoin(ClientMaster, ProposalMaster.client_id == ClientMaster.client_id)
-        .filter(
-            ProposalMaster.proposal_id == proposal_id,
-            db.or_(
-                ClientMaster.tenant_id == g.tenant_id,
-                ProposalMaster.client_id.is_(None)   # project-only proposals
-            )
-        )
-        .first()
-    )
-    
+    proposal = ProposalMaster.query.filter_by(
+        proposal_id=proposal_id,
+        tenant_id=g.tenant_id,
+    ).first()
     if not proposal:
         abort(404, description='Proposal not found')
     return proposal
-
 
 def _proposal_dict(p: ProposalMaster, include_details: bool = True) -> dict:
     result = {
