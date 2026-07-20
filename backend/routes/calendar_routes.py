@@ -171,39 +171,40 @@ def create_assignment():
             INSERT INTO "StreemLyne_MT"."Tasks_Master" (
                 tenant_id, type, title,
                 date, start_date, end_date,
-                team_member, project_id, client_id,
-                estimated_hours, notes, priority, status,
+                start_time, end_time,
+                team_member,
+                notes, priority, status,
                 created_by_employee_id, created_at
             ) VALUES (
                 :tenant_id, :type, :title,
                 :start_date, :start_date, :end_date,
-                :team_member, :project_id, :client_id,
-                :estimated_hours, :notes, :priority, :status,
+                :time_from, :time_to,
+                :team_member,
+                :notes, :priority, :status,
                 :created_by, NOW()
             )
             RETURNING
                 task_id, type, title,
                 start_date AS date, start_date, end_date,
+                start_time, end_time,
                 team_member AS staff_name,
-                project_id, client_id, customer_name,
-                estimated_hours, notes, priority, status,
+                notes, priority, status,
                 created_at, updated_at
         """)
 
         result = db.session.execute(insert_query, {
-            'tenant_id':       str(g.tenant_id),
-            'type':            assignment_type,
-            'title':           title,
-            'start_date':      parsed_date.isoformat(),
-            'end_date':        parsed_date.isoformat(),
-            'team_member':     data.get('staff_name'),
-            'project_id':      int(project_id) if project_id else None,
-            'client_id':       int(client_id)  if client_id  else None,
-            'estimated_hours': data.get('estimated_hours'),
-            'notes':           data.get('notes'),
-            'priority':        data.get('priority', 'Medium'),
-            'status':          data.get('status', 'Scheduled'),
-            'created_by':      employee_id,
+            'tenant_id':  str(g.tenant_id),
+            'type':       assignment_type,
+            'title':      title,
+            'start_date': parsed_date.isoformat(),
+            'end_date':   parsed_date.isoformat(),
+            'time_from':  data.get('time_from'),
+            'time_to':    data.get('time_to'),
+            'team_member': data.get('staff_name'),
+            'notes':      data.get('notes'),
+            'priority':   data.get('priority', 'Medium'),
+            'status':     data.get('status', 'Scheduled'),
+            'created_by': employee_id,
         })
         db.session.commit()
 
@@ -291,7 +292,15 @@ def update_assignment(task_id):
             set_parts.append("client_id = :client_id")
             params['client_id'] = int(raw) if raw else None
 
-        for field in ('estimated_hours', 'notes', 'priority', 'status'):
+        if 'time_from' in data:
+            set_parts.append("start_time = :time_from")
+            params['time_from'] = data['time_from']
+
+        if 'time_to' in data:
+            set_parts.append("end_time = :time_to")
+            params['time_to'] = data['time_to']
+
+        for field in ('notes', 'priority', 'status'):
             if field in data:
                 set_parts.append(f"{field} = :{field}")
                 params[field] = data[field]
@@ -397,21 +406,17 @@ def _row_to_dict(row) -> dict:
     date_val = r.get('date') or r.get('start_date')
 
     return {
-        'id':             r.get('task_id'),
-        'assignment_id':  r.get('task_id'),
-        'type':           r.get('type'),
-        'title':          r.get('title'),
-        'date':           date_val.isoformat() if isinstance(date_val, date) else date_val,
-        'staff_name':     r.get('staff_name'),
-        'project_id':     r.get('project_id'),
-        'job_id':         r.get('project_id'),
-        'client_id':      r.get('client_id'),
-        'customer_id':    r.get('client_id'),
-        'customer_name':  r.get('customer_name'),
-        'estimated_hours': r.get('estimated_hours'),
-        'notes':           r.get('notes'),
-        'priority':        r.get('priority'),
-        'status':          r.get('status'),
-        'created_at': r.get('created_at').isoformat() if r.get('created_at') else None,
-        'updated_at': r.get('updated_at').isoformat() if r.get('updated_at') else None,
+        'id':            r.get('task_id'),
+        'assignment_id': r.get('task_id'),
+        'type':          r.get('type'),
+        'title':         r.get('title'),
+        'date':          date_val.isoformat() if isinstance(date_val, date) else date_val,
+        'staff_name':    r.get('staff_name'),
+        'time_from':     str(r['start_time']) if r.get('start_time') else None,
+        'time_to':       str(r['end_time'])   if r.get('end_time')   else None,
+        'notes':         r.get('notes'),
+        'priority':      r.get('priority'),
+        'status':        r.get('status'),
+        'created_at':    r.get('created_at').isoformat() if r.get('created_at') else None,
+        'updated_at':    r.get('updated_at').isoformat() if r.get('updated_at') else None,
     }
