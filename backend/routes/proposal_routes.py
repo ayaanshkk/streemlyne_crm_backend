@@ -98,7 +98,7 @@ def create_proposal():
     """
     data = request.get_json() or {}
 
-    required = ['tax_id', 'total_amount']
+    required = ['total_amount']
     missing = [f for f in required if data.get(f) is None]
     if missing:
         return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400

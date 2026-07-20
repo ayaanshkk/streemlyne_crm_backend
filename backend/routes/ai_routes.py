@@ -731,9 +731,11 @@ def execute_tool(name: str, args: dict, token: str, tenant_id: str) -> dict:
 
             # Get default tax_id
             taxes  = api('GET', '/master/taxes')
-            tax_id = 1
+            tax_id = None  # send null if no tax configured — proposal_routes handles it
             if isinstance(taxes, list) and taxes:
-                tax_id = taxes[0].get('tax_id', 1)
+                tax_id = taxes[0].get('tax_id')
+            elif isinstance(taxes, dict) and taxes.get('taxes'):
+                tax_id = taxes['taxes'][0].get('tax_id')
             elif isinstance(taxes, dict) and taxes.get('taxes'):
                 tax_id = taxes['taxes'][0].get('tax_id', 1)
 
@@ -748,7 +750,7 @@ def execute_tool(name: str, args: dict, token: str, tenant_id: str) -> dict:
                 'details': [
                     {
                         'service_name': item['description'],
-                        'service_id':   item.get('pricelist_id'),   # optional link
+                        'service_id':   None,   # optional link
                         'quantity':     float(item['quantity']),
                         'amount':       float(item['unit_price']),
                         'uom_id':       None,
