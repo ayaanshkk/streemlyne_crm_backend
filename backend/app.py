@@ -283,8 +283,28 @@ def create_app(test_config=None):
         prefix = bp.url_prefix or ""
         app.register_blueprint(bp, url_prefix=f"/api{prefix}")
 
-    from middleware.subscription_middleware import enforce_subscription
+    @app.before_request
+    def handle_preflight():
+        from flask import request, Response
+        if request.method == "OPTIONS":
+            response = Response()
+            origin = request.headers.get("Origin", "")
+            allowed_origins = [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3001",
+                "https://streemlyne-crm-frontend.vercel.app",
+            ]
+            if origin in allowed_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, X-Tenant-ID"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.status_code = 200
+            return response
 
+    from middleware.subscription_middleware import enforce_subscription
     app.before_request(enforce_subscription)
 
     # [I2-FIX] Activate rate limiter after all blueprints are registered.
