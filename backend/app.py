@@ -1,3 +1,4 @@
+from backend.tests.conftest import app
 from flask import Flask
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -22,7 +23,7 @@ def create_app(test_config=None):
     CORS(
         app,
         resources={
-            r"/api/*": {
+            r"/*": { 
                 "origins": [
                     "http://localhost:3000",
                     "http://127.0.0.1:3000",
