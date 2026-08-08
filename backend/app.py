@@ -29,6 +29,7 @@ def create_app(test_config=None):
                     "http://localhost:3001",
                     "http://127.0.0.1:3001",
                     "https://streemlyne-crm-frontend.vercel.app",
+                    "https://streemlyne.vercel.app",
                 ]
             }
         },
