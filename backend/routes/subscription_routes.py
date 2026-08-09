@@ -1111,6 +1111,10 @@ def create_plan():
     ]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+    try:
+        max_users = _parse_max_users(data.get("max_users"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     plan = SubscriptionPlan(
         subscription_code = data["subscription_code"].strip(),
@@ -1122,6 +1126,7 @@ def create_plan():
         is_base_plan      = bool(data.get("is_base_plan", False)),
         is_active         = bool(data.get("is_active", True)),
         stripe_price_id   = data.get("stripe_price_id") or None,
+        max_users         = max_users,
     )
     try:
         db.session.add(plan)
@@ -1143,6 +1148,11 @@ def update_plan(subscription_id: int):
     """
     plan = _plan_or_404(subscription_id)
     data = request.get_json() or {}
+    if "max_users" in data:
+        try:
+            plan.max_users = _parse_max_users(data.get("max_users"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     for field in [
         "subscription_name", "description", "price",
@@ -1536,6 +1546,17 @@ def remove_module_from_plan(subscription_id: int, module_id: int):
 # Private helpers
 # =============================================================================
 
+def _parse_max_users(value):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("max_users must be a positive integer or null")
+    if parsed <= 0:
+        raise ValueError("max_users must be a positive integer or null")
+    return parsed
+
 def _plan_or_404(subscription_id: int) -> SubscriptionPlan:
     plan = SubscriptionPlan.query.get(subscription_id)
     if not plan:
@@ -1583,6 +1604,7 @@ def _plan_dict(p: SubscriptionPlan) -> dict:
         "is_base_plan": p.is_base_plan,
         "is_active": p.is_active,
         "stripe_price_id": p.stripe_price_id,
+        "max_users": p.max_users,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
@@ -1597,6 +1619,7 @@ def _tenant_sub_dict(s: TenantSubscription) -> dict:
         "plan_name":                      plan.subscription_name if plan else None,
         "plan_code":                      plan.subscription_code if plan else None,
         "stripe_price_id":                plan.stripe_price_id if plan else None,
+        "max_users":                      plan.max_users if plan else None,
         "subscription_start_date":        s.subscription_start_date.isoformat() if s.subscription_start_date else None,
         "subscription_end_date":          s.subscription_end_date.isoformat() if s.subscription_end_date else None,
         "is_active":                      s.is_active,

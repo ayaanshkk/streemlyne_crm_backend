@@ -19,6 +19,7 @@ CHANGES vs previous version
 ─────────────────────────────────────────────────────────────────────────────
 """
 
+from database import db
 from models import TenantMaster, TenantModuleMapping, TenantSubscription
 from .base_repository import BaseRepository
 from typing import List, Optional
@@ -191,6 +192,14 @@ class TenantRepository(BaseRepository):
             status                  = 'active',
             created_at              = datetime.utcnow(),
         )
+        bind = self.session.get_bind()
+        if bind and bind.dialect.name == "sqlite":
+            current_max = (
+                self.session.query(db.func.max(TenantSubscription.tenant_subscription_mapping_id))
+                .scalar()
+                or 0
+            )
+            subscription.tenant_subscription_mapping_id = current_max + 1
         self.session.add(subscription)
         self.session.commit()
         return subscription

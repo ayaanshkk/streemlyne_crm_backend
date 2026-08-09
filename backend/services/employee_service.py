@@ -119,7 +119,7 @@ class EmployeeService:
         employee = self.get_employee(employee_id)
         if not employee:
             raise ValueError(f"Employee {employee_id} not found")
-        
+
         existing_user = self.user_repo.get_by_employee_id(employee_id)
         if existing_user:
             raise ValueError(f"Employee already has a user account")
@@ -127,6 +127,9 @@ class EmployeeService:
         existing_username = self.user_repo.get_by_username(user_name)
         if existing_username:
             raise ValueError(f"Username '{user_name}' already exists")
+
+        from services.subscription_service import SubscriptionService
+        SubscriptionService().ensure_user_limit_available(employee.tenant_id)
 
         return self.user_repo.create_user(
             employee_id,

@@ -23,6 +23,10 @@ from models import *
 from flask import g
 
 
+def _model_table(model):
+    return getattr(model, "__table__", None)
+
+
 TEST_TABLES = [
     CurrencyMaster.__table__,
     DesignationMaster.__table__,
@@ -34,17 +38,18 @@ TEST_TABLES = [
     TenantSubscription.__table__,
     SubscriptionInvoice.__table__,
     PaymentAttempt.__table__,
-    DunningConfig.__table__,
-    NotificationPreference.__table__,
-    NotificationLog.__table__,
+    _model_table(DunningConfig),
+    _model_table(NotificationPreference),
+    _model_table(NotificationLog),
     SubscriptionPause.__table__,
-    PendingPlanChange.__table__,
+    _model_table(PendingPlanChange),
     ProcessedWebhookEvent.__table__,
     EmployeeMaster.__table__,
     RoleMaster.__table__,
     UserMaster.__table__,
     UserRoleMapping.__table__,
 ]
+TEST_TABLES = [table for table in TEST_TABLES if table is not None]
 
 
 @pytest.fixture(scope='session')

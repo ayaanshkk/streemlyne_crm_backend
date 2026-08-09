@@ -61,6 +61,18 @@ def _validate_username(username: str) -> tuple[bool, str]:
     return True, "OK"
 
 
+def _user_limit_error_response(exc):
+    usage = getattr(exc, "usage", {}) or {}
+    return jsonify({
+        "error": "user_limit_reached",
+        "message": str(exc),
+        "limit": usage.get("effective_user_limit"),
+        "current_count": usage.get("current_user_count"),
+        "plan_code": usage.get("plan_code"),
+        "upgrade_url": "/dashboard/subscription",
+    }), 403
+
+
 # ─────────────────────────────────────────
 # Internal Staff Auth  (User_Master)
 # ─────────────────────────────────────────
@@ -220,6 +232,9 @@ def register():
             g.tenant_id = str(data['tenant_id'])
             tenant = None
 
+        from services.subscription_service import SubscriptionService
+        SubscriptionService().ensure_user_limit_available(g.tenant_id)
+
         # ── Create employee + user account ───────────────────────────────────
         from services import EmployeeService
         svc = EmployeeService()
@@ -246,6 +261,9 @@ def register():
 
     except ValueError as e:
         db.session.rollback()
+        from services.subscription_service import UserLimitExceeded
+        if isinstance(e, UserLimitExceeded):
+            return _user_limit_error_response(e)
         return jsonify({'error': str(e)}), 400
     except IntegrityError:
         db.session.rollback()

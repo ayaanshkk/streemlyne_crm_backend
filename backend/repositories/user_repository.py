@@ -53,13 +53,15 @@ class UserRepository(BaseRepository):
                     is_active: bool = True,
                     tenant_id: str = None,
                     is_invite_pending: bool = False) -> UserMaster:
-        user = UserMaster(
-            employee_id=employee_id,
-            user_name=user_name,
-            is_active=is_active,
-            tenant_id=tenant_id,
-            is_invite_pending=is_invite_pending,
-        )
+        values = {
+            "employee_id": employee_id,
+            "user_name": user_name,
+            "is_active": is_active,
+            "tenant_id": tenant_id,
+            "is_invite_pending": is_invite_pending,
+        }
+        self._assign_sqlite_pk(values)
+        user = UserMaster(**values)
         user.set_password(password)
         self.session.add(user)
         self.session.commit()

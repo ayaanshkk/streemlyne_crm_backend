@@ -83,6 +83,7 @@ class SubscriptionPlan(db.Model):
     created_at        = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     updated_at        = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     stripe_price_id   = db.Column(db.String(255))
+    max_users         = db.Column(db.Integer)
 
     currency             = db.relationship('CurrencyMaster', backref='subscription_plans')
     module_mappings      = db.relationship('SubscriptionModuleMapping', back_populates='subscription', lazy='dynamic')
@@ -108,6 +109,7 @@ class SubscriptionPlan(db.Model):
             'currency_id':        self.currency_id,
             'currency_code':      self.currency.currency_code if self.currency else None,
             'stripe_price_id':    self.stripe_price_id,
+            'max_users':          self.max_users,
             'created_at':         self.created_at.isoformat() if self.created_at else None,
             'updated_at':         self.updated_at.isoformat() if self.updated_at else None,
         }

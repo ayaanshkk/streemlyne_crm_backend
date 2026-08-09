@@ -119,5 +119,5 @@ def _subscription_required_response():
     return jsonify({
         "error":    "subscription_required",
         "message":  "Your subscription has expired. Please upgrade to continue.",
-        "redirect": "/subscription-required",
+        "redirect": "/dashboard/subscription-required",
     }), 403
