@@ -30,6 +30,8 @@ def create_app(test_config=None):
                     "http://127.0.0.1:3001",
                     "https://streemlyne-crm-frontend.vercel.app",
                     "https://streemlyne.vercel.app",
+                    "https://streemlyne.com",
+                    "https://www.streemlyne.com",
                 ]
             }
         },
@@ -297,6 +299,9 @@ def create_app(test_config=None):
                 "http://127.0.0.1:3001",
                 "https://streemlyne-crm-frontend.vercel.app",
                 "https://streemlyne.vercel.app",
+                "https://streemlyne.com",
+                "https://www.streemlyne.com",
+
             ]
             if origin in allowed_origins:
                 response.headers["Access-Control-Allow-Origin"] = origin
