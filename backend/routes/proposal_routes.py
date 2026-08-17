@@ -11,7 +11,7 @@ from decimal import Decimal
 from flask import send_file
 from fpdf import FPDF
 import io
-from models import TaxMaster, CurrencyMaster
+from models import TaxMaster, CurrencyMaster, TenantMaster
 
 
 proposal_bp = Blueprint('proposal', __name__, url_prefix='/proposals')
@@ -235,6 +235,15 @@ def list_detail_lines(proposal_id: int):
     """
     _get_or_404(proposal_id)
     details = ProposalDetails.query.filter_by(proposal_id=proposal_id).all()
+    # ── Fetch tenant for logo and company info ────────────────────────────
+    tenant = TenantMaster.query.filter_by(tenant_id=str(g.tenant_id)).first()
+    logo_url   = tenant.logo_url        if tenant else None
+    company_name_display = (tenant.tenant_company_name if tenant else None) or "StreemLyne"
+    company_email_display   = tenant.company_email    if tenant else None
+    company_phone_display   = tenant.company_phone    if tenant else None
+    company_address_display = tenant.company_address  if tenant else None
+    company_website_display = tenant.company_website  if tenant else None
+
     return jsonify([_detail_dict(d) for d in details]), 200
 
 
@@ -445,20 +454,54 @@ def download_proposal_pdf(proposal_id: int):
     pdf.set_margins(15, 15, 15)
 
     # Header bar
+    # ── Fetch tenant for logo and company info ────────────────────────
+    tenant = TenantMaster.query.filter_by(tenant_id=str(g.tenant_id)).first()
+    logo_url              = tenant.logo_url            if tenant else None
+    company_name_display  = (tenant.tenant_company_name if tenant else None) or "StreemLyne"
+    company_email_display = tenant.company_email       if tenant else None
+    company_phone_display = tenant.company_phone       if tenant else None
+    company_address_display = tenant.company_address   if tenant else None
+
+    # ── Header bar ────────────────────────────────────────────────────
     pdf.set_fill_color(30, 30, 30)
-    pdf.rect(0, 0, 210, 28, 'F')
+    pdf.rect(0, 0, 210, 32, 'F')
+
+    # Logo
+    logo_rendered = False
+    if logo_url:
+        try:
+            import requests as _requests, tempfile, os as _os
+            suffix = ".png" if "png" in logo_url.lower() else ".jpg"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                response = _requests.get(logo_url, timeout=5)
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            pdf.image(tmp_path, x=8, y=4, h=22)
+            _os.unlink(tmp_path)
+            logo_rendered = True
+        except Exception as e:
+            print(f"[PDF] Logo load failed: {e}")
+
+    # Company name
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_xy(15, 8)
-    pdf.cell(0, 10, "QUOTE", ln=False)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_xy(130, 10)
-    pdf.cell(0, 6, f"Quote #: {proposal.quote_id or proposal.proposal_id}", ln=True)
-    pdf.set_xy(130, 16)
-    pdf.cell(0, 6, f"Date: {proposal.created_at.strftime('%d %b %Y') if proposal.created_at else 'N/A'}")
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_xy(36 if logo_rendered else 8, 7)
+    pdf.cell(80, 8, company_name_display, ln=False)
+
+    # QUOTE label
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_xy(140, 5)
+    pdf.cell(0, 8, "QUOTE", ln=False)
+
+    # Quote number + date
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_xy(140, 14)
+    pdf.cell(0, 5, f"#{proposal.quote_id or proposal.proposal_id}", ln=True)
+    pdf.set_xy(140, 19)
+    pdf.cell(0, 5, f"{proposal.created_at.strftime('%d %b %Y') if proposal.created_at else 'N/A'}")
 
     pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(15, 35)
+    pdf.set_xy(15, 38)
 
     # Bill To
     pdf.set_font("Helvetica", "B", 9)

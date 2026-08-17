@@ -1,36 +1,3 @@
-"""
-Tenant Routes
-Handles: Tenant_Master
-Two access levels:
-  1. Self-service  (/api/tenant/info)      – any authenticated user reads/updates own tenant
-  2. Super-admin   (/api/tenant and /api/tenant/<id>)  – requires explicit permissions
-Schema alignment (StreemLyne_MT):
-  Tenant_Master:
-    tenant_id (PK, UNIQUE, character varying), tenant_company_name (UNIQUE),
-    tenant_contact_name, onboarding_Date (date), is_active (boolean),
-    created_at, updated_at, stripe_customer_id (UNIQUE),
-    -- Profile/branding columns (added via migration):
-    logo_url, tagline, company_email, company_phone, company_address,
-    company_postcode, company_website, registration_no, vat_reg_no,
-    bank_name, account_name, sort_code, account_number, payment_reference,
-    default_vat_rate, default_currency, quote_validity_days, default_notes
-
-CHANGES vs previous version
-─────────────────────────────────────────────────────────────────────────────
-[TNT-001] All <int:tenant_id> URL converters changed to <string:tenant_id>.
-[TNT-002] create_tenant delegates to TenantService.create_tenant() so that
-          trial provisioning is always handled in one place.
-[TNT-003] _tenant_dict now includes stripe_customer_id.
-[TNT-004] get_tenant_info / update_tenant_info use g.tenant_id (now a string).
-[TNT-005] H1 FIX — Restored all @permission_required decorators on super-admin
-          endpoints (list_tenants, create_tenant, get_tenant, update_tenant,
-          deactivate_tenant, activate_tenant). Self-service endpoints
-          (GET/PATCH /info) remain open to all authenticated users as intended.
-[TNT-006] Added profile/branding fields to _tenant_dict and update_tenant_info.
-[TNT-007] Added POST /tenant/logo for Vercel Blob logo upload.
-[TNT-008] Added GET /tenant/me alias for /tenant/info (used by frontend).
-─────────────────────────────────────────────────────────────────────────────
-"""
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db

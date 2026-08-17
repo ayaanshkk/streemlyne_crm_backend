@@ -172,48 +172,56 @@ def register():
     Body (individual): {
         "first_name": "John", "last_name": "Doe",
         "email": "john@example.com", "password": "Secret123",
-        "username": "johndoe",          ← required for individual accounts
+        "username": "johndoe",
         "account_type": "individual"
     }
     Body (company): {
         "first_name": "Jane", "last_name": "Smith",
         "email": "jane@acme.com", "password": "Secret123",
+        "username": "acme_ltd",        ← auto-suggested on frontend, editable
         "company_name": "Acme Ltd",
+        "company_size": "1-10",
+        "industry": "technology",
+        "phone": "+44 7700 000000",    ← optional
         "account_type": "company"
     }
     """
     data = request.get_json() or {}
 
-    account_type = data.get('account_type', 'individual')  # 'individual' | 'company' | 'join_company'
+    account_type = data.get('account_type', 'individual')
 
-    # Build employee_name from first/last if not supplied directly
+    # Build employee_name from first/last
     if not data.get('employee_name') and (data.get('first_name') or data.get('last_name')):
         data['employee_name'] = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
 
-    # ── Determine user_name ──────────────────────────────────────────────────
-    if account_type == 'individual':
-        # Individual accounts MUST supply a username
-        username = (data.get('username') or '').lower().strip()
-        if not username:
-            return jsonify({'error': 'username is required for individual accounts'}), 400
+    # ── Resolve username ──────────────────────────────────────────────────────
+    # Both account types now require a username (company gets it auto-suggested
+    # on the frontend but must still supply it here).
+    username = (data.get('username') or '').lower().strip()
 
-        is_valid, msg = _validate_username(username)
-        if not is_valid:
-            return jsonify({'error': msg}), 400
+    if not username:
+        # Last-resort fallback: derive from email local part
+        username = (data.get('email', '')).split('@')[0].lower()
+        username = re.sub(r'[^a-z0-9_]', '_', username)[:28]
 
-        # Check uniqueness
-        if UserMaster.query.filter_by(user_name=username).first():
-            return jsonify({'error': 'Username is already taken'}), 409
+    is_valid, msg = _validate_username(username)
+    if not is_valid:
+        return jsonify({'error': msg}), 400
 
-        data['user_name'] = username
-    else:
-        # Company / join_company: auto-generate from email if not provided
-        if not data.get('user_name'):
-            data['user_name'] = (data.get('email', '')).split('@')[0]
+    # Ensure uniqueness — append number if taken
+    original = username
+    counter  = 2
+    while UserMaster.query.filter_by(user_name=username).first():
+        username = f"{original[:25]}_{counter}"
+        counter += 1
+        if counter > 99:
+            return jsonify({'error': 'Could not generate a unique username. Please choose one manually.'}), 409
 
-    # ── Common required fields ───────────────────────────────────────────────
+    data['user_name'] = username
+
+    # ── Common required fields ────────────────────────────────────────────────
     required = ['employee_name', 'email', 'user_name', 'password']
-    missing = [f for f in required if not data.get(f)]
+    missing  = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
 
@@ -222,7 +230,7 @@ def register():
         return jsonify({'error': msg}), 400
 
     try:
-        # ── Tenant setup ─────────────────────────────────────────────────────
+        # ── Tenant setup ──────────────────────────────────────────────────────
         if not data.get('tenant_id'):
             from services.tenant_service import TenantService
             company_name = (data.get('company_name') or '').strip() or data['employee_name']
@@ -235,28 +243,37 @@ def register():
         from services.subscription_service import SubscriptionService
         SubscriptionService().ensure_user_limit_available(g.tenant_id)
 
-        # ── Create employee + user account ───────────────────────────────────
+        # ── Store extra company metadata on Tenant_Master if available ────────
+        if account_type == 'company' and tenant:
+            if data.get('company_size'):
+                tenant.company_size  = data['company_size']
+            if data.get('industry'):
+                tenant.industry      = data['industry']
+            db.session.flush()
+
+        # ── Create employee + user account ────────────────────────────────────
         from services import EmployeeService
-        svc = EmployeeService()
+        svc      = EmployeeService()
         employee = svc.create_employee(
-            employee_name=data['employee_name'],
-            email=data['email'],
-            phone=data.get('phone'),
-            designation_id=data.get('designation_id')
+            employee_name  = data['employee_name'],
+            email          = data['email'],
+            phone          = data.get('phone'),
+            designation_id = data.get('designation_id'),
         )
         user = svc.create_user_account(
-            employee_id=employee.employee_id,
-            user_name=data['user_name'],
-            password=data['password']
+            employee_id = employee.employee_id,
+            user_name   = data['user_name'],
+            password    = data['password'],
         )
 
         token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         return jsonify({
-            'success': True,
-            'message': 'Registration successful',
-            'token': token,
-            'user': user.to_dict(),
-            'tenant': {'tenant_id': g.tenant_id}
+            'success':  True,
+            'message':  'Registration successful',
+            'token':    token,
+            'username': data['user_name'],   # let frontend show it to the user
+            'user':     user.to_dict(),
+            'tenant':   {'tenant_id': g.tenant_id},
         }), 201
 
     except ValueError as e:
@@ -265,9 +282,12 @@ def register():
         if isinstance(e, UserLimitExceeded):
             return _user_limit_error_response(e)
         return jsonify({'error': str(e)}), 400
-    except IntegrityError:
+    except IntegrityError as e:
         db.session.rollback()
-        return jsonify({'error': 'Email or username already exists'}), 409
+        import traceback
+        traceback.print_exc()  # ← add this
+        print(f"[DEBUG] IntegrityError detail: {str(e.orig)}")  # ← add this
+        return jsonify({'error': 'Email or username already exists', 'detail': str(e.orig)}), 409
     except Exception as e:
         db.session.rollback()
         import traceback

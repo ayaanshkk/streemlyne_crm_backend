@@ -53,34 +53,10 @@ class TenantService:
         company_name: str,
         contact_name: str = None,
         onboarding_date: date = None,
-        tenant_id: str = None,          # [TSVC-001] optional override (tests / migrations)
+        tenant_id: str = None,
     ) -> TenantMaster:
-        """
-        Create a new tenant and provision a 7-day trial subscription atomically.
-
-        [TSVC-001] Generates a string slug for tenant_id if one is not supplied,
-        then flushes Tenant_Master, provisions the trial row, and commits both
-        in a single transaction.  If no base plan exists in Subscription_Plans,
-        the transaction is rolled back and a ValueError is raised — run
-        seed_system_data.py before creating tenants.
-
-        Args:
-            company_name:    Company name (must be unique).
-            contact_name:    Primary contact name.
-            onboarding_date: Date of onboarding; defaults to today.
-            tenant_id:       Override the generated slug (optional).
-
-        Returns:
-            Created TenantMaster instance.
-
-        Raises:
-            ValueError: company name already exists, or no base plan found.
-        """
+        """Create a new tenant and provision a 7-day trial subscription atomically."""
         from database import db
-
-        existing = self.repo.get_by_company_name(company_name)
-        if existing:
-            raise ValueError(f"Tenant with company name '{company_name}' already exists")
 
         tid = tenant_id or _generate_tenant_id(company_name)
 
@@ -92,12 +68,8 @@ class TenantService:
             is_active=True,
         )
         db.session.add(tenant)
-
-        # Flush so the FK from Tenant_Subscription → Tenant_Master is satisfied
-        # within the transaction without an intermediate commit.
         db.session.flush()
 
-        # [TSVC-001] Provision 7-day trial — same transaction as the tenant INSERT.
         from services.subscription_service import SubscriptionService
         SubscriptionService().create_trial_subscription(tid)
 

@@ -37,7 +37,7 @@ class TenantMaster(db.Model):
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
     tenant_id           = db.Column(db.String, primary_key=True)
-    tenant_company_name = db.Column(db.String(255), unique=True)
+    tenant_company_name = db.Column(db.String(255))
     tenant_contact_name = db.Column(db.String(255))
     onboarding_Date     = db.Column(db.Date)
     is_active           = db.Column(db.Boolean)
