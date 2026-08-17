@@ -45,33 +45,6 @@ class TenantMaster(db.Model):
     updated_at          = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     stripe_customer_id  = db.Column(db.String(255), unique=True)
 
-    # ── Profile / branding ────────────────────────────────────────────────────
-    logo_url            = db.Column(db.Text)
-    tagline             = db.Column(db.String(255))
-
-    # ── Business details ──────────────────────────────────────────────────────
-    company_email       = db.Column(db.String(255))
-    company_phone       = db.Column(db.String(50))
-    company_address     = db.Column(db.Text)
-    company_postcode    = db.Column(db.String(20))
-    company_website     = db.Column(db.String(255))
-    registration_no     = db.Column(db.String(100))
-    vat_reg_no          = db.Column(db.String(100))
-
-    # ── Payment details ───────────────────────────────────────────────────────
-    bank_name           = db.Column(db.String(100))
-    account_name        = db.Column(db.String(100))
-    sort_code           = db.Column(db.String(20))
-    account_number      = db.Column(db.String(30))
-    payment_reference   = db.Column(db.Text)
-
-    # ── Document defaults ─────────────────────────────────────────────────────
-    default_vat_rate    = db.Column(db.Numeric(5, 2), default=20)
-    default_currency    = db.Column(db.String(10), default='GBP')
-    quote_validity_days = db.Column(db.Integer, default=30)
-    default_notes       = db.Column(db.Text)
-
-    # ── Relationships ─────────────────────────────────────────────────────────
     clients         = db.relationship('ClientMaster', back_populates='tenant', lazy='dynamic')
     employees       = db.relationship('EmployeeMaster', back_populates='tenant', lazy='dynamic')
     services        = db.relationship('ServicesMaster', back_populates='tenant', lazy='dynamic')
@@ -91,24 +64,6 @@ class TenantMaster(db.Model):
             'stripe_customer_id':  self.stripe_customer_id,
             'created_at':          self.created_at.isoformat() if self.created_at else None,
             'updated_at':          self.updated_at.isoformat() if self.updated_at else None,
-            'logo_url':            self.logo_url,
-            'tagline':             self.tagline,
-            'company_email':       self.company_email,
-            'company_phone':       self.company_phone,
-            'company_address':     self.company_address,
-            'company_postcode':    self.company_postcode,
-            'company_website':     self.company_website,
-            'registration_no':     self.registration_no,
-            'vat_reg_no':          self.vat_reg_no,
-            'bank_name':           self.bank_name,
-            'account_name':        self.account_name,
-            'sort_code':           self.sort_code,
-            'account_number':      self.account_number,
-            'payment_reference':   self.payment_reference,
-            'default_vat_rate':    float(self.default_vat_rate) if self.default_vat_rate is not None else 20.0,
-            'default_currency':    self.default_currency or 'GBP',
-            'quote_validity_days': self.quote_validity_days or 30,
-            'default_notes':       self.default_notes,
         }
 
 
@@ -128,6 +83,7 @@ class SubscriptionPlan(db.Model):
     created_at        = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     updated_at        = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     stripe_price_id   = db.Column(db.String(255))
+    max_users         = db.Column(db.Integer)
 
     currency             = db.relationship('CurrencyMaster', backref='subscription_plans')
     module_mappings      = db.relationship('SubscriptionModuleMapping', back_populates='subscription', lazy='dynamic')
@@ -153,6 +109,7 @@ class SubscriptionPlan(db.Model):
             'currency_id':        self.currency_id,
             'currency_code':      self.currency.currency_code if self.currency else None,
             'stripe_price_id':    self.stripe_price_id,
+            'max_users':          self.max_users,
             'created_at':         self.created_at.isoformat() if self.created_at else None,
             'updated_at':         self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1190,6 +1147,7 @@ class ProposalMaster(db.Model):
     quote_id = db.Column(db.String(10), unique=True, nullable=False,
                          server_default=text("'QUO-' || lpad(nextval('\"StreemLyne_MT\".quote_id_seq')::text, 3, '0')"))
     proposal_id      = db.Column(db.Integer, primary_key=True)
+    tenant_id        = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), index=True)  # ← ADD THIS
     client_id        = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
     project_id       = db.Column(db.SmallInteger)
     currency_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
@@ -1205,7 +1163,7 @@ class ProposalMaster(db.Model):
     tax_breakdown    = db.Column(db.JSON)
     created_at       = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at       = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
-    tenant_id = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), index=True)
+
     client           = db.relationship('ClientMaster', back_populates='proposals')
     currency         = db.relationship('CurrencyMaster', backref='proposals')
     proposal_details = db.relationship('ProposalDetails', back_populates='proposal', lazy='dynamic', cascade='all, delete-orphan')

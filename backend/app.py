@@ -53,6 +53,12 @@ def create_app(test_config=None):
     basedir = os.path.abspath(os.path.dirname(__file__))
     app.config["UPLOAD_FOLDER"] = os.path.join(basedir, "uploads")
     app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+    if str(app.config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite"):
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+            key: value
+            for key, value in app.config.get("SQLALCHEMY_ENGINE_OPTIONS", {}).items()
+            if key not in {"pool_size", "max_overflow", "pool_timeout", "pool_recycle"}
+        }
 
     for folder in ["uploads", "generated_pdfs", "generated_excel"]:
         os.makedirs(os.path.join(basedir, folder), exist_ok=True)

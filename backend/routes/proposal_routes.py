@@ -1,31 +1,4 @@
 #C:\streemlyne_crm_backend\backend\routes\proposal_routes.py
-"""
-Proposal Routes
-Handles: Proposal_Master, Proposal_Details
-
-Schema alignment (StreemLyne_MT):
-  Proposal_Master:
-    proposal_id (PK), client_id (FK→Client_Master, nullable),
-    project_id (FK→Project_Details, nullable),
-sub_total (numeric(12,2))
-total_amount (numeric(12,2))
-quantity (numeric(10,2))
-    total_amount (real, NOT NULL), discount_percent, discount_amount,
-    created_at, updated_at
-
-  Proposal_Details:
-    proposal_details_id (PK), proposal_id (FK→Proposal_Master, NOT NULL),
-    service_id (FK→Services_Master, NOT NULL),
-    quantity (real, NOT NULL), uom_id (FK→UOM_Master, NOT NULL),
-    created_at, updated_at
-
-NOTE — tenant scoping:
-  Proposal_Master has no tenant_id column. Tenant isolation is enforced by
-  scoping queries through Client_Master.tenant_id or Project_Details →
-  Client_Master.tenant_id. The list endpoint accepts client_id / project_id
-  filters so callers should always supply at least one.
-"""
-
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db
@@ -35,7 +8,10 @@ from datetime import datetime
 import json
 from sqlalchemy import text
 from decimal import Decimal
-
+from flask import send_file
+from fpdf import FPDF
+import io
+from models import TaxMaster, CurrencyMaster
 
 
 proposal_bp = Blueprint('proposal', __name__, url_prefix='/proposals')
@@ -422,3 +398,187 @@ def _detail_dict(d: ProposalDetails) -> dict:
         'amount': float(d.amount) if d.amount is not None else None,
         'quantity': float(d.quantity),
     }
+
+@proposal_bp.route('/<int:proposal_id>/pdf', methods=['GET'])
+@auth_required
+def download_proposal_pdf(proposal_id: int):
+    """
+    Generate and stream a quote PDF.
+    GET /api/proposals/<proposal_id>/pdf
+    """
+    proposal = _get_or_404(proposal_id)
+
+    # ── Resolve related data ──────────────────────────────────────────────────
+    client   = ClientMaster.query.get(proposal.client_id) if proposal.client_id else None
+    tax      = TaxMaster.query.get(proposal.tax_id)       if proposal.tax_id    else None
+    currency = CurrencyMaster.query.get(proposal.currency_id) if proposal.currency_id else None
+    details  = proposal.proposal_details.all()
+
+    currency_symbol = "£"  # default GBP
+    if currency:
+        symbol_map = {"GBP": "£", "USD": "$", "EUR": "€"}
+        currency_symbol = symbol_map.get(currency.currency_code, currency.currency_code + " ")
+
+    tax_rate = float(tax.tax_rate) if tax else 0.0
+
+    customer_name = (
+        proposal.customer_name or
+        (client.client_contact_name if client else None) or
+        (client.client_company_name if client else None) or
+        "N/A"
+    )
+    company_name = (client.client_company_name if client else "") or ""
+    address      = (client.address   if client else "") or ""
+    post_code    = (client.post_code if client else "") or ""
+    email        = (client.client_email if client else "") or ""
+    phone        = (client.client_phone if client else "") or ""
+
+    sub_total        = float(proposal.sub_total or 0)
+    discount_amount  = float(proposal.discount_amount or 0)
+    total_amount     = float(proposal.total_amount or 0)
+    tax_amount       = round(sub_total * tax_rate / 100, 2)
+
+    # ── Build PDF ─────────────────────────────────────────────────────────────
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(15, 15, 15)
+
+    # Header bar
+    pdf.set_fill_color(30, 30, 30)
+    pdf.rect(0, 0, 210, 28, 'F')
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_xy(15, 8)
+    pdf.cell(0, 10, "QUOTE", ln=False)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_xy(130, 10)
+    pdf.cell(0, 6, f"Quote #: {proposal.quote_id or proposal.proposal_id}", ln=True)
+    pdf.set_xy(130, 16)
+    pdf.cell(0, 6, f"Date: {proposal.created_at.strftime('%d %b %Y') if proposal.created_at else 'N/A'}")
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_xy(15, 35)
+
+    # Bill To
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(85, 6, "BILL TO", ln=False, fill=True)
+    pdf.cell(10, 6, "", ln=False)  # gap
+    pdf.cell(85, 6, "QUOTE DETAILS", ln=True, fill=True)
+
+    pdf.set_font("Helvetica", "", 9)
+    left_lines  = [customer_name, company_name, address, post_code, email, phone]
+    right_lines = [
+        f"Status: Draft",
+        f"Tax: {tax.tax_name if tax else 'N/A'} ({tax_rate}%)",
+        f"Currency: {currency.currency_code if currency else 'GBP'}",
+    ]
+    if proposal.notes:
+        right_lines.append(f"Notes: {proposal.notes[:60]}")
+
+    max_lines = max(len(left_lines), len(right_lines))
+    for i in range(max_lines):
+        left_text  = left_lines[i]  if i < len(left_lines)  else ""
+        right_text = right_lines[i] if i < len(right_lines) else ""
+        pdf.set_x(15)
+        pdf.cell(85, 5, left_text,  ln=False)
+        pdf.cell(10, 5, "",         ln=False)
+        pdf.cell(85, 5, right_text, ln=True)
+
+    pdf.ln(6)
+
+    # Line items table header
+    pdf.set_fill_color(30, 30, 30)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(75, 7, "Description",   fill=True)
+    pdf.cell(25, 7, "Qty",           fill=True, align="C")
+    pdf.cell(20, 7, "UOM",           fill=True, align="C")
+    pdf.cell(35, 7, f"Unit Price ({currency_symbol})", fill=True, align="R")
+    pdf.cell(25, 7, f"Amount ({currency_symbol})",     fill=True, align="R", ln=True)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "", 9)
+
+    fill = False
+    for d in details:
+        pdf.set_fill_color(248, 248, 248) if fill else pdf.set_fill_color(255, 255, 255)
+        service_name = d.service_name or (d.service.service_title if d.service else f"Service #{d.service_id}")
+        qty          = float(d.quantity)
+        amount       = float(d.amount) if d.amount else 0.0
+        unit_price   = round(amount / qty, 2) if qty else 0.0
+        uom_label    = d.uom.uom_description if d.uom else ""
+
+        # Multi-line service name
+        x_before = pdf.get_x()
+        y_before = pdf.get_y()
+        pdf.multi_cell(75, 6, service_name, fill=fill)
+        y_after = pdf.get_y()
+        row_h = y_after - y_before
+
+        pdf.set_xy(x_before + 75, y_before)
+        pdf.cell(25, row_h, str(qty),                      align="C", fill=fill, border=0)
+        pdf.cell(20, row_h, uom_label,                     align="C", fill=fill, border=0)
+        pdf.cell(35, row_h, f"{currency_symbol}{unit_price:,.2f}", align="R", fill=fill, border=0)
+        pdf.cell(25, row_h, f"{currency_symbol}{amount:,.2f}",     align="R", fill=fill, border=0, ln=True)
+        fill = not fill
+
+    pdf.ln(4)
+
+    # Totals
+    pdf.set_font("Helvetica", "", 9)
+    col_w = 45
+
+    def totals_row(label, value, bold=False):
+        if bold:
+            pdf.set_font("Helvetica", "B", 10)
+        else:
+            pdf.set_font("Helvetica", "", 9)
+        pdf.set_x(120)
+        pdf.cell(col_w, 6, label, align="R")
+        pdf.cell(col_w, 6, value, align="R", ln=True)
+
+    totals_row("Subtotal:",           f"{currency_symbol}{sub_total:,.2f}")
+    if discount_amount:
+        totals_row("Discount:",       f"-{currency_symbol}{discount_amount:,.2f}")
+    if tax_rate:
+        totals_row(f"Tax ({tax_rate}%):", f"{currency_symbol}{tax_amount:,.2f}")
+
+    pdf.set_draw_color(30, 30, 30)
+    pdf.set_x(120)
+    pdf.cell(90, 0.5, "", ln=True, fill=True, border="T")
+
+    totals_row("TOTAL:",              f"{currency_symbol}{total_amount:,.2f}", bold=True)
+
+    # Payment details
+    if proposal.payment_details:
+        pdf.ln(8)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(0, 6, "PAYMENT DETAILS", fill=True, ln=True)
+        pdf.set_font("Helvetica", "", 9)
+        pd = proposal.payment_details
+        if isinstance(pd, dict):
+            for k, v in pd.items():
+                if v:
+                    pdf.cell(0, 5, f"{k.replace('_', ' ').title()}: {v}", ln=True)
+
+    # Footer
+    pdf.set_y(-20)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 5, "Thank you for your business.", align="C", ln=True)
+
+    # ── Stream ────────────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    pdf.output(buf)
+    buf.seek(0)
+
+    filename = f"{proposal.quote_id or f'quote-{proposal.proposal_id}'}.pdf"
+    return send_file(
+        buf,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=filename,
+    )

@@ -30,29 +30,47 @@ class PriceListMaster(db.Model):
     __tablename__  = 'PriceList_Master'
     __table_args__ = {'schema': 'StreemLyne_MT'}
 
-    pricelist_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    tenant_id    = db.Column(db.String,  nullable=False, index=True)
-    category     = db.Column(db.String,  nullable=False)
-    item_name    = db.Column(db.String,  nullable=False)
-    description  = db.Column(db.Text)
-    base_price   = db.Column(db.Numeric(10, 2))
-    unit         = db.Column(db.String,  default='each')
-    item_code    = db.Column(db.String(50))
-    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at   = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    pricelist_id      = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id         = db.Column(db.String,  nullable=False, index=True)
+    category          = db.Column(db.String,  nullable=False)
+    item_name         = db.Column(db.String,  nullable=False)
+    description       = db.Column(db.Text)
+    base_price        = db.Column(db.Numeric(10, 2))
+    unit              = db.Column(db.String,  default='each')
+    item_code         = db.Column(db.String(50))
+    dimension_based   = db.Column(db.Boolean, default=False)
+    dimension_formula = db.Column(db.String)
+    door_type         = db.Column(db.String(100))
+    width             = db.Column(db.Integer)
+    height            = db.Column(db.Integer)
+    depth             = db.Column(db.Integer)
+    brand             = db.Column(db.String(50))
+    colour            = db.Column(db.String(255))
+    alias_codes       = db.Column(db.Text)
+    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at        = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_dict(self):
         return {
-            'pricelist_id': self.pricelist_id,
-            'tenant_id':    self.tenant_id,
-            'category':     self.category,
-            'item_name':    self.item_name,
-            'description':  self.description,
-            'base_price':   float(self.base_price) if self.base_price is not None else None,
-            'unit':         self.unit or 'each',
-            'item_code':    self.item_code,
-            'created_at':   self.created_at.isoformat() if self.created_at else None,
-            'updated_at':   self.updated_at.isoformat() if self.updated_at else None,
+            'pricelist_id':      self.pricelist_id,
+            'tenant_id':         self.tenant_id,
+            'category':          self.category,
+            'item_name':         self.item_name,
+            'description':       self.description,
+            'base_price':        float(self.base_price) if self.base_price is not None else None,
+            'unit':              self.unit or 'each',
+            'item_code':         self.item_code,
+            'dimension_based':   self.dimension_based or False,
+            'dimension_formula': self.dimension_formula,
+            'door_type':         self.door_type,
+            'width':             self.width,
+            'height':            self.height,
+            'depth':             self.depth,
+            'brand':             self.brand,
+            'colour':            self.colour,
+            'alias_codes':       self.alias_codes,
+            'created_at':        self.created_at.isoformat() if self.created_at else None,
+            'updated_at':        self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
@@ -155,7 +173,6 @@ def create_item():
 @pricelist_bp.route('/<int:item_id>', methods=['PUT'])
 @auth_required
 def update_item(item_id: int):
-    """PUT /api/pricelist/<id> — update a pricelist item."""
     item = PriceListMaster.query.filter_by(
         pricelist_id=item_id, tenant_id=g.tenant_id
     ).first()
@@ -164,18 +181,26 @@ def update_item(item_id: int):
 
     data = request.get_json() or {}
 
-    if 'category'    in data: item.category    = data['category'].strip()
-    if 'item_name'   in data: item.item_name   = data['item_name'].strip()
-    if 'description' in data: item.description = (data.get('description') or '').strip() or None
-    if 'unit'        in data: item.unit        = (data.get('unit') or 'each').strip() or 'each'
-    if 'item_code'   in data: item.item_code   = (data.get('item_code') or '').strip() or None
-    if 'base_price'  in data:
+    if 'category'          in data: item.category          = data['category'].strip()
+    if 'item_name'         in data: item.item_name         = data['item_name'].strip()
+    if 'description'       in data: item.description       = (data.get('description') or '').strip() or None
+    if 'unit'              in data: item.unit              = (data.get('unit') or 'each').strip() or 'each'
+    if 'item_code'         in data: item.item_code         = (data.get('item_code') or '').strip() or None
+    if 'dimension_based'   in data: item.dimension_based   = data['dimension_based']
+    if 'dimension_formula' in data: item.dimension_formula = data.get('dimension_formula')
+    if 'door_type'         in data: item.door_type         = data.get('door_type')
+    if 'width'             in data: item.width             = data.get('width')
+    if 'height'            in data: item.height            = data.get('height')
+    if 'depth'             in data: item.depth             = data.get('depth')
+    if 'brand'             in data: item.brand             = data.get('brand')
+    if 'colour'            in data: item.colour            = data.get('colour')
+    if 'alias_codes'       in data: item.alias_codes       = data.get('alias_codes')
+    if 'base_price'        in data:
         item.base_price = Decimal(str(data['base_price'])) if data['base_price'] is not None else None
 
     item.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({'message': 'Item updated', 'item': item.to_dict()}), 200
-
 
 @pricelist_bp.route('/<int:item_id>', methods=['DELETE'])
 @auth_required

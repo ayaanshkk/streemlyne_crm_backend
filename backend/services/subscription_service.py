@@ -50,11 +50,26 @@ from dateutil.relativedelta import relativedelta
 from flask import current_app, has_app_context
 
 from database import db
-from models import TenantMaster, TenantSubscription, SubscriptionPlan
+from models import TenantMaster, TenantSubscription, SubscriptionPlan, UserMaster
 from repositories import TenantRepository, PermissionRepository
 
 # [SUB-006] Single source of truth for trial length.
 TRIAL_PERIOD_DAYS: int = 7
+TRIAL_USER_LIMIT: int = 10
+
+
+class UserLimitExceeded(ValueError):
+    """Raised when a tenant has reached its subscription user limit."""
+
+    def __init__(self, usage: Dict):
+        self.usage = usage
+        limit = usage.get("effective_user_limit")
+        current_count = usage.get("current_user_count")
+        plan_code = usage.get("plan_code") or "TRIAL"
+        super().__init__(
+            f"User limit reached for {plan_code}. "
+            f"{current_count}/{limit} users are already assigned."
+        )
 
 
 class SubscriptionService:
@@ -79,6 +94,54 @@ class SubscriptionService:
     def get_all_plans(self) -> List[SubscriptionPlan]:
         """Return all active subscription plans."""
         return self.permission_repo.get_active_subscription_plans()
+
+    def get_user_limit_usage(
+        self,
+        tenant_id: str,
+        subscription: Optional[TenantSubscription] = None,
+        plan: Optional[SubscriptionPlan] = None,
+    ) -> Dict:
+        """
+        Return tenant user-limit usage for the current subscription.
+
+        All User_Master rows for the tenant count toward the limit.  A NULL
+        plan max_users means unlimited, except trialing tenants which use the
+        fixed trial override.
+        """
+        subscription = subscription or self.get_active_subscription(tenant_id)
+        if subscription:
+            subscription = self._sync_subscription_state(subscription)
+        if subscription and not plan:
+            plan = self.get_subscription_plan(subscription.subscription_id)
+
+        current_count = (
+            db.session.query(UserMaster)
+            .filter(UserMaster.tenant_id == str(tenant_id))
+            .count()
+        )
+        status = subscription.status if subscription else None
+        plan_max_users = plan.max_users if plan else None
+
+        effective_limit = TRIAL_USER_LIMIT if status == "trialing" else plan_max_users
+        is_unlimited = effective_limit is None
+        remaining = None if is_unlimited else max(0, effective_limit - current_count)
+        limit_reached = False if is_unlimited else current_count >= effective_limit
+
+        return {
+            "plan_code": plan.subscription_code if plan else None,
+            "max_users": plan_max_users,
+            "effective_user_limit": effective_limit,
+            "current_user_count": current_count,
+            "remaining_user_slots": remaining,
+            "user_limit_reached": limit_reached,
+            "is_user_limit_unlimited": is_unlimited,
+        }
+
+    def ensure_user_limit_available(self, tenant_id: str) -> Dict:
+        usage = self.get_user_limit_usage(tenant_id)
+        if usage["user_limit_reached"]:
+            raise UserLimitExceeded(usage)
+        return usage
 
     def check_subscription_status(self, tenant_id: str) -> Dict:
         """
@@ -109,11 +172,13 @@ class SubscriptionService:
             return paused_status
 
         if not subscription:
+            usage = self.get_user_limit_usage(tenant_id, subscription=None, plan=None)
             return {
                 "has_subscription":  False,
                 "is_active":         False,
                 "status":            None,
                 "message":           "No active subscription",
+                **{key: value for key, value in usage.items() if key != "plan_code"},
             }
 
         plan          = self.get_subscription_plan(subscription.subscription_id)
@@ -123,6 +188,7 @@ class SubscriptionService:
             if subscription.subscription_end_date
             else None
         )
+        usage = self.get_user_limit_usage(tenant_id, subscription=subscription, plan=plan)
 
         return {
             # pre-existing keys
@@ -146,6 +212,7 @@ class SubscriptionService:
             "current_period_start":     subscription.current_period_start.isoformat() if subscription.current_period_start else None,
             "current_period_end":       subscription.current_period_end.isoformat() if subscription.current_period_end else None,
             "pause":                    None,
+            **{key: value for key, value in usage.items() if key != "plan_code"},
         }
 
     def _get_paused_subscription_status(self, tenant_id: str) -> Optional[Dict]:
@@ -219,6 +286,7 @@ class SubscriptionService:
             trial_end_date          = trial_end,
             stripe_subscription_id  = None,
         )
+        self._assign_sqlite_subscription_pk(trial_sub)
         db.session.add(trial_sub)
         db.session.flush()  # ensure PK is assigned before reconciling modules
 
@@ -436,6 +504,7 @@ class SubscriptionService:
             current_period_start    = datetime.utcnow(),
             current_period_end      = datetime.combine(end_date, datetime.max.time()),
         )
+        self._assign_sqlite_subscription_pk(new_sub)
         db.session.add(new_sub)
         db.session.flush()
 
@@ -444,6 +513,19 @@ class SubscriptionService:
 
         db.session.commit()
         return new_sub
+
+    def _assign_sqlite_subscription_pk(self, subscription: TenantSubscription) -> None:
+        bind = db.session.get_bind()
+        if not bind or bind.dialect.name != "sqlite":
+            return
+        if subscription.tenant_subscription_mapping_id is not None:
+            return
+        current_max = (
+            db.session.query(db.func.max(TenantSubscription.tenant_subscription_mapping_id))
+            .scalar()
+            or 0
+        )
+        subscription.tenant_subscription_mapping_id = current_max + 1
 
     # =========================================================================
     # [SUB-004] Per-request access gate

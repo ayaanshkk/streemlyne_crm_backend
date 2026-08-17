@@ -866,6 +866,7 @@ CREATE TABLE StreemLyne_MT.Subscription_Plans (
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone,
   stripe_price_id character varying,
+  max_users integer,
   CONSTRAINT Subscription_Plans_pkey PRIMARY KEY (subscription_id),
   CONSTRAINT Subscription_Plans_currency_id_fkey FOREIGN KEY (currency_id) REFERENCES StreemLyne_MT.Currency_Master(currency_id)
 );

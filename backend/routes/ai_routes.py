@@ -23,7 +23,7 @@ MAX_TOKENS        = 4096
 MAX_TOOL_ITERATIONS = 10
 
 STAGES = [
-    "Prospect", "Qualified", "Contact Made", "Meeting Scheduled",
+    "Lead", "Qualified", "Contact Made", "Meeting Scheduled",
     "Proposal Sent", "Negotiation", "Closed Won", "Closed Lost", "On Hold",
 ]
 
@@ -49,7 +49,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "stage":      {"type": "string", "enum": STAGES},
+                "stage": {"type": "string", "enum": STAGES},
                 "name_search": {"type": "string"},
                 "limit":      {"type": "integer"},
                 "sort_by":    {"type": "string", "enum": ["created_at", "name", "stage"]},
@@ -141,14 +141,17 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "type":            {"type": "string", "enum": ["meeting", "call", "task", "delivery", "note"]},
-                "title":           {"type": "string"},
-                "date":            {"type": "string"},
-                "staff_name":      {"type": "string"},
-                "customer_name":   {"type": "string"},
-                "estimated_hours": {"type": "number"},
-                "priority":        {"type": "string", "enum": ["Low", "Medium", "High", "Urgent"]},
-                "notes":           {"type": "string"}
+                "type":             {"type": "string", "enum": ["meeting", "call", "task", "delivery", "note"]},
+                "title":            {"type": "string"},
+                "date":             {"type": "string"},
+                "staff_name":       {"type": "string"},
+                "customer_name":    {"type": "string"},  # ← add
+                "time_from":        {"type": "string", "description": "Start time HH:MM"},  # ← add
+                "time_to":          {"type": "string", "description": "End time HH:MM"},    # ← add
+                "duration_minutes": {"type": "integer", "description": "Duration in minutes — used to calculate time_to if not given"},  # ← add
+                "estimated_hours":  {"type": "number"},
+                "priority":         {"type": "string", "enum": ["Low", "Medium", "High", "Urgent"]},
+                "notes":            {"type": "string"}
             },
             "required": ["type", "title", "date", "staff_name"]
         }
@@ -489,7 +492,7 @@ def execute_tool(name: str, args: dict, token: str, tenant_id: str) -> dict:
                 'client_phone':        args.get('phone', ''),
                 'address':             args.get('address', ''),
                 'post_code':           args.get('postcode', ''),
-                'stage':               args.get('stage', 'Prospect'),
+                'stage':               args.get('stage', 'Lead'),
             })
             if isinstance(result, dict) and 'error' in result: return result
             return {'success': True, 'data': result, 'message': f'Created customer: {args["name"]}'}
@@ -554,17 +557,60 @@ def execute_tool(name: str, args: dict, token: str, tenant_id: str) -> dict:
                 if not isinstance(clients, dict):
                     match = _find_customer(clients, args['customer_name'])
                     if match: customer_id = match['client_id']
+
+            # Convert times to 24hr HH:MM format
+            def _to_24hr(t: str) -> str:
+                if not t:
+                    return t
+                t = t.strip()
+                try:
+                    from datetime import datetime as dt
+                    for fmt in ('%I:%M %p', '%I %p', '%I:%M%p', '%I%p'):
+                        try:
+                            return dt.strptime(t.upper(), fmt).strftime('%H:%M')
+                        except ValueError:
+                            continue
+                    return t
+                except Exception:
+                    return t
+
+            time_from = _to_24hr(args.get('time_from') or '')
+            time_to   = _to_24hr(args.get('time_to')   or '')
+
+            # Calculate time_to from duration_minutes if not explicitly provided
+            if time_from and not time_to and args.get('duration_minutes'):
+                from datetime import datetime as dt, timedelta
+                try:
+                    t = dt.strptime(time_from, '%H:%M')
+                    t += timedelta(minutes=int(args['duration_minutes']))
+                    time_to = t.strftime('%H:%M')
+                except Exception:
+                    pass
+
             result = api('POST', '/assignments', {
-                'type': args.get('type', 'task'), 'title': args.get('title'),
-                'date': args.get('date'), 'staff_name': args.get('staff_name'),
-                'customer_id': customer_id, 'customer_name': args.get('customer_name'),
+                'type':            args.get('type', 'task'),
+                'title':           args.get('title'),
+                'date':            args.get('date'),
+                'staff_name':      args.get('staff_name'),
+                'customer_id':     customer_id,
+                'customer_name':   args.get('customer_name'),
+                'time_from':       time_from,
+                'time_to':         time_to,
                 'estimated_hours': args.get('estimated_hours', 1),
-                'priority': args.get('priority', 'Medium'), 'status': 'Scheduled',
-                'notes': args.get('notes', ''),
+                'priority':        args.get('priority', 'Medium'),
+                'status':          'Scheduled',
+                'notes':           args.get('notes', ''),
             })
+
             if isinstance(result, dict) and 'error' in result: return result
-            return {'success': True, 'data': result,
-                    'message': f'Scheduled {args.get("type")} "{args.get("title")}" on {args.get("date")}'}
+
+            time_str     = f" at {time_from}"                          if time_from                    else ""
+            duration_str = f" ({args.get('duration_minutes')} mins)"  if args.get('duration_minutes') else ""
+            return {
+                'success': True,
+                'data':    result,
+                'message': f'Scheduled {args.get("type")} "{args.get("title")}" on {args.get("date")}{time_str}{duration_str}',
+            }
 
         elif name == "list_schedule_assignments":
             path = '/assignments'
@@ -802,6 +848,19 @@ def chat():
     token     = request.headers.get('Authorization', '').replace('Bearer ', '') or request.cookies.get('auth_token', '')
     tenant_id = str(g.tenant_id)
 
+    # ── Resolve current user name ─────────────────────────────────────────
+    current_user_name = "Unknown"
+    try:
+        from models import UserMaster
+        user = UserMaster.query.filter_by(user_id=g.user_id).first()
+        if user and user.employee:
+            current_user_name = user.employee.employee_name
+        elif user and user.user_name:
+            current_user_name = user.user_name
+    except Exception as e:
+        print(f"[StreemAI] Could not resolve current user: {e}")
+    # ─────────────────────────────────────────────────────────────────────
+
     today        = datetime.utcnow()
     tomorrow     = today + timedelta(days=1)
     today_str    = today.strftime('%Y-%m-%d')
@@ -809,33 +868,70 @@ def chat():
     today_long   = today.strftime('%A, %B') + ' ' + str(today.day) + ', ' + str(today.year)
 
     system_prompt = (
-        "You are StreemAI, an intelligent CRM assistant for StreemLyne.\n"
-        "You help manage customers, schedules, quotes, and pipeline.\n\n"
+        "You are StreemAI, an intelligent CRM assistant built into StreemLyne.\n"
+        "You help users manage customers, sales pipeline, quotes, and schedules.\n"
+        "You have a warm, professional tone — like a knowledgeable colleague, not a robot.\n\n"
+
         f"TODAY: {today_str} ({today_long})\n"
         f"TOMORROW: {tomorrow_str}\n"
         f"Current month: {today.strftime('%Y-%m')}\n\n"
-        "RULES:\n"
+
+        "## CURRENT USER\n"
+        f"- The logged-in user's full name is: **{current_user_name}**\n"
+        "- When the user says 'me', 'myself', 'assign to me', 'my name', or 'I', "
+        f"always resolve this to '{current_user_name}' automatically — NEVER ask who they are.\n\n"
+
+        "## FORMATTING RULES\n"
+        "- Always use markdown in your responses.\n"
+        "- NEVER use emojis. Not a single one. No exceptions.\n"
+        "- Use **bold** for names, amounts, quote numbers, and key values.\n"
+        "- Use bullet lists (- item) for multiple items or options.\n"
+        "- Use numbered lists for step-by-step instructions or ordered info.\n"
+        "- Use markdown tables for structured data: pipeline counts, quote line items, customer lists.\n"
+        "- Use ## or ### headers to separate sections in longer responses.\n"
+        "- Never use raw dashes like '---' or '|||' as separators — use tables or lists instead.\n"
+        "- Keep responses concise and scannable. Avoid walls of text.\n"
+        "- Use a single blank line between sections.\n\n"
+
+        "## CORE RULES\n"
         "- ALWAYS use tools to fetch or create real data. Never invent names, IDs, or results.\n"
         "- Before creating a customer, always call list_customers first to check for duplicates.\n"
-        "- When the user says 'update', 'change', 'rename', 'set', or 'edit' a customer field, "
-        "ALWAYS call update_customer.\n"
+        "- When the user says 'update', 'change', 'rename', 'set', or 'edit' a customer field, ALWAYS call update_customer.\n"
         "- Output dates as YYYY-MM-DD. Never schedule in the past.\n"
-        "- Be concise, warm, and direct.\n"
+        "- Be concise, warm, and direct. One clear answer, not multiple options unless asked.\n"
         "- For delete operations: confirm the customer was found before saying it was deleted.\n"
+        "- When creating a customer, default stage is **Lead** unless the user specifies otherwise.\n"
         f"- Valid pipeline stages: {', '.join(STAGES)}\n\n"
-        "QUOTE GENERATION RULES:\n"
-        "- When asked to generate/create a quote, follow this exact flow:\n"
-        "  1. Find the client using list_customers.\n"
-        "  2. Call get_client_quote_history to check if they have previous quotes to use as template.\n"
-        "  3. Call search_pricelist with relevant keywords to find pre-set prices.\n"
-        "  4. If pricelist items are found, use their base_price as unit_price — do NOT ask the user for prices that are already in the pricelist.\n"
-        "  5. If pricelist has no matches, ask the user for description, quantity, and unit price.\n"
-        "  6. Present a COMPLETE quote draft showing all line items, subtotal, VAT, and total BEFORE creating it.\n"
-        "  7. Ask 'Shall I create this quote?' and wait for confirmation.\n"
-        "  8. Only call create_quote AFTER the user confirms.\n"
-        "- After creating a quote, always share the quote number and a direct link: /dashboard/quotes/{proposal_id}/view\n"
-        "- If the user says 'use last quote' or 'same as before', base it on get_client_quote_history results.\n"
-        "- You can pre-fill up to 80% of a quote from pricelist + history. The user only needs to confirm or adjust."
+
+        "## RESPONSE STYLE\n"
+        "- Lead with the result, then add context if needed.\n"
+        "- For customer lists, use a markdown table with columns: Name | Company | Stage | Email.\n"
+        "- For pipeline status, use a table with columns: Stage | Count.\n"
+        "- For quotes, always show a line-item table before confirming creation.\n"
+        "- When confirming an action was done (created/updated/deleted), use a short summary with bold key values.\n"
+        "- If you need more info from the user, ask for only ONE thing at a time.\n\n"
+
+        "## QUOTE GENERATION RULES\n"
+        "When asked to generate or create a quote, follow this exact flow:\n\n"
+        "1. Find the client using list_customers.\n"
+        "2. Call get_client_quote_history to check for previous quotes to use as a template.\n"
+        "3. Call search_pricelist with relevant keywords to find pre-set prices.\n"
+        "4. If pricelist items are found, use their base_price as unit_price — do NOT ask the user for prices already in the pricelist.\n"
+        "5. If pricelist has no matches, ask the user for: description, quantity, and unit price.\n"
+        "6. Present a COMPLETE quote draft as a markdown table BEFORE creating it:\n\n"
+        "   | # | Description | Qty | Unit Price | Total |\n"
+        "   |---|-------------|-----|------------|-------|\n"
+        "   | 1 | Item name   | 1   | £100.00    | £100.00 |\n\n"
+        "   Then show: **Subtotal**, **VAT (20%)**, **Total** as bold lines below the table.\n"
+        "7. End with: 'Shall I create this quote?' and wait for confirmation.\n"
+        "8. Only call create_quote AFTER the user confirms.\n"
+        "9. After creating, respond with a short summary:\n"
+        "   - **Quote Number:** QUO-XXX\n"
+        "   - **Client:** Name\n"
+        "   - **Total:** £X,XXX.XX (inc. VAT)\n"
+        "   - Then include the view link: /dashboard/quotes/{proposal_id}/view\n\n"
+        "- If the user says 'use last quote' or 'same as before', base it entirely on get_client_quote_history results.\n"
+        "- You can pre-fill up to 80% of a quote from pricelist + history. The user only needs to confirm or adjust.\n"
     )
 
     history  = data.get('conversation_history', [])

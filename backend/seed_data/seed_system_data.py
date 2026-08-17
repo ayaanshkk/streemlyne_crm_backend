@@ -147,9 +147,10 @@ def seed_subscription_plans():
             'is_base_plan':      True,    # Trial uses this plan
             'is_active':         True,
             'billing_cycle':     1,       # Monthly
-            'price':             29.00,
+            'price':             49.00,
             'currency_id':       gbp.currency_id,
             'stripe_price_id':   stripe_price_starter,  # null until set via env var
+            'max_users':         250,
         },
         {
             'subscription_code': 'PRO',
@@ -158,9 +159,10 @@ def seed_subscription_plans():
             'is_base_plan':      False,
             'is_active':         True,
             'billing_cycle':     1,
-            'price':             79.00,
+            'price':             99.00,
             'currency_id':       gbp.currency_id,
             'stripe_price_id':   stripe_price_pro,      # null until set via env var
+            'max_users':         None,
         },
         {
             'subscription_code': 'CUSTOM',
@@ -174,6 +176,7 @@ def seed_subscription_plans():
             # [SEED-003] Custom plan INTENTIONALLY has no stripe_price_id.
             # It is provisioned manually — no Stripe Checkout flow.
             'stripe_price_id':   None,
+            'max_users':         None,
         },
     ]
 
@@ -193,6 +196,7 @@ def seed_subscription_plans():
             existing.currency_id       = plan_data['currency_id']
             existing.is_base_plan      = plan_data['is_base_plan']
             existing.is_active         = plan_data['is_active']
+            existing.max_users         = plan_data['max_users']
             # Only overwrite stripe_price_id if the env var is set,
             # so a previously configured value is not accidentally cleared.
             if plan_data['stripe_price_id'] is not None:

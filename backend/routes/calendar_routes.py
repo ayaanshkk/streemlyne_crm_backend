@@ -173,6 +173,7 @@ def create_assignment():
                 date, start_date, end_date,
                 start_time, end_time,
                 team_member,
+                client_id, customer_name,
                 notes, priority, status,
                 created_by_employee_id, created_at
             ) VALUES (
@@ -180,6 +181,7 @@ def create_assignment():
                 :start_date, :start_date, :end_date,
                 :time_from, :time_to,
                 :team_member,
+                :client_id, :customer_name,
                 :notes, :priority, :status,
                 :created_by, NOW()
             )
@@ -188,23 +190,26 @@ def create_assignment():
                 start_date AS date, start_date, end_date,
                 start_time, end_time,
                 team_member AS staff_name,
+                client_id, customer_name,
                 notes, priority, status,
                 created_at, updated_at
         """)
 
         result = db.session.execute(insert_query, {
-            'tenant_id':  str(g.tenant_id),
-            'type':       assignment_type,
-            'title':      title,
-            'start_date': parsed_date.isoformat(),
-            'end_date':   parsed_date.isoformat(),
-            'time_from':  data.get('time_from'),
-            'time_to':    data.get('time_to'),
-            'team_member': data.get('staff_name'),
-            'notes':      data.get('notes'),
-            'priority':   data.get('priority', 'Medium'),
-            'status':     data.get('status', 'Scheduled'),
-            'created_by': employee_id,
+            'tenant_id':     str(g.tenant_id),
+            'type':          assignment_type,
+            'title':         title,
+            'start_date':    parsed_date.isoformat(),
+            'end_date':      parsed_date.isoformat(),
+            'time_from':     data.get('time_from'),
+            'time_to':       data.get('time_to'),
+            'team_member':   data.get('staff_name'),
+            'client_id':     data.get('client_id') or data.get('customer_id'),
+            'customer_name': data.get('customer_name'),
+            'notes':         data.get('notes'),
+            'priority':      data.get('priority', 'Medium'),
+            'status':        data.get('status', 'Scheduled'),
+            'created_by':    employee_id,
         })
         db.session.commit()
 
@@ -292,6 +297,10 @@ def update_assignment(task_id):
             set_parts.append("client_id = :client_id")
             params['client_id'] = int(raw) if raw else None
 
+        if 'customer_name' in data:
+            set_parts.append("customer_name = :customer_name")
+            params['customer_name'] = data['customer_name']
+
         if 'time_from' in data:
             set_parts.append("start_time = :time_from")
             params['time_from'] = data['time_from']
@@ -312,12 +321,13 @@ def update_assignment(task_id):
             RETURNING
                 task_id, type, title,
                 start_date AS date, start_date, end_date,
+                start_time, end_time,
                 team_member AS staff_name,
                 project_id, client_id, customer_name,
                 estimated_hours, notes, priority, status,
                 created_at, updated_at
         """)
-
+        
         result = db.session.execute(update_query, params)
         db.session.commit()
 
@@ -395,16 +405,10 @@ def _parse_date(value) -> date | None:
 
 
 def _row_to_dict(row) -> dict:
-    """
-    Serialise a Tasks_Master row to a dict.
-    Exposes both schema names and frontend aliases.
-    """
     if row is None:
         return {}
-
     r = dict(row._mapping)
     date_val = r.get('date') or r.get('start_date')
-
     return {
         'id':            r.get('task_id'),
         'assignment_id': r.get('task_id'),
@@ -412,6 +416,8 @@ def _row_to_dict(row) -> dict:
         'title':         r.get('title'),
         'date':          date_val.isoformat() if isinstance(date_val, date) else date_val,
         'staff_name':    r.get('staff_name'),
+        'customer_name': r.get('customer_name'),
+        'client_id':     r.get('client_id'),
         'time_from':     str(r['start_time']) if r.get('start_time') else None,
         'time_to':       str(r['end_time'])   if r.get('end_time')   else None,
         'notes':         r.get('notes'),

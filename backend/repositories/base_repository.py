@@ -6,6 +6,7 @@ All repositories should inherit from this
 
 from database import db
 from sqlalchemy import and_
+from sqlalchemy.sql.sqltypes import Integer, SmallInteger
 from typing import List, Optional, Any, Type, TypeVar
 from flask import g
 
@@ -82,11 +83,27 @@ class BaseRepository:
         # Automatically add tenant_id if model has it
         if hasattr(self.model, 'tenant_id') and 'tenant_id' not in kwargs:
             kwargs['tenant_id'] = self._get_tenant_id()
+        self._assign_sqlite_pk(kwargs)
         
         instance = self.model(**kwargs)
         self.session.add(instance)
         self.session.commit()
         return instance
+
+    def _assign_sqlite_pk(self, values: dict) -> None:
+        bind = self.session.get_bind()
+        if not bind or bind.dialect.name != "sqlite":
+            return
+        pk_columns = list(self.model.__table__.primary_key.columns)
+        if len(pk_columns) != 1:
+            return
+        pk = pk_columns[0]
+        if pk.name in values:
+            return
+        if not isinstance(pk.type, (Integer, SmallInteger)):
+            return
+        current_max = self.session.query(db.func.max(getattr(self.model, pk.name))).scalar() or 0
+        values[pk.name] = current_max + 1
     
     def get_by_id(self, record_id: Any, force_tenant: bool = True) -> Optional[T]:
         """
