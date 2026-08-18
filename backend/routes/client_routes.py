@@ -1,33 +1,3 @@
-"""
-Client Routes
-Handles: Client_Master, Client_Interactions
-
-Schema alignment (StreemLyne_MT):
-  Client_Master:
-    client_id (PK), tenant_id (FK→Tenant_Master), client_company_name,
-    client_contact_name, address, country_id (FK→Country_Master),
-    post_code, client_phone, client_email, client_website,
-    default_currency_id (FK→Currency_Master), created_at
-
-  Client_Interactions:
-    interaction_id (PK), client_id (FK→Client_Master), contact_date,
-    contact_method (smallint), notes, next_steps, reminder_date, created_at
-
-MULTI-TENANT ALIGNMENT:
-  - Tenant_Master (tenant_id): Companies using the application
-  - Client_Master (client_id): Customers created by each tenant
-  - Customer_Auth: User authentication (handled in auth_routes.py)
-
-CHANGES
-────────────────────────────────────────────────────────────────────────────
-[LIMIT-001] TRIAL_CLIENT_LIMIT = 10
-[LIMIT-002] GET  /clients/limit-check — frontend polls before opening modal
-[LIMIT-003] _check_trial_client_limit() — shared helper (already existed)
-[LIMIT-004] POST /clients — calls _check_trial_client_limit() at the top
-[LIMIT-005] PATCH /pipeline/<client_id>/stage — stage_updated_at support
-────────────────────────────────────────────────────────────────────────────
-"""
-
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db
