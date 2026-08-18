@@ -8,11 +8,11 @@ GET  /api/teams/salespeople/<id>   — single salesperson stats
 GET  /api/teams/leaderboard        — ranked by won opportunities
 """
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, g, jsonify, request
 from sqlalchemy import func
 from database import db
 from middleware import auth_required
-from models import EmployeeMaster, OpportunityDetails
+from models import EmployeeMaster, OpportunityDetails, RoleMaster
 
 team_bp = Blueprint("team", __name__, url_prefix="/teams")
 
@@ -119,3 +119,29 @@ def leaderboard():
         row["rank"] = i
 
     return jsonify(ranked), 200
+
+@team_bp.route("/members/<int:employee_id>/role", methods=["PUT"])
+@auth_required
+def update_member_role(employee_id: int):
+    tid = str(g.tenant_id)
+    data = request.get_json()
+    role_name = data.get("role", "").strip()
+
+    if not role_name:
+        return jsonify({"error": "Role is required"}), 400
+
+    emp = EmployeeMaster.query.filter_by(
+        employee_id=employee_id,
+        tenant_id=tid,
+    ).first()
+    if not emp:
+        return jsonify({"error": "Employee not found"}), 404
+
+    role = RoleMaster.query.filter_by(role_name=role_name).first()
+    if not role:
+        return jsonify({"error": f"Role '{role_name}' not found"}), 400
+
+    emp.role_id = role.role_id  # set the FK integer directly
+    db.session.commit()
+
+    return jsonify({"message": "Role updated"}), 200

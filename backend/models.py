@@ -293,22 +293,16 @@ class SubscriptionInvoice(db.Model):
         {'schema': 'StreemLyne_MT'},
     )
 
-    id = db.Column(PG_UUID(as_uuid=False).with_variant(db.String(36), "sqlite"),
-                   nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
     invoice_id             = db.Column(db.SmallInteger().with_variant(db.Integer, "sqlite"), primary_key=True, autoincrement=True)
     tenant_id              = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
     subscription_id        = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'))
     stripe_invoice_id      = db.Column(db.String(255), unique=True)
-    stripe_subscription_id = db.Column(db.String(255))
     invoice_number         = db.Column(db.String(50), nullable=False, unique=True)
     amount                 = db.Column(db.Numeric(10, 2), nullable=False)
-    amount_paid            = db.Column(db.Integer)
     tax_amount             = db.Column(db.Numeric(10, 2), default=0)
     total_amount           = db.Column(db.Numeric(10, 2), nullable=False)
     currency_id            = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
-    stripe_currency        = db.Column('currency', db.String(20))
     status                 = db.Column(db.String(50), default='pending')
-    invoice_date           = db.Column(db.DateTime(timezone=True))
     period_start           = db.Column(db.Date)
     period_end             = db.Column(db.Date)
     invoice_pdf_url        = db.Column(db.Text)
@@ -326,13 +320,13 @@ class SubscriptionInvoice(db.Model):
 
     def to_dict(self):
         return {
-            'id': self.id, 'invoice_id': self.invoice_id, 'tenant_id': self.tenant_id,
+            'invoice_id': self.invoice_id, 'tenant_id': self.tenant_id,
             'subscription_id': self.subscription_id, 'stripe_invoice_id': self.stripe_invoice_id,
             'invoice_number': self.invoice_number, 'amount': float(self.amount) if self.amount else 0,
-            'amount_paid': self.amount_paid, 'tax_amount': float(self.tax_amount) if self.tax_amount else 0,
+            'tax_amount': float(self.tax_amount) if self.tax_amount else 0,
             'total_amount': float(self.total_amount) if self.total_amount else 0,
             'currency_id': self.currency_id, 'currency_code': self.currency.currency_code if self.currency else None,
-            'status': self.status, 'invoice_date': self.invoice_date.isoformat() if self.invoice_date else None,
+            'status': self.status,
             'period_start': self.period_start.isoformat() if self.period_start else None,
             'period_end': self.period_end.isoformat() if self.period_end else None,
             'invoice_pdf_url': self.invoice_pdf_url, 'due_date': self.due_date.isoformat() if self.due_date else None,

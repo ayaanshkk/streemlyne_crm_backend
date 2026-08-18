@@ -55,8 +55,9 @@ class Config:
     # current_app.config.get('STRIPE_SECRET_KEY') first, then fall back to
     # os.environ.get() — loading them here makes current_app.config the
     # single source of truth and removes the double-lookup in every route.
-    STRIPE_SECRET_KEY     = os.environ.get('STRIPE_SECRET_KEY')
-    STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
+    STRIPE_SECRET_KEY      = os.environ.get("STRIPE_SECRET_KEY")
+    STRIPE_WEBHOOK_SECRET  = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    STRIPE_MODE            = os.environ.get("STRIPE_MODE", "test")
     STRIPE_SUCCESS_URL    = os.environ.get('STRIPE_SUCCESS_URL')
     STRIPE_CANCEL_URL     = os.environ.get('STRIPE_CANCEL_URL')
     SALES_CONTACT_EMAIL   = os.environ.get('SALES_CONTACT_EMAIL')
