@@ -317,7 +317,7 @@ def create_app(test_config=None):
         configure_limiter(app)
         print("[ok] Rate limiter active (100 req/min per user)")
 
-    print("[ok] All blueprints register
+    print("[ok] All blueprints registered")
 
     print("\n[routes] Sample Registered Auth Routes:")
     for rule in app.url_map.iter_rules():
