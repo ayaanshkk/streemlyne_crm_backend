@@ -19,27 +19,30 @@ def create_app(test_config=None):
     app.config.from_object(Config)
     app.config["SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "default-fallback-secret-key")
 
+    ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "https://streemlyne-crm-frontend.vercel.app",
+        "https://streemlyne.vercel.app",
+        "https://streemlyne.com",
+        "https://www.streemlyne.com",
+        "https://app.streemlyne.com",
+    ]
+
     CORS(
         app,
-        resources={
-            r"/*": { 
-                "origins": [
-                    "http://localhost:3000",
-                    "http://127.0.0.1:3000",
-                    "http://localhost:3001",
-                    "http://127.0.0.1:3001",
-                    "https://streemlyne-crm-frontend.vercel.app",
-                    "https://streemlyne.vercel.app",
-                    "https://streemlyne.com",
-                    "https://www.streemlyne.com",
-                    "https://app.streemlyne.com",
-                ]
-            }
-        },
-        allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
+        resources={r"/api/*": {"origins": ALLOWED_ORIGINS}},
+        supports_credentials=True,
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Requested-With",
+            "X-Tenant-ID",
+        ],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         expose_headers=["Content-Type", "Authorization"],
-        supports_credentials=True,
     )
 
     if test_config:
@@ -295,32 +298,6 @@ def create_app(test_config=None):
         prefix = bp.url_prefix or ""
         app.register_blueprint(bp, url_prefix=f"/api{prefix}")
 
-    @app.before_request
-    def handle_preflight():
-        from flask import request, Response
-        if request.method == "OPTIONS":
-            response = Response()
-            origin = request.headers.get("Origin", "")
-            allowed_origins = [
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:3001",
-                "http://127.0.0.1:3001",
-                "https://streemlyne-crm-frontend.vercel.app",
-                "https://streemlyne.vercel.app",
-                "https://streemlyne.com",
-                "https://www.streemlyne.com",
-                "https://app.streemlyne.com",
-
-            ]
-            if origin in allowed_origins:
-                response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, X-Tenant-ID"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.status_code = 200
-            return response
-
     from middleware.subscription_middleware import enforce_subscription
     app.before_request(enforce_subscription)
 
@@ -340,7 +317,7 @@ def create_app(test_config=None):
         configure_limiter(app)
         print("[ok] Rate limiter active (100 req/min per user)")
 
-    print("[ok] All blueprints registered")
+    print("[ok] All blueprints register
 
     print("\n[routes] Sample Registered Auth Routes:")
     for rule in app.url_map.iter_rules():
