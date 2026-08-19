@@ -32,6 +32,7 @@ def create_app(test_config=None):
                     "https://streemlyne.vercel.app",
                     "https://streemlyne.com",
                     "https://www.streemlyne.com",
+                    "https://app.streemlyne.com",
                 ]
             }
         },
@@ -309,6 +310,7 @@ def create_app(test_config=None):
                 "https://streemlyne.vercel.app",
                 "https://streemlyne.com",
                 "https://www.streemlyne.com",
+                "https://app.streemlyne.com",
 
             ]
             if origin in allowed_origins:
