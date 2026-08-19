@@ -1,23 +1,3 @@
-"""
-Employee Routes
-Handles: Employee_Master, Designation_Master
-
-Schema alignment (StreemLyne_MT):
-  Employee_Master:
-    employee_id (PK), tenant_id (FK→Tenant_Master, bigint), employee_name,
-    employee_designation_id (FK→Designation_Master, nullable),
-    phone, email (UNIQUE), date_of_birth, date_of_joining,
-    id_type, id_number, role_ids (varchar, comma-separated role IDs),
-    created_on, updated_on, commission_percentage (real)
-  Designation_Master:
-    designation_id (PK), designation_description (UNIQUE), created_at
-
-NOTE — role_ids:
-  Employee_Master stores role_ids as a varchar (comma-separated) rather than
-  a normalised FK. The User_Role_Mapping table is the canonical authorisation
-  source; role_ids on Employee_Master is informational/legacy. Kept as-is.
-"""
-
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db
