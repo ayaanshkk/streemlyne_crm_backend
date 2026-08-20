@@ -1,4 +1,3 @@
-from backend.tests.conftest import app
 from flask import Flask
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -10,8 +9,7 @@ from config import Config
 from database import db, init_db
 
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
 
 def create_app(test_config=None):
     app = Flask(__name__)

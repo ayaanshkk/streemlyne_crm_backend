@@ -308,3 +308,30 @@ def get_interaction_options():
         "call_statuses":   CALL_STATUSES,
         "employees":       [{"employee_id": e.employee_id, "name": e.employee_name} for e in employees],
     }), 200
+
+@interactions_bp.route("/clients/<int:client_id>/interactions/<int:interaction_id>", methods=["PUT"])
+@auth_required
+def update_interaction(client_id: int, interaction_id: int):
+    client = _get_client_or_404(client_id)
+    if not client:
+        return jsonify({"error": "Client not found"}), 404
+
+    interaction = ClientInteractions.query.filter_by(
+        interaction_id=interaction_id,
+        client_id=client_id,
+    ).first()
+    if not interaction:
+        return jsonify({"error": "Interaction not found"}), 404
+
+    data = request.get_json() or {}
+
+    if "notes"      in data: interaction.notes      = data["notes"]
+    if "next_steps" in data: interaction.next_steps = data["next_steps"]
+    if "reminder_date" in data:
+        try:
+            interaction.reminder_date = date.fromisoformat(str(data["reminder_date"])) if data["reminder_date"] else None
+        except ValueError:
+            pass
+
+    db.session.commit()
+    return jsonify(_interaction_dict(interaction)), 200
