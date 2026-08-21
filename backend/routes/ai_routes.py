@@ -6,1003 +6,744 @@ Endpoints:
   POST /api/ai/chat   — main agentic chat endpoint
 """
 
-import os
 import json
 import requests
-from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify, g
+from datetime import datetime
+from flask import Blueprint, g, jsonify, request
 from middleware import auth_required
+from models import (
+    ClientMaster, EmployeeMaster,
+    ClientInteractions, ContactMethodMaster,
+    ProposalMaster, ProposalDetails,
+)
 from database import db
-from sqlalchemy import text
+from sqlalchemy import func, case
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
 
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
-CLAUDE_MODEL      = 'claude-sonnet-4-6'
-MAX_TOKENS        = 4096
-MAX_TOOL_ITERATIONS = 10
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL   = "claude-sonnet-4-6"
+MAX_TOKENS     = 8096
+MAX_ITERATIONS = 10
 
 STAGES = [
     "Lead", "Qualified", "Contact Made", "Meeting Scheduled",
-    "Proposal Sent", "Negotiation", "Closed Won", "Closed Lost", "On Hold",
+    "Quote Sent", "Negotiation", "Closed Won", "Closed Lost", "On Hold",
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tool definitions
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Tools definition ──────────────────────────────────────────────────────────
 
-TOOLS = [
-    # ── Existing tools ────────────────────────────────────────────────────────
-    {
-        "name": "get_pipeline_status",
-        "description": "Get the current sales pipeline status showing count of customers in each stage.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "include_details": {"type": "boolean"}
-            }
-        }
-    },
-    {
-        "name": "list_customers",
-        "description": "Get a list of all customers or filter by stage or name.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "stage": {"type": "string", "enum": STAGES},
-                "name_search": {"type": "string"},
-                "limit":      {"type": "integer"},
-                "sort_by":    {"type": "string", "enum": ["created_at", "name", "stage"]},
-                "sort_order": {"type": "string", "enum": ["asc", "desc"]}
-            }
-        }
-    },
-    {
-        "name": "get_customer_details",
-        "description": "Get detailed information about a specific customer by name or ID.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name":        {"type": "string"},
-                "customer_id": {"type": "string"}
-            },
-            "required": ["name"]
-        }
-    },
-    {
-        "name": "create_customer",
-        "description": "Create a new customer. Always check for duplicates first using list_customers.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name":         {"type": "string"},
-                "email":        {"type": "string"},
-                "phone":        {"type": "string"},
-                "address":      {"type": "string"},
-                "postcode":     {"type": "string"},
-                "company_name": {"type": "string"},
-                "stage":        {"type": "string", "enum": STAGES},
-                "notes":        {"type": "string"}
-            },
-            "required": ["name"]
-        }
-    },
-    {
-        "name": "update_customer",
-        "description": "Update an existing customer's information.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name":        {"type": "string"},
-                "customer_id": {"type": "string"},
-                "updates": {
-                    "type": "object",
-                    "properties": {
-                        "name":         {"type": "string"},
-                        "email":        {"type": "string"},
-                        "phone":        {"type": "string"},
-                        "address":      {"type": "string"},
-                        "postcode":     {"type": "string"},
-                        "company_name": {"type": "string"},
-                        "stage":        {"type": "string"}
-                    }
-                }
-            },
-            "required": ["name", "updates"]
-        }
-    },
-    {
-        "name": "delete_customer",
-        "description": "Permanently delete a customer. Always confirm with the user before calling this.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name":        {"type": "string"},
-                "customer_id": {"type": "string"}
-            },
-            "required": ["name"]
-        }
-    },
-    {
-        "name": "search_database",
-        "description": "Search across customers with flexible text queries.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query":       {"type": "string"},
-                "entity_type": {"type": "string", "enum": ["customers", "jobs", "both"]}
-            },
-            "required": ["query", "entity_type"]
-        }
-    },
-    {
-        "name": "create_schedule_assignment",
-        "description": "Create a calendar assignment/task/meeting.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "type":             {"type": "string", "enum": ["meeting", "call", "task", "delivery", "note"]},
-                "title":            {"type": "string"},
-                "date":             {"type": "string"},
-                "staff_name":       {"type": "string"},
-                "customer_name":    {"type": "string"},  # ← add
-                "time_from":        {"type": "string", "description": "Start time HH:MM"},  # ← add
-                "time_to":          {"type": "string", "description": "End time HH:MM"},    # ← add
-                "duration_minutes": {"type": "integer", "description": "Duration in minutes — used to calculate time_to if not given"},  # ← add
-                "estimated_hours":  {"type": "number"},
-                "priority":         {"type": "string", "enum": ["Low", "Medium", "High", "Urgent"]},
-                "notes":            {"type": "string"}
-            },
-            "required": ["type", "title", "date", "staff_name"]
-        }
-    },
-    {
-        "name": "list_schedule_assignments",
-        "description": "Get calendar assignments, optionally filtered by month or staff.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month":         {"type": "string"},
-                "staff_name":    {"type": "string"},
-                "customer_name": {"type": "string"}
-            }
-        }
-    },
-    {
-        "name": "update_schedule_assignment",
-        "description": "Update or reschedule an existing calendar assignment.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "assignment_id": {"type": "string"},
-                "title":         {"type": "string"},
-                "customer_name": {"type": "string"},
-                "updates":       {"type": "object"}
-            },
-            "required": ["updates"]
-        }
-    },
-    {
-        "name": "delete_schedule_assignment",
-        "description": "Delete/cancel a calendar assignment.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "assignment_id": {"type": "string"},
-                "title":         {"type": "string"}
-            }
-        }
-    },
-    {
-        "name": "list_quotes",
-        "description": "List quotes, optionally filtered by client name.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "client_name": {"type": "string"},
-                "client_id":   {"type": "integer"}
-            }
-        }
-    },
-    {
-        "name": "get_quote_status",
-        "description": "Get quote statistics: total count and total value.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "client_id": {"type": "integer"}
-            }
-        }
-    },
-
-    # ── NEW: Quote generation tools ───────────────────────────────────────────
-
-    {
-        "name": "search_pricelist",
-        "description": (
-            "Search the tenant's price list for items matching keywords or category. "
-            "Use this when generating a quote to find pre-set prices. "
-            "Returns item names, descriptions, base prices, and units."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "keywords": {
-                    "type": "string",
-                    "description": "Search terms e.g. 'kitchen installation' or 'forklift training'"
+def get_tools():
+    return [
+        {
+            "name": "create_customer",
+            "description": "Create a new customer/client record in the CRM",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "client_contact_name": {"type": "string", "description": "Full name of the contact person"},
+                    "client_company_name": {"type": "string", "description": "Company or business name"},
+                    "client_email":        {"type": "string", "description": "Email address"},
+                    "client_phone":        {"type": "string", "description": "Phone number"},
+                    "address":             {"type": "string", "description": "Street address"},
+                    "post_code":           {"type": "string", "description": "Postcode"},
+                    "stage": {
+                        "type": "string",
+                        "enum": STAGES,
+                        "description": "Pipeline stage. Always default to 'Lead' unless user specifies."
+                    },
+                    "notes": {"type": "string", "description": "Additional notes"},
                 },
-                "category": {
-                    "type": "string",
-                    "description": "Filter by category if known"
+                "required": [],
+            },
+        },
+        {
+            "name": "get_customer_details",
+            "description": "Get full details of a specific customer by name or ID",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "search_term": {"type": "string", "description": "Customer name, company, email or phone to search for"},
+                    "client_id":   {"type": "integer", "description": "Specific client ID if known"},
                 },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max results to return (default 10)"
-                }
-            }
-        }
-    },
-    {
-        "name": "get_client_quote_history",
-        "description": (
-            "Get previous quotes for a client. Use this when generating a new quote "
-            "to base it on their last quote — pre-filling the same line items and prices."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "client_name": {"type": "string"},
-                "client_id":   {"type": "integer"},
-                "limit": {
-                    "type": "integer",
-                    "description": "Number of recent quotes to fetch (default 3)"
-                }
-            }
-        }
-    },
-    {
-        "name": "create_quote",
-        "description": (
-            "Create a quote directly. Call this after presenting the draft to the user "
-            "and receiving confirmation. Do NOT call without user confirmation. "
-            "Line items come from pricelist search or user input."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "client_name": {
-                    "type": "string",
-                    "description": "Client name to look up"
+                "required": [],
+            },
+        },
+        {
+            "name": "list_customers",
+            "description": "List customers with optional filters",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "stage":       {"type": "string", "enum": STAGES, "description": "Filter by pipeline stage"},
+                    "search_term": {"type": "string", "description": "Search by name, company, email or phone"},
+                    "limit":       {"type": "integer", "description": "Max number of results (default 20)"},
                 },
-                "client_id": {
-                    "type": "integer",
-                    "description": "Client ID if known"
+                "required": [],
+            },
+        },
+        {
+            "name": "update_customer",
+            "description": "Update an existing customer's details",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "client_id":           {"type": "integer", "description": "ID of customer to update"},
+                    "search_term":         {"type": "string",  "description": "Search term to find customer if ID unknown"},
+                    "client_contact_name": {"type": "string",  "description": "Updated contact name"},
+                    "client_company_name": {"type": "string",  "description": "Updated company name"},
+                    "client_email":        {"type": "string",  "description": "Updated email"},
+                    "client_phone":        {"type": "string",  "description": "Updated phone"},
+                    "address":             {"type": "string",  "description": "Updated address"},
+                    "post_code":           {"type": "string",  "description": "Updated postcode"},
+                    "notes":               {"type": "string",  "description": "Updated notes"},
                 },
-                "line_items": {
-                    "type": "array",
-                    "description": "List of line items",
+                "required": [],
+            },
+        },
+        {
+            "name": "update_customer_stage",
+            "description": "Update a customer's pipeline stage",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "client_id":   {"type": "integer", "description": "ID of customer"},
+                    "search_term": {"type": "string",  "description": "Search term to find customer if ID unknown"},
+                    "stage":       {"type": "string",  "enum": STAGES, "description": "New pipeline stage"},
+                },
+                "required": ["stage"],
+            },
+        },
+        {
+            "name": "get_pipeline_summary",
+            "description": "Get a summary of all customers by pipeline stage with counts and conversion rate",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+        {
+            "name": "get_calendar_events",
+            "description": "Get calendar events/meetings within a date range",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "Start date in YYYY-MM-DD format"},
+                    "end_date":   {"type": "string", "description": "End date in YYYY-MM-DD format"},
+                    "limit":      {"type": "integer", "description": "Max results (default 20)"},
+                },
+                "required": [],
+            },
+        },
+        {
+            "name": "create_calendar_event",
+            "description": "Create a new calendar event or meeting",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "title":       {"type": "string", "description": "Event title"},
+                    "start_date":  {"type": "string", "description": "Start date/time in YYYY-MM-DD or YYYY-MM-DDTHH:MM format"},
+                    "end_date":    {"type": "string", "description": "End date/time (optional)"},
+                    "description": {"type": "string", "description": "Event description or notes"},
+                    "client_id":   {"type": "integer","description": "Associated customer ID (optional)"},
+                },
+                "required": ["title", "start_date"],
+            },
+        },
+        {
+            "name": "search_pricelist",
+            "description": "Search the product/service pricelist",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "search_term": {"type": "string", "description": "Product or service name to search for"},
+                },
+                "required": ["search_term"],
+            },
+        },
+        {
+            "name": "create_quote",
+            "description": "Create a new quote/proposal for a customer",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "client_id":   {"type": "integer", "description": "Customer ID to create quote for"},
+                    "search_term": {"type": "string",  "description": "Search term to find customer if ID unknown"},
                     "items": {
-                        "type": "object",
-                        "properties": {
-                            "description": {"type": "string"},
-                            "quantity":    {"type": "number"},
-                            "unit_price":  {"type": "number"},
-                            "pricelist_id": {"type": "integer", "description": "Optional — links to PriceList_Master"}
+                        "type": "array",
+                        "description": "List of items in the quote",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "quantity":    {"type": "number"},
+                                "unit_price":  {"type": "number"},
+                            },
                         },
-                        "required": ["description", "quantity", "unit_price"]
-                    }
+                    },
+                    "notes": {"type": "string", "description": "Additional notes for the quote"},
                 },
-                "discount_percent": {
-                    "type": "number",
-                    "description": "Discount percentage (0-100)"
-                },
-                "vat_rate": {
-                    "type": "number",
-                    "description": "VAT rate percentage (default 20)"
-                },
-                "notes": {
-                    "type": "string",
-                    "description": "Any notes or terms"
-                }
+                "required": [],
             },
-            "required": ["line_items"]
-        }
-    },
-]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Internal API caller
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _internal_api(method: str, path: str, token: str, tenant_id: str, body: dict = None):
-    base = os.getenv('INTERNAL_API_URL', 'http://127.0.0.1:5000/api')
-    url  = f"{base}{path}"
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'X-Tenant-ID':   str(tenant_id),
-        'Content-Type':  'application/json',
-    }
-    try:
-        resp = requests.request(method, url, headers=headers, json=body, timeout=30)
-        print(f"[INTERNAL API] {method} {url} → {resp.status_code}: {resp.text[:300]}")
-        if resp.status_code == 204:
-            return {'success': True}
-        if resp.status_code in (200, 201):
-            try:    return resp.json()
-            except: return {'success': True}
-        try:    error_body = resp.json()
-        except: error_body = {'detail': resp.text[:300]}
-        return {
-            'error':  f'HTTP {resp.status_code}',
-            'detail': error_body.get('error') or error_body.get('message') or resp.text[:300]
-        }
-    except requests.exceptions.Timeout:
-        return {'error': 'Internal API request timed out'}
-    except Exception as e:
-        return {'error': str(e)}
-
-
-def _find_customer(clients: list, name: str):
-    s = name.lower()
-    return next(
-        (c for c in clients
-         if s in (c.get('client_contact_name') or '').lower()
-         or s in (c.get('client_company_name') or '').lower()),
-        None
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pricelist search — direct DB query (no API route needed)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _search_pricelist(tenant_id: str, keywords: str = '', category: str = '', limit: int = 10) -> list:
-    """
-    Full-text + keyword search against PriceList_Master.
-    Uses the GIN index on item_name + description for fast search.
-    """
-    try:
-        params = {'tenant_id': tenant_id, 'limit': limit}
-        conditions = ["p.tenant_id = :tenant_id"]
-
-        if category:
-            conditions.append("LOWER(p.category) LIKE :category")
-            params['category'] = f"%{category.lower()}%"
-
-        if keywords:
-            # Try full-text search first, fall back to ILIKE
-            conditions.append(
-                "(to_tsvector('english', p.item_name || ' ' || COALESCE(p.description, '')) "
-                " @@ plainto_tsquery('english', :keywords) "
-                " OR LOWER(p.item_name) LIKE :kw_like "
-                " OR LOWER(COALESCE(p.description, '')) LIKE :kw_like)"
-            )
-            params['keywords'] = keywords
-            params['kw_like']  = f"%{keywords.lower()}%"
-
-        where = " AND ".join(conditions)
-        query = text(f"""
-            SELECT
-                p.pricelist_id,
-                p.category,
-                p.item_name,
-                p.description,
-                p.base_price,
-                p.unit,
-                p.item_code,
-                p.brand,
-                p.colour
-            FROM "StreemLyne_MT"."PriceList_Master" p
-            WHERE {where}
-            ORDER BY p.category, p.item_name
-            LIMIT :limit
-        """)
-
-        rows = db.session.execute(query, params).fetchall()
-        return [
-            {
-                'pricelist_id': r.pricelist_id,
-                'category':     r.category,
-                'item_name':    r.item_name,
-                'description':  r.description,
-                'base_price':   float(r.base_price) if r.base_price is not None else 0.0,
-                'unit':         r.unit or 'each',
-                'item_code':    r.item_code,
-                'brand':        r.brand,
-                'colour':       r.colour,
-            }
-            for r in rows
-        ]
-    except Exception as e:
-        print(f"[StreemAI] Pricelist search error: {e}")
-        return []
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tool executor
-# ─────────────────────────────────────────────────────────────────────────────
-
-def execute_tool(name: str, args: dict, token: str, tenant_id: str) -> dict:
-    api = lambda method, path, body=None: _internal_api(method, path, token, tenant_id, body)
-
-    try:
-
-        # ── Pipeline ──────────────────────────────────────────────────────────
-        if name == "get_pipeline_status":
-            clients = api('GET', '/clients')
-            if isinstance(clients, dict) and 'error' in clients:
-                return clients
-            pipeline = {s: {'count': 0, 'customers': []} for s in STAGES}
-            for c in clients:
-                stage = c.get('stage') or 'Prospect'
-                if stage in pipeline:
-                    pipeline[stage]['count'] += 1
-                    if args.get('include_details'):
-                        pipeline[stage]['customers'].append(
-                            c.get('client_contact_name') or c.get('client_company_name'))
-            total = len(clients)
-            won   = pipeline.get('Closed Won', {}).get('count', 0)
-            return {
-                'success': True, 'pipeline': pipeline,
-                'summary': {
-                    'total_customers': total,
-                    'active_deals':    pipeline.get('Negotiation', {}).get('count', 0) +
-                                       pipeline.get('Proposal Sent', {}).get('count', 0),
-                    'won_deals': won, 'lost_deals': pipeline.get('Closed Lost', {}).get('count', 0),
-                    'conversion_rate': f"{(won/total*100):.1f}%" if total > 0 else '0%',
-                }
-            }
-
-        # ── List customers ────────────────────────────────────────────────────
-        elif name == "list_customers":
-            clients = api('GET', '/clients')
-            if isinstance(clients, dict) and 'error' in clients: return clients
-            if args.get('stage'):
-                clients = [c for c in clients if c.get('stage') == args['stage']]
-            if args.get('name_search'):
-                s = args['name_search'].lower()
-                clients = [c for c in clients
-                           if s in (c.get('client_contact_name') or '').lower()
-                           or s in (c.get('client_company_name') or '').lower()]
-            if args.get('limit'): clients = clients[:args['limit']]
-            return {'success': True, 'data': clients, 'count': len(clients)}
-
-        # ── Get customer details ──────────────────────────────────────────────
-        elif name == "get_customer_details":
-            clients = api('GET', '/clients')
-            if isinstance(clients, dict) and 'error' in clients: return clients
-            match = _find_customer(clients, args.get('name') or '')
-            if not match:
-                return {'success': False, 'message': f'No customer found matching "{args.get("name")}"'}
-            detail = api('GET', f'/clients/{match["client_id"]}')
-            return {'success': True, 'data': detail} if not (isinstance(detail, dict) and 'error' in detail) else detail
-
-        # ── Create customer ───────────────────────────────────────────────────
-        elif name == "create_customer":
-            clients = api('GET', '/clients')
-            if isinstance(clients, dict) and 'error' in clients: return clients
-            existing = _find_customer(clients, args.get('name') or '')
-            if existing:
-                return {'success': False, 'message': f'Customer "{args["name"]}" already exists.', 'existing': existing}
-            result = api('POST', '/clients', {
-                'client_contact_name': args.get('name', ''),
-                'client_company_name': args.get('company_name', ''),
-                'client_email':        args.get('email', ''),
-                'client_phone':        args.get('phone', ''),
-                'address':             args.get('address', ''),
-                'post_code':           args.get('postcode', ''),
-                'stage':               args.get('stage', 'Lead'),
-            })
-            if isinstance(result, dict) and 'error' in result: return result
-            return {'success': True, 'data': result, 'message': f'Created customer: {args["name"]}'}
-
-        # ── Update customer ───────────────────────────────────────────────────
-        elif name == "update_customer":
-            clients = api('GET', '/clients')
-            if isinstance(clients, dict) and 'error' in clients: return clients
-            match = _find_customer(clients, args.get('name') or '')
-            if not match:
-                return {'success': False, 'message': f'No customer found matching "{args.get("name")}"'}
-            updates = args.get('updates', {})
-            if not updates: return {'success': False, 'message': 'No updates provided'}
-            payload = {}
-            if 'name'         in updates: payload['client_contact_name'] = updates['name']
-            if 'email'        in updates: payload['client_email']        = updates['email']
-            if 'phone'        in updates: payload['client_phone']        = updates['phone']
-            if 'address'      in updates: payload['address']             = updates['address']
-            if 'postcode'     in updates: payload['post_code']           = updates['postcode']
-            if 'company_name' in updates: payload['client_company_name'] = updates['company_name']
-            if 'stage'        in updates: payload['stage']               = updates['stage']
-            if not payload: return {'success': False, 'message': 'No recognised fields in updates'}
-            result = api('PATCH', f'/clients/{match["client_id"]}', payload)
-            if isinstance(result, dict) and 'error' in result: return result
-            return {'success': True,
-                    'message': f'Updated {match.get("client_contact_name") or match.get("client_company_name")}',
-                    'data': result}
-
-        # ── Delete customer ───────────────────────────────────────────────────
-        elif name == "delete_customer":
-            clients = api('GET', '/clients')
-            if isinstance(clients, dict) and 'error' in clients: return clients
-            match = _find_customer(clients, args.get('name') or '')
-            if not match:
-                return {'success': False, 'message': f'No customer found matching "{args.get("name")}"'}
-            customer_name = match.get('client_contact_name') or match.get('client_company_name')
-            result = api('DELETE', f'/clients/{match["client_id"]}')
-            if isinstance(result, dict) and 'error' in result:
-                return {'success': False, 'message': f'Failed to delete {customer_name}: {result.get("detail") or result.get("error")}'}
-            return {'success': True, 'message': f'Deleted customer: {customer_name}'}
-
-        # ── Search database ───────────────────────────────────────────────────
-        elif name == "search_database":
-            results = {'customers': [], 'jobs': []}
-            sl = (args.get('query') or '').lower()
-            if args.get('entity_type') != 'jobs':
-                clients = api('GET', '/clients')
-                if not isinstance(clients, dict):
-                    results['customers'] = [
-                        c for c in clients
-                        if sl in (c.get('client_contact_name') or '').lower()
-                        or sl in (c.get('client_company_name') or '').lower()
-                        or sl in (c.get('client_email') or '').lower()
-                    ]
-            return {'success': True, 'data': results, 'message': f'Found {len(results["customers"])} customer(s)'}
-
-        # ── Schedule tools ────────────────────────────────────────────────────
-        elif name == "create_schedule_assignment":
-            customer_id = args.get('customer_id')
-            if not customer_id and args.get('customer_name'):
-                clients = api('GET', '/clients')
-                if not isinstance(clients, dict):
-                    match = _find_customer(clients, args['customer_name'])
-                    if match: customer_id = match['client_id']
-
-            # Convert times to 24hr HH:MM format
-            def _to_24hr(t: str) -> str:
-                if not t:
-                    return t
-                t = t.strip()
-                try:
-                    from datetime import datetime as dt
-                    for fmt in ('%I:%M %p', '%I %p', '%I:%M%p', '%I%p'):
-                        try:
-                            return dt.strptime(t.upper(), fmt).strftime('%H:%M')
-                        except ValueError:
-                            continue
-                    return t
-                except Exception:
-                    return t
-
-            time_from = _to_24hr(args.get('time_from') or '')
-            time_to   = _to_24hr(args.get('time_to')   or '')
-
-            # Calculate time_to from duration_minutes if not explicitly provided
-            if time_from and not time_to and args.get('duration_minutes'):
-                from datetime import datetime as dt, timedelta
-                try:
-                    t = dt.strptime(time_from, '%H:%M')
-                    t += timedelta(minutes=int(args['duration_minutes']))
-                    time_to = t.strftime('%H:%M')
-                except Exception:
-                    pass
-
-            result = api('POST', '/assignments', {
-                'type':            args.get('type', 'task'),
-                'title':           args.get('title'),
-                'date':            args.get('date'),
-                'staff_name':      args.get('staff_name'),
-                'customer_id':     customer_id,
-                'customer_name':   args.get('customer_name'),
-                'time_from':       time_from,
-                'time_to':         time_to,
-                'estimated_hours': args.get('estimated_hours', 1),
-                'priority':        args.get('priority', 'Medium'),
-                'status':          'Scheduled',
-                'notes':           args.get('notes', ''),
-            })
-
-            if isinstance(result, dict) and 'error' in result: return result
-
-            time_str     = f" at {time_from}"                          if time_from                    else ""
-            duration_str = f" ({args.get('duration_minutes')} mins)"  if args.get('duration_minutes') else ""
-            return {
-                'success': True,
-                'data':    result,
-                'message': f'Scheduled {args.get("type")} "{args.get("title")}" on {args.get("date")}{time_str}{duration_str}',
-            }
-
-        elif name == "list_schedule_assignments":
-            path = '/assignments'
-            if args.get('month'): path += f'?month={args["month"]}'
-            assignments = api('GET', path)
-            if isinstance(assignments, dict) and 'error' in assignments: return assignments
-            if args.get('staff_name'):
-                s = args['staff_name'].lower()
-                assignments = [a for a in assignments if s in (a.get('staff_name') or '').lower()]
-            if args.get('customer_name'):
-                s = args['customer_name'].lower()
-                assignments = [a for a in assignments if s in (a.get('customer_name') or '').lower()]
-            return {'success': True, 'data': assignments, 'count': len(assignments)}
-
-        elif name == "update_schedule_assignment":
-            assignments = api('GET', '/assignments')
-            if isinstance(assignments, dict) and 'error' in assignments: return assignments
-            match = None
-            if args.get('assignment_id'):
-                match = next((a for a in assignments if str(a.get('id')) == str(args['assignment_id'])), None)
-            elif args.get('title'):
-                s = args['title'].lower()
-                match = next((a for a in assignments if s in (a.get('title') or '').lower()), None)
-            elif args.get('customer_name'):
-                s = args['customer_name'].lower()
-                match = next((a for a in assignments if s in (a.get('customer_name') or '').lower()), None)
-            if not match: return {'success': False, 'message': 'Could not find the assignment to update.'}
-            result = api('PUT', f'/assignments/{match["id"]}', args.get('updates', {}))
-            if isinstance(result, dict) and 'error' in result: return result
-            return {'success': True, 'data': result, 'message': f'Updated assignment "{match.get("title")}"'}
-
-        elif name == "delete_schedule_assignment":
-            assignments = api('GET', '/assignments')
-            if isinstance(assignments, dict) and 'error' in assignments: return assignments
-            match = None
-            if args.get('assignment_id'):
-                match = next((a for a in assignments if str(a.get('id')) == str(args['assignment_id'])), None)
-            elif args.get('title'):
-                s = args['title'].lower()
-                match = next((a for a in assignments if s in (a.get('title') or '').lower()), None)
-            if not match: return {'success': False, 'message': 'Could not find the assignment to delete.'}
-            result = api('DELETE', f'/assignments/{match["id"]}')
-            if isinstance(result, dict) and 'error' in result:
-                return {'success': False, 'message': f'Failed to delete: {result.get("detail") or result.get("error")}'}
-            return {'success': True, 'message': f'Deleted assignment "{match.get("title")}"'}
-
-        # ── List quotes ───────────────────────────────────────────────────────
-        elif name == "list_quotes":
-            quotes = api('GET', '/proposals')
-            if isinstance(quotes, dict) and 'error' in quotes: return quotes
-            if args.get('client_name'):
-                s = args['client_name'].lower()
-                quotes = [q for q in quotes
-                          if s in (q.get('customer_name') or q.get('client_name') or '').lower()]
-            return {'success': True, 'data': quotes, 'count': len(quotes)}
-
-        elif name == "get_quote_status":
-            quotes = api('GET', '/proposals')
-            if isinstance(quotes, dict) and 'error' in quotes: return quotes
-            total_value = sum(float(q.get('total_amount') or 0) for q in quotes)
-            return {'success': True, 'count': len(quotes), 'total_value': total_value,
-                    'average_value': total_value / len(quotes) if quotes else 0}
-
-        # ── NEW: Search pricelist ─────────────────────────────────────────────
-        elif name == "search_pricelist":
-            items = _search_pricelist(
-                tenant_id=tenant_id,
-                keywords=args.get('keywords', ''),
-                category=args.get('category', ''),
-                limit=args.get('limit', 10),
-            )
-            if not items:
-                return {
-                    'success': True,
-                    'data': [],
-                    'message': 'No items found in price list matching that search. The user will need to provide custom pricing.',
-                }
-            return {
-                'success': True,
-                'data': items,
-                'count': len(items),
-                'message': f'Found {len(items)} price list item(s). Use base_price as unit_price in the quote.',
-            }
-
-        # ── NEW: Get client quote history ─────────────────────────────────────
-        elif name == "get_client_quote_history":
-            quotes = api('GET', '/proposals')
-            if isinstance(quotes, dict) and 'error' in quotes: return quotes
-
-            # Filter by client
-            client_id = args.get('client_id')
-            if not client_id and args.get('client_name'):
-                clients = api('GET', '/clients')
-                if not isinstance(clients, dict):
-                    match = _find_customer(clients, args['client_name'])
-                    if match: client_id = match['client_id']
-
-            if client_id:
-                quotes = [q for q in quotes if q.get('client_id') == client_id]
-            elif args.get('client_name'):
-                s = args['client_name'].lower()
-                quotes = [q for q in quotes
-                          if s in (q.get('customer_name') or '').lower()]
-
-            # Sort newest first, take limit
-            limit  = args.get('limit', 3)
-            quotes = sorted(quotes, key=lambda q: q.get('created_at') or '', reverse=True)[:limit]
-
-            if not quotes:
-                return {
-                    'success': True,
-                    'data': [],
-                    'message': 'No previous quotes found for this client. Will need to build from scratch.',
-                }
-
-            # Fetch details for the most recent quote to use as template
-            most_recent = quotes[0]
-            details     = []
-            proposal_id = most_recent.get('proposal_id')
-            if proposal_id:
-                detail_res = api('GET', f'/proposals/{proposal_id}')
-                if not isinstance(detail_res, dict) or 'error' not in detail_res:
-                    details = detail_res.get('details', []) if isinstance(detail_res, dict) else []
-
-            return {
-                'success': True,
-                'data': {
-                    'recent_quotes': quotes,
-                    'last_quote_details': details,
-                    'last_quote': most_recent,
+        },
+        {
+            "name": "get_quotes",
+            "description": "Get quotes/proposals, optionally filtered by customer",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "client_id":   {"type": "integer", "description": "Filter by customer ID"},
+                    "search_term": {"type": "string",  "description": "Search by customer name"},
+                    "limit":       {"type": "integer", "description": "Max results (default 20)"},
                 },
-                'message': (
-                    f'Found {len(quotes)} previous quote(s). '
-                    f'Most recent: {most_recent.get("quote_id")} for £{most_recent.get("total_amount", 0):.2f}. '
-                    f'It had {len(details)} line item(s) — you can use these as a template.'
-                ),
-            }
+                "required": [],
+            },
+        },
+    ]
 
-        # ── NEW: Create quote ─────────────────────────────────────────────────
-        elif name == "create_quote":
-            line_items = args.get('line_items', [])
-            if not line_items:
-                return {'success': False, 'message': 'No line items provided'}
 
-            # Resolve client
-            client_id = args.get('client_id')
-            if not client_id and args.get('client_name'):
-                clients = api('GET', '/clients')
-                if not isinstance(clients, dict):
-                    match = _find_customer(clients, args['client_name'])
-                    if match: client_id = match['client_id']
+# ── Tool execution ────────────────────────────────────────────────────────────
 
-            if not client_id:
-                return {'success': False, 'message': 'Could not find the client. Please specify a valid client name.'}
+def execute_tool(tool_name: str, args: dict) -> dict:
+    tenant_id = str(g.tenant_id)
 
-            # Calculate totals
-            vat_rate        = float(args.get('vat_rate', 20))
-            discount_pct    = float(args.get('discount_percent', 0))
-            sub_total       = sum(float(i['quantity']) * float(i['unit_price']) for i in line_items)
-            discount_amount = (sub_total * discount_pct / 100) if discount_pct else 0
-            after_discount  = sub_total - discount_amount
-            tax_amount      = (after_discount * vat_rate / 100)
-            total_amount    = after_discount + tax_amount
+    def find_client(args):
+        """Find a client by ID or search term."""
+        client_id = args.get('client_id')
+        if client_id:
+            return ClientMaster.query.filter_by(client_id=client_id, tenant_id=tenant_id).first()
+        search = args.get('search_term', '')
+        if search:
+            return ClientMaster.query.filter(
+                ClientMaster.tenant_id == tenant_id,
+                db.or_(
+                    ClientMaster.client_contact_name.ilike(f'%{search}%'),
+                    ClientMaster.client_company_name.ilike(f'%{search}%'),
+                    ClientMaster.client_email.ilike(f'%{search}%'),
+                    ClientMaster.client_phone.ilike(f'%{search}%'),
+                )
+            ).first()
+        return None
 
-            # Get default tax_id
-            taxes  = api('GET', '/master/taxes')
-            tax_id = None  # send null if no tax configured — proposal_routes handles it
-            if isinstance(taxes, list) and taxes:
-                tax_id = taxes[0].get('tax_id')
-            elif isinstance(taxes, dict) and taxes.get('taxes'):
-                tax_id = taxes['taxes'][0].get('tax_id')
-            elif isinstance(taxes, dict) and taxes.get('taxes'):
-                tax_id = taxes['taxes'][0].get('tax_id', 1)
+    def client_to_dict(c):
+        return {
+            'client_id':           c.client_id,
+            'client_contact_name': getattr(c, 'client_contact_name', None),
+            'client_company_name': getattr(c, 'client_company_name', None),
+            'client_email':        getattr(c, 'client_email', None),
+            'client_phone':        getattr(c, 'client_phone', None),
+            'address':             getattr(c, 'address', None),
+            'post_code':           getattr(c, 'post_code', None),
+            'stage':               getattr(c, 'stage', None),
+            'notes':               getattr(c, 'notes', None),
+            'created_at':          c.created_at.strftime('%Y-%m-%d at %H:%M') if getattr(c, 'created_at', None) else None,
+            'stage_updated_at':    c.stage_updated_at.strftime('%Y-%m-%d at %H:%M') if getattr(c, 'stage_updated_at', None) else None,
+        }
 
-            payload = {
-                'client_id':        client_id,
-                'sub_total':        round(sub_total, 2),
-                'discount_percent': discount_pct if discount_pct else None,
-                'discount_amount':  round(discount_amount, 2) if discount_amount else None,
-                'tax_id':           tax_id,
-                'total_amount':     round(total_amount, 2),
-                'notes':            args.get('notes', ''),
-                'details': [
-                    {
-                        'service_name': item['description'],
-                        'service_id':   None,   # optional link
-                        'quantity':     float(item['quantity']),
-                        'amount':       float(item['unit_price']),
-                        'uom_id':       None,
-                    }
-                    for item in line_items
-                ],
-            }
+    # ── create_customer ───────────────────────────────────────────────────────
+    if tool_name == 'create_customer':
+        # Get next display ID for this tenant
+        max_display = db.session.query(func.max(ClientMaster.display_id)).filter_by(tenant_id=tenant_id).scalar() or 0
+        client = ClientMaster(
+            tenant_id=           tenant_id,
+            client_contact_name= args.get('client_contact_name'),
+            client_company_name= args.get('client_company_name'),
+            client_email=        args.get('client_email'),
+            client_phone=        args.get('client_phone'),
+            address=             args.get('address'),
+            post_code=           args.get('post_code'),
+            stage=               args.get('stage', 'Lead'),
+            notes=               args.get('notes'),
+            display_id=          max_display + 1,
+            created_at=          datetime.utcnow(),
+        )
+        db.session.add(client)
+        db.session.commit()
+        return {
+            'success': True,
+            'message': f"Created customer {client.client_contact_name or client.client_company_name}",
+            'data':    client_to_dict(client),
+        }
 
-            result = api('POST', '/proposals', payload)
-            if isinstance(result, dict) and 'error' in result:
-                return result
+    # ── get_customer_details ──────────────────────────────────────────────────
+    if tool_name == 'get_customer_details':
+        client = find_client(args)
+        if not client:
+            return {'success': False, 'message': 'Customer not found'}
 
-            quote_id    = result.get('quote_id') or f"#{result.get('proposal_id')}"
-            proposal_id = result.get('proposal_id')
+        # Get recent interactions
+        interactions = ClientInteractions.query.filter_by(client_id=client.client_id)\
+            .order_by(ClientInteractions.created_at.desc()).limit(5).all()
+        interaction_list = [{
+            'date':         i.contact_date.strftime('%Y-%m-%d') if i.contact_date else None,
+            'call_status':  i.next_steps,
+            'notes':        i.notes,
+        } for i in interactions]
 
+        data = client_to_dict(client)
+        data['recent_interactions'] = interaction_list
+        return {'success': True, 'data': data}
+
+    # ── list_customers ────────────────────────────────────────────────────────
+    if tool_name == 'list_customers':
+        query = ClientMaster.query.filter_by(tenant_id=tenant_id)
+        if args.get('stage'):
+            query = query.filter_by(stage=args['stage'])
+        if args.get('search_term'):
+            s = args['search_term']
+            query = query.filter(db.or_(
+                ClientMaster.client_contact_name.ilike(f'%{s}%'),
+                ClientMaster.client_company_name.ilike(f'%{s}%'),
+                ClientMaster.client_email.ilike(f'%{s}%'),
+                ClientMaster.client_phone.ilike(f'%{s}%'),
+            ))
+        limit   = min(args.get('limit', 20), 50)
+        clients = query.order_by(ClientMaster.created_at.desc()).limit(limit).all()
+        return {
+            'success': True,
+            'count':   len(clients),
+            'data':    [client_to_dict(c) for c in clients],
+        }
+
+    # ── update_customer ───────────────────────────────────────────────────────
+    if tool_name == 'update_customer':
+        client = find_client(args)
+        if not client:
+            return {'success': False, 'message': 'Customer not found'}
+        fields = [
+            'client_contact_name','client_company_name','client_email',
+            'client_phone','address','post_code','notes',
+        ]
+        for field in fields:
+            if args.get(field) is not None:
+                setattr(client, field, args[field])
+        db.session.commit()
+        return {'success': True, 'message': 'Customer updated', 'data': client_to_dict(client)}
+
+    # ── update_customer_stage ─────────────────────────────────────────────────
+    if tool_name == 'update_customer_stage':
+        client = find_client(args)
+        if not client:
+            return {'success': False, 'message': 'Customer not found'}
+        new_stage = args.get('stage')
+        if new_stage not in STAGES:
+            return {'success': False, 'message': f'Invalid stage. Must be one of: {STAGES}'}
+        client.stage = new_stage
+        if hasattr(client, 'stage_updated_at'):
+            client.stage_updated_at = datetime.utcnow()
+        db.session.commit()
+        name = client.client_contact_name or client.client_company_name or f'Client {client.client_id}'
+        return {'success': True, 'message': f"Updated {name}'s stage to {new_stage}", 'data': client_to_dict(client)}
+
+    # ── get_pipeline_summary ──────────────────────────────────────────────────
+    if tool_name == 'get_pipeline_summary':
+        clients = ClientMaster.query.filter_by(tenant_id=tenant_id).all()
+        total   = len(clients)
+        by_stage = {}
+        for stage in STAGES:
+            by_stage[stage] = sum(1 for c in clients if c.stage == stage)
+        closed_won  = by_stage.get('Closed Won', 0)
+        closed_lost = by_stage.get('Closed Lost', 0)
+        total_closed = closed_won + closed_lost
+        conversion_rate = round((closed_won / total_closed * 100), 1) if total_closed > 0 else 0
+        return {
+            'success':         True,
+            'total_customers': total,
+            'by_stage':        by_stage,
+            'closed_won':      closed_won,
+            'closed_lost':     closed_lost,
+            'conversion_rate': f'{conversion_rate}%',
+        }
+
+    # ── get_calendar_events ───────────────────────────────────────────────────
+    if tool_name == 'get_calendar_events':
+        # Calendar model not available in this deployment
+        # Query TasksMaster for scheduled items instead
+        from models import TasksMaster
+        query = TasksMaster.query.filter_by(tenant_id=tenant_id)
+        if args.get('start_date'):
+            try:
+                start = datetime.strptime(args['start_date'], '%Y-%m-%d')
+                query = query.filter(TasksMaster.due_date >= start)
+            except (ValueError, AttributeError):
+                pass
+        if args.get('end_date'):
+            try:
+                end = datetime.strptime(args['end_date'], '%Y-%m-%d')
+                query = query.filter(TasksMaster.due_date <= end)
+            except (ValueError, AttributeError):
+                pass
+        limit = min(args.get('limit', 20), 50)
+        try:
+            tasks = query.order_by(TasksMaster.due_date.asc()).limit(limit).all()
             return {
-                'success':     True,
-                'quote_id':    quote_id,
-                'proposal_id': proposal_id,
-                'total':       round(total_amount, 2),
-                'view_url':    f'/dashboard/quotes/{proposal_id}/view',
-                'message':     f'Quote {quote_id} created successfully for £{total_amount:.2f}.',
+                'success': True,
+                'count':   len(tasks),
+                'data': [{
+                    'task_id':    t.task_id,
+                    'title':      getattr(t, 'task_title', None) or getattr(t, 'title', None),
+                    'due_date':   t.due_date.strftime('%Y-%m-%d') if getattr(t, 'due_date', None) else None,
+                    'status':     getattr(t, 'status', None),
+                    'client_id':  getattr(t, 'client_id', None),
+                } for t in tasks],
             }
+        except Exception:
+            return {'success': True, 'count': 0, 'data': [], 'message': 'No calendar data available'}
 
-        else:
-            return {'success': False, 'message': f'Unknown tool: {name}'}
+    # ── create_calendar_event ─────────────────────────────────────────────────
+    if tool_name == 'create_calendar_event':
+        from models import TasksMaster
+        title    = args.get('title', 'Meeting')
+        start_str = args.get('start_date', '')
+        try:
+            if 'T' in start_str or ' ' in start_str:
+                due_date = datetime.strptime(start_str.replace('T', ' '), '%Y-%m-%d %H:%M').date()
+            else:
+                due_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+        except ValueError:
+            due_date = datetime.utcnow().date()
+        try:
+            task = TasksMaster(
+                tenant_id=  tenant_id,
+                task_title= title,
+                due_date=   due_date,
+                notes=      args.get('description'),
+                client_id=  args.get('client_id'),
+                created_at= datetime.utcnow(),
+            )
+            db.session.add(task)
+            db.session.commit()
+            return {
+                'success': True,
+                'message': f"Scheduled: {title} on {due_date}",
+                'task_id': task.task_id,
+            }
+        except Exception as e:
+            db.session.rollback()
+            return {'success': False, 'message': f'Could not create event: {str(e)}'}
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {'success': False, 'error': str(e)}
+    # ── search_pricelist ──────────────────────────────────────────────────────
+    if tool_name == 'search_pricelist':
+        search = args.get('search_term', '')
+        try:
+            from models import ServicesMaster
+            items = ServicesMaster.query.filter(
+                ServicesMaster.tenant_id == tenant_id,
+                ServicesMaster.service_title.ilike(f'%{search}%'),
+            ).limit(20).all()
+            return {
+                'success': True,
+                'count':   len(items),
+                'data': [{
+                    'item_id':   i.service_id,
+                    'item_name': i.service_title,
+                    'price':     float(i.service_rate) if i.service_rate else 0,
+                    'unit':      None,
+                } for i in items],
+            }
+        except Exception as e:
+            return {'success': False, 'message': f'Pricelist search failed: {str(e)}'}
+
+    # ── create_quote ──────────────────────────────────────────────────────────
+    if tool_name == 'create_quote':
+        client = find_client(args)
+        if not client:
+            return {'success': False, 'message': 'Customer not found. Please specify a valid customer.'}
+
+        items_data = args.get('items', [])
+        sub_total = sum(
+            float(item.get('quantity', 1)) * float(item.get('unit_price', 0))
+            for item in items_data
+        )
+        total_amount = sub_total  # no tax for now
+
+        # quote_id is auto-generated by DB sequence (QUO-XXX format)
+        proposal = ProposalMaster(
+            tenant_id=    tenant_id,
+            client_id=    client.client_id,
+            sub_total=    sub_total,
+            total_amount= total_amount,
+            notes=        args.get('notes'),
+            created_at=   datetime.utcnow(),
+        )
+        db.session.add(proposal)
+        db.session.flush()  # get proposal_id and auto-generated quote_id
+
+        for item in items_data:
+            qty   = float(item.get('quantity', 1))
+            price = float(item.get('unit_price', 0))
+            pd = ProposalDetails(
+                proposal_id= proposal.proposal_id,
+                quantity=    qty,
+                created_at=  datetime.utcnow(),
+            )
+            db.session.add(pd)
+
+        db.session.commit()
+        client_name = client.client_contact_name or client.client_company_name or 'Customer'
+        return {
+            'success':     True,
+            'message':     f'Quote {proposal.quote_id} created for {client_name}',
+            'proposal_id': proposal.proposal_id,
+            'quote_id':    proposal.quote_id,
+            'total':       total_amount,
+            'view_url':    f'/dashboard/quotes/{proposal.proposal_id}/view',
+        }
+
+    # ── get_quotes ────────────────────────────────────────────────────────────
+    if tool_name == 'get_quotes':
+        query = ProposalMaster.query.filter_by(tenant_id=tenant_id)
+        if args.get('client_id'):
+            query = query.filter_by(client_id=args['client_id'])
+        if args.get('search_term'):
+            s = args['search_term']
+            client_ids = [
+                c.client_id for c in ClientMaster.query.filter(
+                    ClientMaster.tenant_id == tenant_id,
+                    db.or_(
+                        ClientMaster.client_contact_name.ilike(f'%{s}%'),
+                        ClientMaster.client_company_name.ilike(f'%{s}%'),
+                    )
+                ).all()
+            ]
+            if client_ids:
+                query = query.filter(ProposalMaster.client_id.in_(client_ids))
+        limit     = min(args.get('limit', 20), 50)
+        proposals = query.order_by(ProposalMaster.created_at.desc()).limit(limit).all()
+        results   = []
+        for p in proposals:
+            client = ClientMaster.query.filter_by(client_id=p.client_id).first()
+            client_name = 'Unknown'
+            if client:
+                client_name = client.client_contact_name or client.client_company_name or 'Unknown'
+            results.append({
+                'proposal_id': p.proposal_id,
+                'quote_id':    p.quote_id,
+                'client_name': client_name,
+                'total':       float(p.total_amount) if p.total_amount else 0,
+                'created_at':  p.created_at.strftime('%Y-%m-%d') if p.created_at else None,
+                'view_url':    f'/dashboard/quotes/{p.proposal_id}/view',
+            })
+        return {'success': True, 'count': len(results), 'data': results}
+
+    return {'error': f'Unknown tool: {tool_name}'}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main endpoint
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Chat route ────────────────────────────────────────────────────────────────
 
 @ai_bp.route('/chat', methods=['POST'])
 @auth_required
 def chat():
-    if not ANTHROPIC_API_KEY:
-        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on the server.'}), 500
+    data    = request.get_json() or {}
+    message = data.get('message', '').strip()
+    if not message:
+        return jsonify({'error': 'Message is required'}), 400
 
-    data         = request.get_json() or {}
-    user_message = (data.get('message') or '').strip()
-    if not user_message:
-        return jsonify({'error': 'message is required'}), 400
+    conversation_history = data.get('conversation_history', [])
 
-    token     = request.headers.get('Authorization', '').replace('Bearer ', '') or request.cookies.get('auth_token', '')
-    tenant_id = str(g.tenant_id)
-
-    # ── Resolve current user name ─────────────────────────────────────────
-    current_user_name = "Unknown"
-    try:
-        from models import UserMaster
-        user = UserMaster.query.filter_by(user_id=g.user_id).first()
-        if user and user.employee:
-            current_user_name = user.employee.employee_name
-        elif user and user.user_name:
-            current_user_name = user.user_name
-    except Exception as e:
-        print(f"[StreemAI] Could not resolve current user: {e}")
-    # ─────────────────────────────────────────────────────────────────────
-
-    today        = datetime.utcnow()
-    tomorrow     = today + timedelta(days=1)
-    today_str    = today.strftime('%Y-%m-%d')
-    tomorrow_str = tomorrow.strftime('%Y-%m-%d')
-    today_long   = today.strftime('%A, %B') + ' ' + str(today.day) + ', ' + str(today.year)
-
+    # ── System prompt ─────────────────────────────────────────────────────────
     system_prompt = (
-        "You are StreemAI, an intelligent CRM assistant built into StreemLyne.\n"
-        "You help users manage customers, sales pipeline, quotes, and schedules.\n"
-        "You have a warm, professional tone — like a knowledgeable colleague, not a robot.\n\n"
+        "You are StreemAI, an intelligent CRM assistant for StreemLyne. "
+        "You help sales teams manage customers, track pipeline stages, schedule meetings, "
+        "create quotes, and analyse performance data.\n\n"
 
-        f"TODAY: {today_str} ({today_long})\n"
-        f"TOMORROW: {tomorrow_str}\n"
-        f"Current month: {today.strftime('%Y-%m')}\n\n"
+        "## Your Capabilities\n"
+        "You have access to tools that let you:\n"
+        "- Create, update, and retrieve customer records\n"
+        "- Manage pipeline stages and track deal progress\n"
+        "- Schedule and retrieve calendar events/meetings\n"
+        "- Search the customer database\n"
+        "- Create and retrieve quotes/proposals\n"
+        "- Search the product/service pricelist\n"
+        "- Analyse conversion rates and pipeline performance\n\n"
 
-        "## CURRENT USER\n"
-        f"- The logged-in user's full name is: **{current_user_name}**\n"
-        "- When the user says 'me', 'myself', 'assign to me', 'my name', or 'I', "
-        f"always resolve this to '{current_user_name}' automatically — NEVER ask who they are.\n\n"
+        "## Pipeline Stages\n"
+        f"Valid pipeline stages (in order): {', '.join(STAGES)}\n"
+        "- Always default new customers to 'Lead' unless the user specifies otherwise\n"
+        "- Never use 'Prospect' — the correct first stage is 'Lead'\n\n"
 
-        "## FORMATTING RULES\n"
-        "- Always use markdown in your responses.\n"
-        "- NEVER use emojis. Not a single one. No exceptions.\n"
-        "- Use **bold** for names, amounts, quote numbers, and key values.\n"
-        "- Use bullet lists (- item) for multiple items or options.\n"
-        "- Use numbered lists for step-by-step instructions or ordered info.\n"
-        "- Use markdown tables for structured data: pipeline counts, quote line items, customer lists.\n"
-        "- Use ## or ### headers to separate sections in longer responses.\n"
-        "- Never use raw dashes like '---' or '|||' as separators — use tables or lists instead.\n"
-        "- Keep responses concise and scannable. Avoid walls of text.\n"
-        "- Use a single blank line between sections.\n\n"
+        "## Guided Actions\n"
+        "After EVERY response where you complete an action or show data, suggest 2-3 "
+        "specific next steps the user can take. Format each suggestion on its own line "
+        "starting with '→ ' (arrow + space). Make suggestions specific to the actual "
+        "data — use real customer names, stages, and amounts.\n\n"
+        "Examples:\n"
+        "- After creating a customer named John: '→ Add a phone number for John Smith'\n"
+        "- After showing pipeline: '→ Update Zainab Shaikh from Qualified to Contact Made'\n"
+        "- After showing a customer: '→ Log a call interaction with [name]'\n"
+        "- After creating a quote: '→ Schedule a follow-up meeting to discuss the quote'\n\n"
 
-        "## CORE RULES\n"
-        "- ALWAYS use tools to fetch or create real data. Never invent names, IDs, or results.\n"
-        "- Before creating a customer, always call list_customers first to check for duplicates.\n"
-        "- When the user says 'update', 'change', 'rename', 'set', or 'edit' a customer field, ALWAYS call update_customer.\n"
-        "- Output dates as YYYY-MM-DD. Never schedule in the past.\n"
-        "- Be concise, warm, and direct. One clear answer, not multiple options unless asked.\n"
-        "- For delete operations: confirm the customer was found before saying it was deleted.\n"
-        "- When creating a customer, default stage is **Lead** unless the user specifies otherwise.\n"
-        f"- Valid pipeline stages: {', '.join(STAGES)}\n\n"
+        "## Response Style\n"
+        "- Always call the appropriate tool to fetch fresh data — never use cached results from earlier in the conversation\n"
+        "- Be concise and action-oriented\n"
+        "- Use the customer's actual name in responses and suggestions\n"
+        "- Format data in clear tables when showing lists\n"
+        "- Always confirm what action was taken before suggesting next steps\n"
+        "- Never say you cannot do something if you have a tool for it\n\n"
 
-        "## RESPONSE STYLE\n"
-        "- Lead with the result, then add context if needed.\n"
-        "- For customer lists, use a markdown table with columns: Name | Company | Stage | Email.\n"
-        "- For pipeline status, use a table with columns: Stage | Count.\n"
-        "- For quotes, always show a line-item table before confirming creation.\n"
-        "- When confirming an action was done (created/updated/deleted), use a short summary with bold key values.\n"
-        "- If you need more info from the user, ask for only ONE thing at a time.\n\n"
-
-        "## QUOTE GENERATION RULES\n"
-        "When asked to generate or create a quote, follow this exact flow:\n\n"
-        "1. Find the client using list_customers.\n"
-        "2. Call get_client_quote_history to check for previous quotes to use as a template.\n"
-        "3. Call search_pricelist with relevant keywords to find pre-set prices.\n"
-        "4. If pricelist items are found, use their base_price as unit_price — do NOT ask the user for prices already in the pricelist.\n"
-        "5. If pricelist has no matches, ask the user for: description, quantity, and unit price.\n"
-        "6. Present a COMPLETE quote draft as a markdown table BEFORE creating it:\n\n"
-        "   | # | Description | Qty | Unit Price | Total |\n"
-        "   |---|-------------|-----|------------|-------|\n"
-        "   | 1 | Item name   | 1   | £100.00    | £100.00 |\n\n"
-        "   Then show: **Subtotal**, **VAT (20%)**, **Total** as bold lines below the table.\n"
-        "7. End with: 'Shall I create this quote?' and wait for confirmation.\n"
-        "8. Only call create_quote AFTER the user confirms.\n"
-        "9. After creating, respond with a short summary:\n"
-        "   - **Quote Number:** QUO-XXX\n"
-        "   - **Client:** Name\n"
-        "   - **Total:** £X,XXX.XX (inc. VAT)\n"
-        "   - Then include the view link: /dashboard/quotes/{proposal_id}/view\n\n"
-        "- If the user says 'use last quote' or 'same as before', base it entirely on get_client_quote_history results.\n"
-        "- You can pre-fill up to 80% of a quote from pricelist + history. The user only needs to confirm or adjust.\n"
+        f"Today's date is {datetime.now().strftime('%A, %d %B %Y')}.\n"
+        f"Tenant ID: {g.tenant_id}\n"
     )
 
-    history  = data.get('conversation_history', [])
-    messages = [*history, {"role": "user", "content": user_message}]
-
-    req_headers = {
-        'x-api-key':         ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type':      'application/json',
+    # ── Headers ───────────────────────────────────────────────────────────────
+    from flask import current_app
+    api_key = current_app.config.get('ANTHROPIC_API_KEY') or \
+              __import__('os').environ.get('ANTHROPIC_API_KEY')
+    headers = {
+        "x-api-key":         api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type":      "application/json",
     }
 
+    tools      = get_tools()
+    messages   = list(conversation_history)
+    messages.append({"role": "user", "content": message})
     iterations = 0
-    while iterations < MAX_TOOL_ITERATIONS:
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
+    while iterations < MAX_ITERATIONS:
         iterations += 1
 
         payload = {
-            'model':      CLAUDE_MODEL,
-            'max_tokens': MAX_TOKENS,
-            'system':     system_prompt,
-            'tools':      TOOLS,
-            'messages':   messages,
+            "model":      CLAUDE_MODEL,
+            "max_tokens": MAX_TOKENS,
+            "system":     system_prompt,
+            "tools":      tools,
+            "messages":   messages,
         }
 
         try:
-            resp = requests.post(
-                'https://api.anthropic.com/v1/messages',
-                headers=req_headers,
-                json=payload,
-                timeout=60,
-            )
-        except requests.exceptions.Timeout:
-            return jsonify({'error': 'Claude API timed out. Please try again.'}), 504
+            response = requests.post(CLAUDE_API_URL, headers=headers, json=payload, timeout=60)
         except requests.exceptions.RequestException as e:
+            print(f"[CLAUDE] Request failed: {e}")
             return jsonify({'error': f'Failed to reach Claude API: {str(e)}'}), 500
 
-        if resp.status_code != 200:
-            return jsonify({'error': f'Claude API error {resp.status_code}', 'detail': resp.text[:500]}), 500
+        if response.status_code != 200:
+            error_body = response.text
+            print(f"[CLAUDE] ERROR {response.status_code}: {error_body}")
+            return jsonify({'error': f'Claude API error {response.status_code}', 'detail': error_body}), 500
 
-        result      = resp.json()
-        stop_reason = result.get('stop_reason')
-        content     = result.get('content', [])
-        messages.append({"role": "assistant", "content": content})
+        data        = response.json()
+        stop_reason = data.get('stop_reason')
+        content     = data.get('content', [])
 
+        messages.append({'role': 'assistant', 'content': content})
+
+        # ── End turn ──────────────────────────────────────────────────────────
         if stop_reason == 'end_turn':
             final_text = ' '.join(
                 block.get('text', '') for block in content if block.get('type') == 'text'
             ).strip()
+
+            # Extract action metadata from most recent tool result batch
+            action_metadata = {
+                'customer_ids':     [],
+                'quote_ids':        [],
+                'created_customer': None,
+                'created_quote':    None,
+            }
+
+            for msg in reversed(messages):
+                if msg.get('role') != 'user':
+                    continue
+                content_blocks = msg.get('content', [])
+                if not isinstance(content_blocks, list):
+                    continue
+                if not any(b.get('type') == 'tool_result' for b in content_blocks):
+                    continue
+
+                for block in content_blocks:
+                    if block.get('type') != 'tool_result':
+                        continue
+                    try:
+                        result_data = json.loads(block.get('content', '{}'))
+                    except Exception:
+                        continue
+                    if not isinstance(result_data, dict):
+                        continue
+
+                    if result_data.get('success') and result_data.get('data'):
+                        d = result_data['data']
+                        if isinstance(d, dict):
+                            cid = d.get('client_id') or d.get('id')
+                            if cid and cid not in action_metadata['customer_ids']:
+                                action_metadata['customer_ids'].append(cid)
+                                msg_text = result_data.get('message') or ''
+                                if 'Created customer' in msg_text:
+                                    action_metadata['created_customer'] = {
+                                        'client_id': cid,
+                                        'name': d.get('client_contact_name') or d.get('name') or 'Customer',
+                                    }
+                                elif not action_metadata['created_customer']:
+                                    action_metadata['created_customer'] = {
+                                        'client_id': cid,
+                                        'name': d.get('client_contact_name') or d.get('client_company_name') or d.get('name') or 'Customer',
+                                    }
+                        elif isinstance(d, list):
+                            for item in d:
+                                if not isinstance(item, dict):
+                                    continue
+                                cid = item.get('client_id') or item.get('id')
+                                if cid and cid not in action_metadata['customer_ids']:
+                                    action_metadata['customer_ids'].append(cid)
+
+                    if result_data.get('proposal_id'):
+                        pid = result_data['proposal_id']
+                        qid = result_data.get('quote_id')
+                        if pid not in action_metadata['quote_ids']:
+                            action_metadata['quote_ids'].append(pid)
+                            action_metadata['created_quote'] = {
+                                'proposal_id': pid,
+                                'quote_id':    qid,
+                                'total':       result_data.get('total'),
+                                'view_url':    f'/dashboard/quotes/{pid}/view',
+                            }
+            if action_metadata['created_customer']:
+                break
+
             return jsonify({
                 'response':             final_text or "Done.",
                 'conversation_history': messages,
+                'action_metadata':      action_metadata,
             }), 200
 
+        # ── Tool use ──────────────────────────────────────────────────────────
         if stop_reason == 'tool_use':
             tool_results = []
             for block in content:
-                if block.get('type') != 'tool_use': continue
-                tool_name   = block['name']
+                if block.get('type') != 'tool_use':
+                    continue
+                tool_name   = block.get('name')
                 tool_input  = block.get('input', {})
-                tool_use_id = block['id']
-                print(f"[StreemAI] Tool call: {tool_name}({json.dumps(tool_input)[:300]})")
-                result_data = execute_tool(tool_name, tool_input, token, tenant_id)
-                print(f"[StreemAI] Tool result: {json.dumps(result_data)[:300]}")
+                tool_use_id = block.get('id')
+                print(f"[TOOL] {tool_name}: {tool_input}")
+                try:
+                    result = execute_tool(tool_name, tool_input)
+                except Exception as e:
+                    import traceback
+                    print(f"[TOOL ERROR] {tool_name}: {traceback.format_exc()}")
+                    result = {'error': str(e)}
                 tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content":     json.dumps(result_data),
+                    'type':        'tool_result',
+                    'tool_use_id': tool_use_id,
+                    'content':     json.dumps(result),
                 })
-            messages.append({"role": "user", "content": tool_results})
+            messages.append({'role': 'user', 'content': tool_results})
             continue
 
+        print(f"[CLAUDE] Unexpected stop_reason: {stop_reason}")
         break
+    if action_metadata['customer_ids'] and not action_metadata['created_customer']:
+        cid = action_metadata['customer_ids'][0]
+        c = ClientMaster.query.filter_by(client_id=cid, tenant_id=tenant_id).first()
+        if c:
+            action_metadata['created_customer'] = {
+                'client_id': cid,
+                'name': getattr(c, 'client_contact_name', None) or getattr(c, 'client_company_name', None) or 'Customer',
+            }
 
     return jsonify({'error': 'Reached maximum tool iterations without a final response.'}), 500
 
