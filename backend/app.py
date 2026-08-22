@@ -272,6 +272,7 @@ def create_app(test_config=None):
     from routes.pricelist_routes import pricelist_bp
     from routes.interactions_routes import interactions_bp
     from routes.project_pipeline_routes import project_pipeline_bp
+    from routes.usage_routes import usage_bp
 
     blueprints = [
         auth_bp,
@@ -297,6 +298,7 @@ def create_app(test_config=None):
         pricelist_bp,
         interactions_bp,
         project_pipeline_bp,
+        usage_bp,
     ]
 
     for bp in blueprints:

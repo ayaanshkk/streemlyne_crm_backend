@@ -163,12 +163,51 @@ def require_owner(f):
 require_tenant_owner = require_owner
 
 
-# ---------------------------------------------------------------------------
-# [MW-005] permission_required is NOT defined here.
-# Import it from permission_middleware via middleware/__init__.py:
-#
-#     from middleware import permission_required
-#
-# Defining it here caused middleware/__init__.py to overwrite the correct
-# PermissionService-backed version with this inline version. Removed.
-# ---------------------------------------------------------------------------
+def role_required(*allowed_roles: str):
+    """
+    Decorator: must be applied AFTER @auth_required.
+    Returns 403 if the authenticated user's role is not in allowed_roles.
+
+    Usage:
+        @auth_required
+        @role_required("Platform Admin")
+        def create_invite(): ...
+
+        @auth_required
+        @role_required("Platform Admin", "Manager")
+        def delete_customer(): ...
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            user = get_current_user()
+            if user is None:
+                return jsonify({"error": "Unauthenticated"}), 401
+
+            user_roles = [r.role_name for r in (user.roles or [])]
+            if not any(r in allowed_roles for r in user_roles):
+                return jsonify({
+                    "error": "Access denied",
+                    "required_roles": list(allowed_roles),
+                    "your_role": user_roles[0] if user_roles else None,
+                }), 403
+
+            g.user_role = user_roles[0] if user_roles else None
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+
+# ── Role constants — import these in route files ───────────────────────────
+ADMIN       = "Platform Admin"
+MANAGER     = "Manager"
+SALESPERSON = "Salesperson"
+VIEWER      = "Viewer"
+
+CAN_MANAGE_SETTINGS  = (ADMIN,)
+CAN_VIEW_ALL_RECORDS = (ADMIN, MANAGER)
+CAN_CREATE_RECORDS   = (ADMIN, MANAGER, SALESPERSON)
+CAN_DELETE_RECORDS   = (ADMIN, MANAGER)
+CAN_VIEW_REPORTS     = (ADMIN, MANAGER)
+CAN_INVITE_TEAM      = (ADMIN,)
+CAN_MANAGE_ROLES     = (ADMIN,)

@@ -1,3 +1,4 @@
+from services.usage_service import check_customer_limit
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db
@@ -144,10 +145,10 @@ def create_client():
     [LIMIT-004] Trial tenants are blocked once they reach TRIAL_CLIENT_LIMIT.
     Returns 403 { "error": "trial_limit_reached", ... } when the limit is hit.
     """
-    # ── [LIMIT-004] Enforce trial limit ──────────────────────────────────────
-    blocked = _check_trial_client_limit()
-    if blocked:
-        return jsonify(blocked), 403
+    # ── Limit check ───────────────────────────────────────────────────────────
+    err = check_customer_limit(str(g.tenant_id))
+    if err:
+        return jsonify({"error": err, "limit_reached": True, "resource": "customers"}), 403
     # ─────────────────────────────────────────────────────────────────────────
 
     data = request.get_json() or {}

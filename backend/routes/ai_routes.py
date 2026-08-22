@@ -16,6 +16,7 @@ from models import (
     ClientInteractions, ContactMethodMaster,
     ProposalMaster, ProposalDetails,
 )
+from services.usage_service import check_ai_limit, record_ai_message
 from database import db
 from sqlalchemy import func, case
 
@@ -211,7 +212,6 @@ def execute_tool(tool_name: str, args: dict) -> dict:
     tenant_id = str(g.tenant_id)
 
     def find_client(args):
-        """Find a client by ID or search term."""
         client_id = args.get('client_id')
         if client_id:
             return ClientMaster.query.filter_by(client_id=client_id, tenant_id=tenant_id).first()
@@ -245,7 +245,6 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
     # ── create_customer ───────────────────────────────────────────────────────
     if tool_name == 'create_customer':
-        # Get next display ID for this tenant
         max_display = db.session.query(func.max(ClientMaster.display_id)).filter_by(tenant_id=tenant_id).scalar() or 0
         client = ClientMaster(
             tenant_id=           tenant_id,
@@ -273,16 +272,13 @@ def execute_tool(tool_name: str, args: dict) -> dict:
         client = find_client(args)
         if not client:
             return {'success': False, 'message': 'Customer not found'}
-
-        # Get recent interactions
         interactions = ClientInteractions.query.filter_by(client_id=client.client_id)\
             .order_by(ClientInteractions.created_at.desc()).limit(5).all()
         interaction_list = [{
-            'date':         i.contact_date.strftime('%Y-%m-%d') if i.contact_date else None,
-            'call_status':  i.next_steps,
-            'notes':        i.notes,
+            'date':        i.contact_date.strftime('%Y-%m-%d') if i.contact_date else None,
+            'call_status': i.next_steps,
+            'notes':       i.notes,
         } for i in interactions]
-
         data = client_to_dict(client)
         data['recent_interactions'] = interaction_list
         return {'success': True, 'data': data}
@@ -302,22 +298,14 @@ def execute_tool(tool_name: str, args: dict) -> dict:
             ))
         limit   = min(args.get('limit', 20), 50)
         clients = query.order_by(ClientMaster.created_at.desc()).limit(limit).all()
-        return {
-            'success': True,
-            'count':   len(clients),
-            'data':    [client_to_dict(c) for c in clients],
-        }
+        return {'success': True, 'count': len(clients), 'data': [client_to_dict(c) for c in clients]}
 
     # ── update_customer ───────────────────────────────────────────────────────
     if tool_name == 'update_customer':
         client = find_client(args)
         if not client:
             return {'success': False, 'message': 'Customer not found'}
-        fields = [
-            'client_contact_name','client_company_name','client_email',
-            'client_phone','address','post_code','notes',
-        ]
-        for field in fields:
+        for field in ['client_contact_name','client_company_name','client_email','client_phone','address','post_code','notes']:
             if args.get(field) is not None:
                 setattr(client, field, args[field])
         db.session.commit()
@@ -342,11 +330,9 @@ def execute_tool(tool_name: str, args: dict) -> dict:
     if tool_name == 'get_pipeline_summary':
         clients = ClientMaster.query.filter_by(tenant_id=tenant_id).all()
         total   = len(clients)
-        by_stage = {}
-        for stage in STAGES:
-            by_stage[stage] = sum(1 for c in clients if c.stage == stage)
-        closed_won  = by_stage.get('Closed Won', 0)
-        closed_lost = by_stage.get('Closed Lost', 0)
+        by_stage = {stage: sum(1 for c in clients if c.stage == stage) for stage in STAGES}
+        closed_won   = by_stage.get('Closed Won', 0)
+        closed_lost  = by_stage.get('Closed Lost', 0)
         total_closed = closed_won + closed_lost
         conversion_rate = round((closed_won / total_closed * 100), 1) if total_closed > 0 else 0
         return {
@@ -360,8 +346,6 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
     # ── get_calendar_events ───────────────────────────────────────────────────
     if tool_name == 'get_calendar_events':
-        # Calendar model not available in this deployment
-        # Query TasksMaster for scheduled items instead
         from models import TasksMaster
         query = TasksMaster.query.filter_by(tenant_id=tenant_id)
         if args.get('start_date'):
@@ -383,11 +367,11 @@ def execute_tool(tool_name: str, args: dict) -> dict:
                 'success': True,
                 'count':   len(tasks),
                 'data': [{
-                    'task_id':    t.task_id,
-                    'title':      getattr(t, 'task_title', None) or getattr(t, 'title', None),
-                    'due_date':   t.due_date.strftime('%Y-%m-%d') if getattr(t, 'due_date', None) else None,
-                    'status':     getattr(t, 'status', None),
-                    'client_id':  getattr(t, 'client_id', None),
+                    'task_id':   t.task_id,
+                    'title':     getattr(t, 'task_title', None) or getattr(t, 'title', None),
+                    'due_date':  t.due_date.strftime('%Y-%m-%d') if getattr(t, 'due_date', None) else None,
+                    'status':    getattr(t, 'status', None),
+                    'client_id': getattr(t, 'client_id', None),
                 } for t in tasks],
             }
         except Exception:
@@ -396,7 +380,7 @@ def execute_tool(tool_name: str, args: dict) -> dict:
     # ── create_calendar_event ─────────────────────────────────────────────────
     if tool_name == 'create_calendar_event':
         from models import TasksMaster
-        title    = args.get('title', 'Meeting')
+        title     = args.get('title', 'Meeting')
         start_str = args.get('start_date', '')
         try:
             if 'T' in start_str or ' ' in start_str:
@@ -416,11 +400,7 @@ def execute_tool(tool_name: str, args: dict) -> dict:
             )
             db.session.add(task)
             db.session.commit()
-            return {
-                'success': True,
-                'message': f"Scheduled: {title} on {due_date}",
-                'task_id': task.task_id,
-            }
+            return {'success': True, 'message': f"Scheduled: {title} on {due_date}", 'task_id': task.task_id}
         except Exception as e:
             db.session.rollback()
             return {'success': False, 'message': f'Could not create event: {str(e)}'}
@@ -437,12 +417,7 @@ def execute_tool(tool_name: str, args: dict) -> dict:
             return {
                 'success': True,
                 'count':   len(items),
-                'data': [{
-                    'item_id':   i.service_id,
-                    'item_name': i.service_title,
-                    'price':     float(i.service_rate) if i.service_rate else 0,
-                    'unit':      None,
-                } for i in items],
+                'data': [{'item_id': i.service_id, 'item_name': i.service_title, 'price': float(i.service_rate) if i.service_rate else 0, 'unit': None} for i in items],
             }
         except Exception as e:
             return {'success': False, 'message': f'Pricelist search failed: {str(e)}'}
@@ -452,15 +427,9 @@ def execute_tool(tool_name: str, args: dict) -> dict:
         client = find_client(args)
         if not client:
             return {'success': False, 'message': 'Customer not found. Please specify a valid customer.'}
-
-        items_data = args.get('items', [])
-        sub_total = sum(
-            float(item.get('quantity', 1)) * float(item.get('unit_price', 0))
-            for item in items_data
-        )
-        total_amount = sub_total  # no tax for now
-
-        # quote_id is auto-generated by DB sequence (QUO-XXX format)
+        items_data   = args.get('items', [])
+        sub_total    = sum(float(item.get('quantity', 1)) * float(item.get('unit_price', 0)) for item in items_data)
+        total_amount = sub_total
         proposal = ProposalMaster(
             tenant_id=    tenant_id,
             client_id=    client.client_id,
@@ -470,18 +439,9 @@ def execute_tool(tool_name: str, args: dict) -> dict:
             created_at=   datetime.utcnow(),
         )
         db.session.add(proposal)
-        db.session.flush()  # get proposal_id and auto-generated quote_id
-
+        db.session.flush()
         for item in items_data:
-            qty   = float(item.get('quantity', 1))
-            price = float(item.get('unit_price', 0))
-            pd = ProposalDetails(
-                proposal_id= proposal.proposal_id,
-                quantity=    qty,
-                created_at=  datetime.utcnow(),
-            )
-            db.session.add(pd)
-
+            db.session.add(ProposalDetails(proposal_id=proposal.proposal_id, quantity=float(item.get('quantity', 1)), created_at=datetime.utcnow()))
         db.session.commit()
         client_name = client.client_contact_name or client.client_company_name or 'Customer'
         return {
@@ -500,25 +460,18 @@ def execute_tool(tool_name: str, args: dict) -> dict:
             query = query.filter_by(client_id=args['client_id'])
         if args.get('search_term'):
             s = args['search_term']
-            client_ids = [
-                c.client_id for c in ClientMaster.query.filter(
-                    ClientMaster.tenant_id == tenant_id,
-                    db.or_(
-                        ClientMaster.client_contact_name.ilike(f'%{s}%'),
-                        ClientMaster.client_company_name.ilike(f'%{s}%'),
-                    )
-                ).all()
-            ]
+            client_ids = [c.client_id for c in ClientMaster.query.filter(
+                ClientMaster.tenant_id == tenant_id,
+                db.or_(ClientMaster.client_contact_name.ilike(f'%{s}%'), ClientMaster.client_company_name.ilike(f'%{s}%'))
+            ).all()]
             if client_ids:
                 query = query.filter(ProposalMaster.client_id.in_(client_ids))
         limit     = min(args.get('limit', 20), 50)
         proposals = query.order_by(ProposalMaster.created_at.desc()).limit(limit).all()
         results   = []
         for p in proposals:
-            client = ClientMaster.query.filter_by(client_id=p.client_id).first()
-            client_name = 'Unknown'
-            if client:
-                client_name = client.client_contact_name or client.client_company_name or 'Unknown'
+            client      = ClientMaster.query.filter_by(client_id=p.client_id).first()
+            client_name = (client.client_contact_name or client.client_company_name or 'Unknown') if client else 'Unknown'
             results.append({
                 'proposal_id': p.proposal_id,
                 'quote_id':    p.quote_id,
@@ -541,6 +494,15 @@ def chat():
     message = data.get('message', '').strip()
     if not message:
         return jsonify({'error': 'Message is required'}), 400
+
+    # ── AI usage limit check ──────────────────────────────────────────────────
+    limit_err = check_ai_limit(str(g.tenant_id))
+    if limit_err:
+        return jsonify({
+            'error':         limit_err,
+            'limit_reached': True,
+            'resource':      'ai_messages',
+        }), 403
 
     conversation_history = data.get('conversation_history', [])
 
@@ -603,7 +565,15 @@ def chat():
     messages.append({"role": "user", "content": message})
     iterations = 0
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+    # Initialise action_metadata before the loop so it's always in scope
+    action_metadata = {
+        'customer_ids':     [],
+        'quote_ids':        [],
+        'created_customer': None,
+        'created_quote':    None,
+    }
+
+    # ── Main agentic loop ─────────────────────────────────────────────────────
     while iterations < MAX_ITERATIONS:
         iterations += 1
 
@@ -626,9 +596,9 @@ def chat():
             print(f"[CLAUDE] ERROR {response.status_code}: {error_body}")
             return jsonify({'error': f'Claude API error {response.status_code}', 'detail': error_body}), 500
 
-        data        = response.json()
-        stop_reason = data.get('stop_reason')
-        content     = data.get('content', [])
+        resp_data   = response.json()
+        stop_reason = resp_data.get('stop_reason')
+        content     = resp_data.get('content', [])
 
         messages.append({'role': 'assistant', 'content': content})
 
@@ -639,13 +609,6 @@ def chat():
             ).strip()
 
             # Extract action metadata from most recent tool result batch
-            action_metadata = {
-                'customer_ids':     [],
-                'quote_ids':        [],
-                'created_customer': None,
-                'created_quote':    None,
-            }
-
             for msg in reversed(messages):
                 if msg.get('role') != 'user':
                     continue
@@ -654,7 +617,6 @@ def chat():
                     continue
                 if not any(b.get('type') == 'tool_result' for b in content_blocks):
                     continue
-
                 for block in content_blocks:
                     if block.get('type') != 'tool_result':
                         continue
@@ -664,7 +626,6 @@ def chat():
                         continue
                     if not isinstance(result_data, dict):
                         continue
-
                     if result_data.get('success') and result_data.get('data'):
                         d = result_data['data']
                         if isinstance(d, dict):
@@ -689,20 +650,35 @@ def chat():
                                 cid = item.get('client_id') or item.get('id')
                                 if cid and cid not in action_metadata['customer_ids']:
                                     action_metadata['customer_ids'].append(cid)
-
                     if result_data.get('proposal_id'):
                         pid = result_data['proposal_id']
-                        qid = result_data.get('quote_id')
                         if pid not in action_metadata['quote_ids']:
                             action_metadata['quote_ids'].append(pid)
                             action_metadata['created_quote'] = {
                                 'proposal_id': pid,
-                                'quote_id':    qid,
+                                'quote_id':    result_data.get('quote_id'),
                                 'total':       result_data.get('total'),
                                 'view_url':    f'/dashboard/quotes/{pid}/view',
                             }
-            if action_metadata['created_customer']:
-                break
+
+            # ── Record AI usage on every successful end_turn ──────────────────
+            try:
+                record_ai_message(
+                    tenant_id=str(g.tenant_id),
+                    user_id=getattr(g, 'user_id', None),
+                )
+            except Exception as e:
+                print(f"[USAGE] Failed to record AI message: {e}")
+                # Non-fatal — don't block the response
+
+            if action_metadata['customer_ids'] and not action_metadata['created_customer']:
+                cid = action_metadata['customer_ids'][0]
+                c = ClientMaster.query.filter_by(client_id=cid, tenant_id=str(g.tenant_id)).first()
+                if c:
+                    action_metadata['created_customer'] = {
+                        'client_id': cid,
+                        'name': getattr(c, 'client_contact_name', None) or getattr(c, 'client_company_name', None) or 'Customer',
+                    }
 
             return jsonify({
                 'response':             final_text or "Done.",
@@ -736,21 +712,11 @@ def chat():
 
         print(f"[CLAUDE] Unexpected stop_reason: {stop_reason}")
         break
-    if action_metadata['customer_ids'] and not action_metadata['created_customer']:
-        cid = action_metadata['customer_ids'][0]
-        c = ClientMaster.query.filter_by(client_id=cid, tenant_id=tenant_id).first()
-        if c:
-            action_metadata['created_customer'] = {
-                'client_id': cid,
-                'name': getattr(c, 'client_contact_name', None) or getattr(c, 'client_company_name', None) or 'Customer',
-            }
 
     return jsonify({'error': 'Reached maximum tool iterations without a final response.'}), 500
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Legacy endpoint
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Legacy endpoint ───────────────────────────────────────────────────────────
 
 @ai_bp.route('/chat/completions', methods=['POST'])
 @auth_required

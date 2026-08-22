@@ -499,3 +499,60 @@ def customer_reset_password():
     db.session.commit()
 
     return jsonify({'message': 'Password reset successfully'}), 200
+
+@auth_bp.route("/accept-invite", methods=["POST"])
+def accept_invite():
+    data = request.get_json() or {}
+ 
+    raw_token = (data.get("token")    or "").strip()
+    username  = (data.get("username") or "").strip().lower()
+    password  = (data.get("password") or "")
+ 
+    if not raw_token:
+        return jsonify({"error": "Token is required"}), 400
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+ 
+    # Look up by invite_token column directly — no extra table
+    user = UserMaster.query.filter_by(invite_token=raw_token).first()
+ 
+    if not user:
+        return jsonify({"error": "Invalid invite link"}), 404
+    if not user.is_invite_pending:
+        return jsonify({"error": "This invite has already been accepted"}), 410
+    if not user.invite_expires_at or datetime.utcnow() > user.invite_expires_at:
+        return jsonify({"error": "This invite link has expired — ask your admin to resend it"}), 410
+ 
+    # Username uniqueness check (aside from this user's own row)
+    taken = UserMaster.query.filter(
+        UserMaster.user_name == username,
+        UserMaster.user_id   != user.user_id,
+    ).first()
+    if taken:
+        return jsonify({"error": "Username is already taken — please choose another"}), 409
+ 
+    # Activate the account
+    user.user_name         = username
+    user.is_invite_pending = False
+    user.is_active         = True
+    user.invite_token      = None          # clear so the link can't be reused
+    user.invite_expires_at = None
+    user.set_password(password)
+ 
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "Username is already taken — please choose another"}), 409
+ 
+    from flask import current_app
+    secret    = current_app.config.get("JWT_SECRET_KEY") or current_app.config.get("SECRET_KEY")
+    jwt_token = user.generate_jwt_token(secret)
+ 
+    return jsonify({
+        "message": "Account activated — welcome to StreemLyne!",
+        "token":   jwt_token,
+        "user":    user.to_dict(),
+    }), 200

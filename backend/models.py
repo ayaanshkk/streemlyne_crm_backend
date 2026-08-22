@@ -84,7 +84,8 @@ class SubscriptionPlan(db.Model):
     updated_at        = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     stripe_price_id   = db.Column(db.String(255))
     max_users         = db.Column(db.Integer)
-
+    max_customers    = db.Column(db.Integer)
+    max_ai_messages  = db.Column(db.Integer)
     currency             = db.relationship('CurrencyMaster', backref='subscription_plans')
     module_mappings      = db.relationship('SubscriptionModuleMapping', back_populates='subscription', lazy='dynamic')
     tenant_subscriptions = db.relationship('TenantSubscription', back_populates='subscription', lazy='dynamic')
@@ -110,6 +111,8 @@ class SubscriptionPlan(db.Model):
             'currency_code':      self.currency.currency_code if self.currency else None,
             'stripe_price_id':    self.stripe_price_id,
             'max_users':          self.max_users,
+            'max_customers':      self.max_customers,
+            'max_ai_messages':    self.max_ai_messages,
             'created_at':         self.created_at.isoformat() if self.created_at else None,
             'updated_at':         self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -771,54 +774,91 @@ class EmployeeMaster(db.Model):
 class UserMaster(db.Model):
     __tablename__ = 'User_Master'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-
-    user_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    employee_id       = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
-    user_name         = db.Column(db.String(100), unique=True)
-    password          = db.Column(db.String(255))
-    created_at        = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at        = db.Column(db.Date, onupdate=datetime.utcnow)
-    tenant_id         = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
-    is_active         = db.Column(db.Boolean, default=True)
-    is_invite_pending = db.Column(db.Boolean, default=False)
-
+ 
+    user_id                = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    employee_id            = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    user_name              = db.Column(db.String(100), unique=True)
+    password               = db.Column(db.String(255))
+    created_at             = db.Column(db.DateTime(timezone=True),  nullable=False, default=datetime.utcnow)
+    updated_at             = db.Column(db.Date, onupdate=datetime.utcnow)
+    tenant_id              = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
+    is_active              = db.Column(db.Boolean, default=False)       # False until invite accepted
+    is_invite_pending      = db.Column(db.Boolean, default=False)
+    invite_token           = db.Column(db.String(100), unique=True)     # cleared after acceptance
+    invite_expires_at      = db.Column(db.DateTime(timezone=False))     # UTC expiry
+    created_by_employee_id = db.Column(db.SmallInteger)                 # who sent the invite
+ 
     employee = db.relationship('EmployeeMaster', back_populates='user')
     roles    = db.relationship('RoleMaster', secondary='StreemLyne_MT.User_Role_Mapping', backref='users')
-
+ 
     def __repr__(self):
         return f'<UserMaster {self.user_id}: {self.user_name}>'
-
+ 
     def set_password(self, password: str) -> None:
         self.password = generate_password_hash(password)
-
+ 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password, password)
-
+ 
     def generate_jwt_token(self, secret_key: str) -> str:
         from services.auth_service import generate_staff_token
-        return generate_staff_token(user_id=self.user_id, employee_id=self.employee_id, secret_key=secret_key)
-
+        return generate_staff_token(
+            user_id=self.user_id,
+            employee_id=self.employee_id,
+            secret_key=secret_key,
+        )
+ 
     @property
     def is_owner(self) -> bool:
+        from typing import cast
         return any(r.role_name == 'Tenant Owner' for r in cast(list, self.roles or []) if hasattr(r, 'role_name'))
-
+ 
     def to_dict(self):
+        from typing import cast
         role_names = [r.role_name for r in cast(list, self.roles or [])]
         return {
-            'user_id': self.user_id, 'employee_id': self.employee_id,
-            'user_name': self.user_name,
+            'user_id':      self.user_id,
+            'employee_id':  self.employee_id,
+            'user_name':    self.user_name,
             'employee_name': self.employee.employee_name if self.employee else None,
-            'email': self.employee.email if self.employee else None,
-            'first_name': (self.employee.employee_name.split()[0] if self.employee and self.employee.employee_name else ''),
-            'last_name': (' '.join(self.employee.employee_name.split()[1:]) if self.employee and self.employee.employee_name else ''),
-            'full_name': self.employee.employee_name if self.employee else None,
-            'phone': self.employee.phone if self.employee else None,
-            'roles': role_names, 'role': role_names[0] if role_names else 'user',
-            'is_owner': self.is_owner, 'is_active': self.is_active, 'is_verified': True,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'email':        self.employee.email          if self.employee else None,
+            'first_name':   (self.employee.employee_name.split()[0]
+                             if self.employee and self.employee.employee_name else ''),
+            'last_name':    (' '.join(self.employee.employee_name.split()[1:])
+                             if self.employee and self.employee.employee_name else ''),
+            'full_name':    self.employee.employee_name if self.employee else None,
+            'phone':        self.employee.phone          if self.employee else None,
+            'roles':        role_names,
+            'role':         role_names[0] if role_names else 'user',
+            'is_owner':     self.is_owner,
+            'is_active':    self.is_active,
+            'is_verified':  True,
+            'is_invite_pending': self.is_invite_pending,
+            'created_at':   self.created_at.isoformat() if self.created_at else None,
+            'updated_at':   self.updated_at.isoformat() if self.updated_at else None,
         }
 
+class AIUsageLog(db.Model):
+    __tablename__ = 'AI_Usage_Log'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+ 
+    id         = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    tenant_id  = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id',
+                           ondelete='CASCADE'), nullable=False, index=True)
+    user_id    = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.User_Master.user_id',
+                           ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+ 
+    tenant = db.relationship('TenantMaster', backref='ai_usage_logs')
+    user   = db.relationship('UserMaster',   backref='ai_usage_logs')
+ 
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'tenant_id':  self.tenant_id,
+            'user_id':    self.user_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 class UserRoleMapping(db.Model):
     __tablename__ = 'User_Role_Mapping'
