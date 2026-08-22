@@ -5,8 +5,8 @@ nixPkgs = ["python311"]
 [phases.install]
 cmds = [
   "python3 -m venv /opt/venv",
-  "/opt/venv/bin/pip install -r backend/requirements.txt"
+  "/opt/venv/bin/pip install -r requirements.txt"
 ]
 
 [start]
-cmd = "/opt/venv/bin/gunicorn --workers 4 --bind 0.0.0.0:5000 --timeout 120 app:app"
+cmd = "/opt/venv/bin/gunicorn --workers 4 --bind 0.0.0.0:5000 --timeout 120 --chdir backend app:app"
