@@ -1,4 +1,3 @@
-from backend import limiter
 from flask import Flask
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -21,18 +20,16 @@ def create_app(test_config=None):
     app.config["SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "default-fallback-secret-key")
 
     allowed_origins = [
-        r"http://localhost:3000",
-        r"http://127.0.0.1:3000",
-        r"http://localhost:3001",
-        r"http://127.0.0.1:3001",
-
-        r"https://streemlyne\.com",
-        r"https://www\.streemlyne\.com",
-        r"https://app\.streemlyne\.com",
-
-        r"https://streemlyne\.vercel\.app",
-        r"https://streemlyne-crm-frontend\.vercel\.app",
-
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "https://streemlyne.com",
+        "https://www.streemlyne.com",
+        "https://app.streemlyne.com",
+        "https://streemlyne.techmynt.com",
+        "https://streemlyne.vercel.app",
+        "https://streemlyne-crm-frontend.vercel.app",
         r"https://[a-zA-Z0-9-]+\.vercel\.app",
     ]
     
