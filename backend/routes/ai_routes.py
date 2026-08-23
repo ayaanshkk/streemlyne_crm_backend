@@ -16,6 +16,7 @@ from models import (
     ClientInteractions, ContactMethodMaster,
     ProposalMaster, ProposalDetails,
 )
+from limiter import limiter
 from services.usage_service import check_ai_limit, record_ai_message
 from database import db
 from sqlalchemy import func, case
@@ -27,7 +28,7 @@ ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL   = "claude-sonnet-4-6"
 MAX_TOKENS     = 8096
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = 5
 
 STAGES = [
     "Lead", "Qualified", "Contact Made", "Meeting Scheduled",
@@ -489,6 +490,7 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
 @ai_bp.route('/chat', methods=['POST'])
 @auth_required
+@limiter.limit("20 per hour")
 def chat():
     data    = request.get_json() or {}
     message = data.get('message', '').strip()

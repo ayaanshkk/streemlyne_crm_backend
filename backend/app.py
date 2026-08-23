@@ -1,6 +1,8 @@
+from backend import limiter
 from flask import Flask
 from flask_cors import CORS
 from flask_migrate import Migrate
+
 import os
 
 from dotenv import load_dotenv
@@ -313,16 +315,9 @@ def create_app(test_config=None):
     # route-specific overrides (e.g. tighter limits on checkout/cancel endpoints).
     # Default: 100 req/min per user (PRD §8). Set RATELIMIT_STORAGE_URI in .env
     # to "redis://localhost:6379/0" for multi-worker production deployments.
-    try:
-        from rate_limiter import configure_limiter
-    except ImportError:
-        app.logger.warning(
-            "[RATE_LIMITER] flask-limiter not installed - rate limiting disabled. "
-            "Run: pip install flask-limiter"
-        )
-    else:
-        configure_limiter(app)
-        print("[ok] Rate limiter active (100 req/min per user)")
+    from limiter import limiter
+    limiter.init_app(app)
+    app.logger.info("[ok] Rate limiter: 200/day, 50/hr default")
 
     print("[ok] All blueprints registered")
 
@@ -347,6 +342,7 @@ def create_app(test_config=None):
 
 
 app = create_app()
+
 
 
 if __name__ == "__main__":
