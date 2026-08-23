@@ -21,6 +21,13 @@ from .auth_middleware import (
 )
 from .permission_middleware import permission_required
 from .tenant_context import get_current_tenant_id, inject_tenant_context, tenant_required
+from .access_control import (
+    require_write_access,
+    check_record_ownership,
+    handle_access_denied,
+    AccessDenied,
+    ownership_filter,
+)
 
 __all__ = [
     "auth_required",
@@ -43,5 +50,10 @@ __all__ = [
     "CAN_DELETE_RECORDS",
     "CAN_VIEW_REPORTS",
     "CAN_INVITE_TEAM",
-    "CAN_MANAGE_ROLES"
+    "CAN_MANAGE_ROLES",
+    "require_write_access",
+    "check_record_ownership",
+    "handle_access_denied",
+    "AccessDenied",
+    "ownership_filter",
 ]

@@ -244,11 +244,13 @@ def register():
         SubscriptionService().ensure_user_limit_available(g.tenant_id)
 
         # ── Store extra company metadata on Tenant_Master if available ────────
-        if account_type == 'company' and tenant:
-            if data.get('company_size'):
-                tenant.company_size  = data['company_size']
-            if data.get('industry'):
-                tenant.industry      = data['industry']
+        if tenant:
+            tenant.account_type = account_type 
+            if account_type == 'company':
+                if data.get('company_size'):
+                    tenant.company_size = data['company_size']
+                if data.get('industry'):
+                    tenant.industry = data['industry']
             db.session.flush()
 
         # ── Create employee + user account ────────────────────────────────────

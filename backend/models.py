@@ -35,7 +35,7 @@ from database import db
 class TenantMaster(db.Model):
     __tablename__ = 'Tenant_Master'
     __table_args__ = {'schema': 'StreemLyne_MT'}
-
+ 
     tenant_id           = db.Column(db.String, primary_key=True)
     tenant_company_name = db.Column(db.String(255))
     tenant_contact_name = db.Column(db.String(255))
@@ -44,16 +44,43 @@ class TenantMaster(db.Model):
     created_at          = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     updated_at          = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     stripe_customer_id  = db.Column(db.String(255), unique=True)
-
+ 
+    # ── Branding ──────────────────────────────────────────────────────────────
+    logo_url            = db.Column(db.Text,         nullable=True)
+    tagline             = db.Column(db.String(500),  nullable=True)
+ 
+    # ── Business details ──────────────────────────────────────────────────────
+    company_email       = db.Column(db.String(255),  nullable=True)
+    company_phone       = db.Column(db.String(50),   nullable=True)
+    company_address     = db.Column(db.Text,         nullable=True)
+    company_postcode    = db.Column(db.String(20),   nullable=True)
+    company_website     = db.Column(db.String(500),  nullable=True)
+    registration_no     = db.Column(db.String(100),  nullable=True)
+    vat_reg_no          = db.Column(db.String(100),  nullable=True)
+ 
+    # ── Payment details ───────────────────────────────────────────────────────
+    bank_name           = db.Column(db.String(255),  nullable=True)
+    account_name        = db.Column(db.String(255),  nullable=True)
+    sort_code           = db.Column(db.String(20),   nullable=True)
+    account_number      = db.Column(db.String(50),   nullable=True)
+    payment_reference   = db.Column(db.Text,         nullable=True)
+ 
+    # ── Document defaults ─────────────────────────────────────────────────────
+    default_vat_rate    = db.Column(db.Numeric(5, 2),nullable=True, default=20.0)
+    default_currency    = db.Column(db.String(10),   nullable=True, default='GBP')
+    quote_validity_days = db.Column(db.Integer,      nullable=True, default=30)
+    default_notes       = db.Column(db.Text,         nullable=True)
+ 
     clients         = db.relationship('ClientMaster', back_populates='tenant', lazy='dynamic')
     employees       = db.relationship('EmployeeMaster', back_populates='tenant', lazy='dynamic')
     services        = db.relationship('ServicesMaster', back_populates='tenant', lazy='dynamic')
     subscriptions   = db.relationship('TenantSubscription', back_populates='tenant', lazy='dynamic')
     module_mappings = db.relationship('TenantModuleMapping', back_populates='tenant', lazy='dynamic')
-
+    account_type = db.Column(db.String(20), nullable=True, default='individual')
+ 
     def __repr__(self):
         return f'<TenantMaster {self.tenant_id}: {self.tenant_company_name}>'
-
+ 
     def to_dict(self):
         return {
             'tenant_id':           self.tenant_id,
@@ -64,6 +91,24 @@ class TenantMaster(db.Model):
             'stripe_customer_id':  self.stripe_customer_id,
             'created_at':          self.created_at.isoformat() if self.created_at else None,
             'updated_at':          self.updated_at.isoformat() if self.updated_at else None,
+            'logo_url':            self.logo_url,
+            'tagline':             self.tagline,
+            'company_email':       self.company_email,
+            'company_phone':       self.company_phone,
+            'company_address':     self.company_address,
+            'company_postcode':    self.company_postcode,
+            'company_website':     self.company_website,
+            'registration_no':     self.registration_no,
+            'vat_reg_no':          self.vat_reg_no,
+            'bank_name':           self.bank_name,
+            'account_name':        self.account_name,
+            'sort_code':           self.sort_code,
+            'account_number':      self.account_number,
+            'payment_reference':   self.payment_reference,
+            'default_vat_rate':    float(self.default_vat_rate) if self.default_vat_rate is not None else 20.0,
+            'default_currency':    self.default_currency or 'GBP',
+            'quote_validity_days': self.quote_validity_days or 30,
+            'default_notes':       self.default_notes,
         }
 
 
@@ -89,6 +134,15 @@ class SubscriptionPlan(db.Model):
     currency             = db.relationship('CurrencyMaster', backref='subscription_plans')
     module_mappings      = db.relationship('SubscriptionModuleMapping', back_populates='subscription', lazy='dynamic')
     tenant_subscriptions = db.relationship('TenantSubscription', back_populates='subscription', lazy='dynamic')
+    stripe_price_id_test = db.Column(db.String(255), nullable=True)
+    stripe_price_id_live = db.Column(db.String(255), nullable=True)
+
+    @property
+    def active_stripe_price_id(self) -> str | None:
+        stripe_key = os.environ.get('STRIPE_SECRET_KEY', '')
+        if stripe_key.startswith('sk_live_'):
+            return self.stripe_price_id_live or self.stripe_price_id
+        return self.stripe_price_id_test or self.stripe_price_id
 
     def __repr__(self):
         return f'<SubscriptionPlan {self.subscription_code}>'
@@ -645,7 +699,8 @@ class ClientMaster(db.Model):
     stage               = db.Column(db.String(50), nullable=True)
     stage_updated_at    = db.Column(db.DateTime(timezone=True), nullable=True)
     is_deleted          = db.Column(db.Boolean, default=False, nullable=True)
-
+    assigned_employee_id    = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=True)
+    created_by_employee_id  = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=True)
     tenant             = db.relationship('TenantMaster', back_populates='clients')
     country            = db.relationship('CountryMaster', backref='clients')
     default_currency   = db.relationship('CurrencyMaster', backref='default_currency_clients')
@@ -685,6 +740,8 @@ class ClientMaster(db.Model):
             'full_name': self.client_contact_name or self.client_company_name,
             'email': self.client_email, 'phone': self.client_phone,
             'postcode': self.post_code,
+            'assigned_employee_id':   self.assigned_employee_id,
+            'created_by_employee_id': self.created_by_employee_id,
         }
 
 

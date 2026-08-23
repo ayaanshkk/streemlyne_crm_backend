@@ -54,7 +54,7 @@ def update_tenant_info():
         tenant.tenant_contact_name = data['tenant_contact_name']
 
     # ── Branding ──────────────────────────────────────────────────────────────
-    for field in ['logo_url', 'tagline']:
+    for field in ['logo_url', 'tagline', 'account_type']:
         if field in data:
             setattr(tenant, field, data[field])
 
@@ -344,6 +344,7 @@ def _tenant_dict(t: TenantMaster) -> dict:
         'stripe_customer_id':  t.stripe_customer_id,
         'created_at':          t.created_at.isoformat() if t.created_at else None,
         'updated_at':          t.updated_at.isoformat() if t.updated_at else None,
+
         # ── Branding ──────────────────────────────────────────────────────────
         'logo_url':            getattr(t, 'logo_url',  None),
         'tagline':             getattr(t, 'tagline',   None),
@@ -366,4 +367,5 @@ def _tenant_dict(t: TenantMaster) -> dict:
         'default_currency':    getattr(t, 'default_currency',    'GBP'),
         'quote_validity_days': getattr(t, 'quote_validity_days', 30),
         'default_notes':       getattr(t, 'default_notes',       None),
+        'account_type': getattr(t, 'account_type', 'individual'),
     }

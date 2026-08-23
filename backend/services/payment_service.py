@@ -107,7 +107,8 @@ class PaymentService:
         except ImportError:
             raise ImportError("stripe package not installed. Run: pip install stripe")
 
-        if not plan.stripe_price_id:
+        price_id = plan.active_stripe_price_id
+        if not price_id:
             raise ValueError(
                 f"Plan '{plan.subscription_code}' is not configured for Stripe checkout"
             )
@@ -142,7 +143,7 @@ class PaymentService:
             session = stripe.checkout.Session.create(
                 customer=customer_id,
                 payment_method_types=["card"],
-                line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
+                line_items=[{"price": price_id, "quantity": 1}],
                 mode="subscription",
                 success_url=success_url.split("?")[0] + "?checkout=success&session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=cancel_url,

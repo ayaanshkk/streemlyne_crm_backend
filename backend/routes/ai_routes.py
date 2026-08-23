@@ -246,19 +246,17 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
     # ── create_customer ───────────────────────────────────────────────────────
     if tool_name == 'create_customer':
-        max_display = db.session.query(func.max(ClientMaster.display_id)).filter_by(tenant_id=tenant_id).scalar() or 0
         client = ClientMaster(
-            tenant_id=           tenant_id,
-            client_contact_name= args.get('client_contact_name'),
-            client_company_name= args.get('client_company_name'),
-            client_email=        args.get('client_email'),
-            client_phone=        args.get('client_phone'),
-            address=             args.get('address'),
-            post_code=           args.get('post_code'),
-            stage=               args.get('stage', 'Lead'),
-            notes=               args.get('notes'),
-            display_id=          max_display + 1,
-            created_at=          datetime.utcnow(),
+            tenant_id=              tenant_id,
+            client_contact_name=    args.get('client_contact_name'),
+            client_company_name=    args.get('client_company_name') or args.get('client_contact_name') or 'Unknown',
+            client_email=           args.get('client_email'),
+            client_phone=           args.get('client_phone'),
+            address=                args.get('address'),
+            post_code=              args.get('post_code'),
+            stage=                  args.get('stage', 'Lead'),
+            created_at=             datetime.utcnow(),
+            created_by_employee_id= getattr(g, 'employee_id', None),
         )
         db.session.add(client)
         db.session.commit()

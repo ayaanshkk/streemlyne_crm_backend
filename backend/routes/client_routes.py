@@ -6,6 +6,12 @@ from models import ClientMaster, ClientInteractions
 from middleware import auth_required, permission_required
 from datetime import datetime, timezone
 from services.subscription_service import SubscriptionService
+from middleware.access_control import (
+    require_write_access,
+    check_record_ownership,
+    handle_access_denied,
+    AccessDenied,
+)
 
 client_bp = Blueprint('client', __name__, url_prefix='/clients')
 
@@ -137,6 +143,7 @@ def list_clients():
 
 @client_bp.route('', methods=['POST'])
 @auth_required
+@require_write_access
 def create_client():
     """
     Create a new client.
@@ -163,6 +170,7 @@ def create_client():
         return jsonify({'error': 'client_company_name is required'}), 400
 
     client = ClientMaster(
+        created_by_employee_id = getattr(g, 'employee_id', None),
         tenant_id           = g.tenant_id,
         client_company_name = name,
         client_contact_name = data.get('client_contact_name') or data.get('contact_name'),
@@ -234,8 +242,9 @@ def get_client(client_id: int):
     return jsonify(result), 200
 
 
-@client_bp.route('/<int:client_id>', methods=['PUT'])
+@client_bp.route("/<int:client_id>", methods=["PUT"])
 @auth_required
+@require_write_access 
 def update_client(client_id: int):
     """
     Update a client record.
@@ -243,6 +252,11 @@ def update_client(client_id: int):
     Accepts both canonical schema names and legacy field names.
     """
     client = _get_or_404(client_id)
+    try:
+        check_record_ownership(client)
+    except AccessDenied as e:
+        return handle_access_denied(e)
+
     data   = request.get_json() or {}
 
     field_map = [
@@ -275,6 +289,7 @@ def update_client(client_id: int):
 
 @client_bp.route('/<int:client_id>', methods=['PATCH'])
 @auth_required
+@require_write_access
 def patch_client(client_id: int):
     """
     Partial update — stage change, pipeline drag-and-drop, etc.
@@ -282,6 +297,10 @@ def patch_client(client_id: int):
     Body: { "stage": "Qualified" }
     """
     client = _get_or_404(client_id)
+    try:
+        check_record_ownership(client)
+    except AccessDenied as e:
+        return handle_access_denied(e)
     data   = request.get_json() or {}
 
     if 'stage' in data:
@@ -313,12 +332,17 @@ def patch_client(client_id: int):
 
 @client_bp.route('/<int:client_id>', methods=['DELETE'])
 @auth_required
+@require_write_access
 def delete_client(client_id: int):
     """
     Delete a client record.
     DELETE /api/clients/<client_id>
     """
     client = _get_or_404(client_id)
+    try:
+        check_record_ownership(client)
+    except AccessDenied as e:
+        return handle_access_denied(e)
 
     try:
         db.session.delete(client)
@@ -330,7 +354,6 @@ def delete_client(client_id: int):
         }), 409
 
     return jsonify({'message': 'Client deleted successfully'}), 200
-
 
 # ─────────────────────────────────────────
 # Pipeline endpoint
@@ -441,8 +464,9 @@ def _client_dict(c: ClientMaster) -> dict:
         'email':        c.client_email,
         'phone':        c.client_phone,
         'postcode':     c.post_code,
+        'assigned_employee_id':   c.assigned_employee_id,
+        'created_by_employee_id': c.created_by_employee_id,
     }
-
 
 def _interaction_dict(i: ClientInteractions) -> dict:
     return {
@@ -491,6 +515,7 @@ def list_documents(client_id: int):
 
 @client_bp.route('/<int:client_id>/documents', methods=['POST'])
 @auth_required
+@require_write_access
 def upload_document(client_id: int):
     """
     Upload a document for a client.
@@ -538,6 +563,7 @@ def upload_document(client_id: int):
 
 @client_bp.route('/<int:client_id>/documents/<int:doc_id>', methods=['DELETE'])
 @auth_required
+@require_write_access
 def delete_document(client_id: int, doc_id: int):
     """
     Delete a document.
