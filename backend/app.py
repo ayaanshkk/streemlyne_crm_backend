@@ -37,16 +37,26 @@ def create_app(test_config=None):
         app,
         resources={r"/api/*": {"origins": allowed_origins}},
         supports_credentials=True,
-        allow_headers=[
-            "Content-Type",
-            "Authorization",
-            "X-Requested-With",
-            "X-Tenant-ID",
-        ],
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         expose_headers=["Content-Type", "Authorization"],
     )
-
+    
+    @app.before_request
+    def handle_preflight():
+        from flask import request, make_response
+        if request.method == "OPTIONS":
+            origin = request.headers.get("Origin", "")
+            if origin in allowed_origins:
+                res = make_response()
+                res.headers["Access-Control-Allow-Origin"] = origin
+                res.headers["Access-Control-Allow-Credentials"] = "true"
+                res.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Tenant-ID, X-Requested-With"
+                res.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+                res.headers["Access-Control-Max-Age"] = "3600"
+                res.status_code = 204
+                return res
+        
     if test_config:
         app.config.update(test_config)
     else:
