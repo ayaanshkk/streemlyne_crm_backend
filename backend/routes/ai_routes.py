@@ -6,6 +6,8 @@ Endpoints:
   POST /api/ai/chat   — main agentic chat endpoint
 """
 
+import openai
+import os
 import json
 import requests
 from datetime import datetime
@@ -484,6 +486,66 @@ def execute_tool(tool_name: str, args: dict) -> dict:
     return {'error': f'Unknown tool: {tool_name}'}
 
 
+
+# ── OpenAI chat for free plan ─────────────────────────────────────────────────
+
+def _chat_with_openai(message: str, history: list) -> dict:
+    """Lightweight GPT-4o-mini response for free plan demo users."""
+    client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    system_prompt = (
+        "You are StreemAI, a helpful CRM assistant for StreemLyne. "
+        "You can answer questions about CRM best practices, sales pipeline management, "
+        "customer relationships, and help users understand how to use the platform. "
+        "You are in demo mode — you cannot perform actions like creating customers, "
+        "updating records, or accessing live data in this mode. "
+        "Keep responses concise and helpful. Always suggest upgrading to a paid plan "
+        "if the user wants to perform real actions in their CRM.\n\n"
+        f"Today's date is {datetime.now().strftime('%A, %d %B %Y')}."
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Include last 6 turns of history to keep costs low
+    for turn in history[-6:]:
+        if isinstance(turn, dict) and turn.get("role") in ("user", "assistant"):
+            content = turn.get("content", "")
+            if isinstance(content, str):
+                messages.append({"role": turn["role"], "content": content})
+            elif isinstance(content, list):
+                # Claude format — extract text blocks only
+                text = " ".join(
+                    block.get("text", "") for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                )
+                if text:
+                    messages.append({"role": turn["role"], "content": text})
+
+    messages.append({"role": "user", "content": message})
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=500,
+            temperature=0.7,
+        )
+        reply = response.choices[0].message.content or "I'm not sure how to help with that."
+    except Exception as e:
+        print(f"[OPENAI] Error: {e}")
+        reply = "I'm having trouble connecting right now. Please try again."
+
+    updated_history = list(history) + [
+        {"role": "user",      "content": message},
+        {"role": "assistant", "content": reply},
+    ]
+
+    return {
+        "response":             reply,
+        "conversation_history": updated_history,
+        "action_metadata":      None,
+    }
+
 # ── Chat route ────────────────────────────────────────────────────────────────
 
 @ai_bp.route('/chat', methods=['POST'])
@@ -505,6 +567,39 @@ def chat():
         }), 403
 
     conversation_history = data.get('conversation_history', [])
+
+    # ── Determine plan and route to correct AI ────────────────────────────────
+    use_claude = False
+    try:
+        from services.subscription_service import SubscriptionService
+        from models import SubscriptionPlan
+        sub = SubscriptionService().get_active_subscription(str(g.tenant_id))
+        if sub:
+            plan = db.session.get(SubscriptionPlan, sub.subscription_id)
+            if plan:
+                plan_code = (plan.subscription_code or "FREE").upper()
+                use_claude = plan_code in ("STARTER", "PRO", "CUSTOM")
+    except Exception as e:
+        print(f"[AI] Plan check failed, defaulting to OpenAI: {e}")
+        use_claude = False
+
+    # ── Free plan — OpenAI demo response ─────────────────────────────────────
+    if not use_claude:
+        try:
+            result = _chat_with_openai(message, conversation_history)
+            try:
+                record_ai_message(
+                    tenant_id=str(g.tenant_id),
+                    user_id=getattr(g, 'user_id', None),
+                )
+            except Exception as e:
+                print(f"[USAGE] Failed to record AI message: {e}")
+            return jsonify(result), 200
+        except Exception as e:
+            print(f"[OPENAI] Chat failed: {e}")
+            return jsonify({'error': 'AI service unavailable. Please try again.'}), 500
+
+    # ── Paid plan — Claude agentic response ───────────────────────────────────
 
     # ── System prompt ─────────────────────────────────────────────────────────
     system_prompt = (
@@ -553,7 +648,7 @@ def chat():
     # ── Headers ───────────────────────────────────────────────────────────────
     from flask import current_app
     api_key = current_app.config.get('ANTHROPIC_API_KEY') or \
-              __import__('os').environ.get('ANTHROPIC_API_KEY')
+              os.environ.get('ANTHROPIC_API_KEY')
     headers = {
         "x-api-key":         api_key,
         "anthropic-version": "2023-06-01",
@@ -565,7 +660,6 @@ def chat():
     messages.append({"role": "user", "content": message})
     iterations = 0
 
-    # Initialise action_metadata before the loop so it's always in scope
     action_metadata = {
         'customer_ids':     [],
         'quote_ids':        [],
@@ -608,7 +702,6 @@ def chat():
                 block.get('text', '') for block in content if block.get('type') == 'text'
             ).strip()
 
-            # Extract action metadata from most recent tool result batch
             for msg in reversed(messages):
                 if msg.get('role') != 'user':
                     continue
@@ -661,7 +754,6 @@ def chat():
                                 'view_url':    f'/dashboard/quotes/{pid}/view',
                             }
 
-            # ── Record AI usage on every successful end_turn ──────────────────
             try:
                 record_ai_message(
                     tenant_id=str(g.tenant_id),
@@ -669,7 +761,6 @@ def chat():
                 )
             except Exception as e:
                 print(f"[USAGE] Failed to record AI message: {e}")
-                # Non-fatal — don't block the response
 
             if action_metadata['customer_ids'] and not action_metadata['created_customer']:
                 cid = action_metadata['customer_ids'][0]
@@ -714,7 +805,6 @@ def chat():
         break
 
     return jsonify({'error': 'Reached maximum tool iterations without a final response.'}), 500
-
 
 # ── Legacy endpoint ───────────────────────────────────────────────────────────
 

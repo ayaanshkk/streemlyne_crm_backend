@@ -41,7 +41,7 @@ def create_app(test_config=None):
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         expose_headers=["Content-Type", "Authorization"],
     )
-    
+
     @app.before_request
     def handle_preflight():
         from flask import request, make_response
@@ -282,6 +282,7 @@ def create_app(test_config=None):
     from routes.interactions_routes import interactions_bp
     from routes.project_pipeline_routes import project_pipeline_bp
     from routes.usage_routes import usage_bp
+    from routes.module_routes import module_bp
 
     blueprints = [
         auth_bp,
@@ -308,6 +309,7 @@ def create_app(test_config=None):
         interactions_bp,
         project_pipeline_bp,
         usage_bp,
+        module_bp,
     ]
 
     for bp in blueprints:
