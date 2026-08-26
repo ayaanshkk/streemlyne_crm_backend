@@ -271,7 +271,7 @@ def create_app(test_config=None):
     from routes.master_routes import master_bp
     from routes.opportunity_routes import opportunity_bp
     from routes.project_routes import project_bp
-    from routes.proposal_routes import proposal_bp
+    from routes.proposal_routes import quotation_bp
     from routes.role_routes import role_bp
     from routes.subscription_routes import subscription_bp
     from routes.tenant_routes import tenant_bp
@@ -294,7 +294,7 @@ def create_app(test_config=None):
         opportunity_bp,
         project_bp,
         contract_bp,
-        proposal_bp,
+        quotation_bp,
         invoice_bp,
         document_bp,
         master_bp,

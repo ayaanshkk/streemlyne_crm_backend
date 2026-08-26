@@ -17,6 +17,7 @@ from database import db
 from middleware import auth_required
 from datetime import datetime
 from decimal import Decimal
+from models import PriceListMaster
 
 pricelist_bp = Blueprint('pricelist', __name__, url_prefix='/pricelist')
 
@@ -25,54 +26,6 @@ pricelist_bp = Blueprint('pricelist', __name__, url_prefix='/pricelist')
 
 from sqlalchemy import Column, Integer, String, Numeric, Text, DateTime
 from database import db
-
-class PriceListMaster(db.Model):
-    __tablename__  = 'PriceList_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
-
-    pricelist_id      = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    tenant_id         = db.Column(db.String,  nullable=False, index=True)
-    category          = db.Column(db.String,  nullable=False)
-    item_name         = db.Column(db.String,  nullable=False)
-    description       = db.Column(db.Text)
-    base_price        = db.Column(db.Numeric(10, 2))
-    unit              = db.Column(db.String,  default='each')
-    item_code         = db.Column(db.String(50))
-    dimension_based   = db.Column(db.Boolean, default=False)
-    dimension_formula = db.Column(db.String)
-    door_type         = db.Column(db.String(100))
-    width             = db.Column(db.Integer)
-    height            = db.Column(db.Integer)
-    depth             = db.Column(db.Integer)
-    brand             = db.Column(db.String(50))
-    colour            = db.Column(db.String(255))
-    alias_codes       = db.Column(db.Text)
-    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at        = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    def to_dict(self):
-        return {
-            'pricelist_id':      self.pricelist_id,
-            'tenant_id':         self.tenant_id,
-            'category':          self.category,
-            'item_name':         self.item_name,
-            'description':       self.description,
-            'base_price':        float(self.base_price) if self.base_price is not None else None,
-            'unit':              self.unit or 'each',
-            'item_code':         self.item_code,
-            'dimension_based':   self.dimension_based or False,
-            'dimension_formula': self.dimension_formula,
-            'door_type':         self.door_type,
-            'width':             self.width,
-            'height':            self.height,
-            'depth':             self.depth,
-            'brand':             self.brand,
-            'colour':            self.colour,
-            'alias_codes':       self.alias_codes,
-            'created_at':        self.created_at.isoformat() if self.created_at else None,
-            'updated_at':        self.updated_at.isoformat() if self.updated_at else None,
-        }
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

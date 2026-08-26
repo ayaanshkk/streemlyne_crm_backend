@@ -581,6 +581,176 @@ class SupplierMaster(db.Model):
                 'supplier_provisions': self.supplier_provisions,
                 'created_at': self.created_at.isoformat() if self.created_at else None}
 
+class PriceListMaster(db.Model):
+    __tablename__  = 'PriceList_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    pricelist_id      = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id         = db.Column(db.String,  nullable=False, index=True)
+    category          = db.Column(db.String,  nullable=False)
+    item_name         = db.Column(db.String,  nullable=False)
+    description       = db.Column(db.Text)
+    base_price        = db.Column(db.Numeric(10, 2))
+    unit              = db.Column(db.String,  default='each')
+    item_code         = db.Column(db.String(50))
+    dimension_based   = db.Column(db.Boolean, default=False)
+    dimension_formula = db.Column(db.String)
+    door_type         = db.Column(db.String(100))
+    width             = db.Column(db.Integer)
+    height            = db.Column(db.Integer)
+    depth             = db.Column(db.Integer)
+    brand             = db.Column(db.String(50))
+    colour            = db.Column(db.String(255))
+    alias_codes       = db.Column(db.Text)
+    # Gafbros fields
+    list_type         = db.Column(db.String,  default='Standard')   # 'Standard' | 'Bespoke'
+    variant_id        = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Product_Variant.variant_id'), nullable=True)
+    min_qty           = db.Column(db.Integer, default=1)
+    effective_from    = db.Column(db.Date,    nullable=True)
+    effective_to      = db.Column(db.Date,    nullable=True)
+    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at        = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    variant = db.relationship('ProductVariant', backref='pricelist_entries')
+
+    def to_dict(self):
+        return {
+            'pricelist_id':      self.pricelist_id,
+            'tenant_id':         self.tenant_id,
+            'category':          self.category,
+            'item_name':         self.item_name,
+            'description':       self.description,
+            'base_price':        float(self.base_price) if self.base_price is not None else None,
+            'unit':              self.unit or 'each',
+            'item_code':         self.item_code,
+            'dimension_based':   self.dimension_based or False,
+            'dimension_formula': self.dimension_formula,
+            'door_type':         self.door_type,
+            'width':             self.width,
+            'height':            self.height,
+            'depth':             self.depth,
+            'brand':             self.brand,
+            'colour':            self.colour,
+            'alias_codes':       self.alias_codes,
+            'list_type':         self.list_type or 'Standard',
+            'variant_id':        self.variant_id,
+            'variant_label':     self.variant.variant_label if self.variant else None,
+            'min_qty':           self.min_qty or 1,
+            'effective_from':    self.effective_from.isoformat() if self.effective_from else None,
+            'effective_to':      self.effective_to.isoformat() if self.effective_to else None,
+            'created_at':        self.created_at.isoformat() if self.created_at else None,
+            'updated_at':        self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ProductMaster(db.Model):
+    __tablename__  = 'Product_Master'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    product_id  = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id   = db.Column(db.String,  nullable=False, index=True)
+    sku         = db.Column(db.String,  nullable=True)
+    name        = db.Column(db.String,  nullable=False)
+    description = db.Column(db.Text,    nullable=True)
+    category    = db.Column(db.String,  nullable=True)
+    active      = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    variants = db.relationship('ProductVariant', back_populates='product',
+                               lazy='dynamic', cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f'<ProductMaster {self.product_id}: {self.name}>'
+
+    def to_dict(self):
+        return {
+            'product_id':  self.product_id,
+            'tenant_id':   self.tenant_id,
+            'sku':         self.sku,
+            'name':        self.name,
+            'description': self.description,
+            'category':    self.category,
+            'active':      self.active,
+            'created_at':  self.created_at.isoformat() if self.created_at else None,
+            'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ProductVariant(db.Model):
+    __tablename__  = 'Product_Variant'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    variant_id     = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    product_id     = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Product_Master.product_id',
+                               ondelete='CASCADE'), nullable=False, index=True)
+    sku_variant    = db.Column(db.String,  nullable=True)
+    variant_label  = db.Column(db.String,  nullable=False)
+    dimensions     = db.Column(db.JSON,    nullable=True)   # {length, width, height, thickness}
+    material_type  = db.Column(db.String,  nullable=True)
+    material_grade = db.Column(db.String,  nullable=True)
+    gsm_thickness  = db.Column(db.Numeric(8, 2), nullable=True)
+    print_colors   = db.Column(db.String,  nullable=True)   # '1 Color' | 'Multi Color'
+    multi_side     = db.Column(db.Boolean, default=False)
+    print_size     = db.Column(db.String,  nullable=True)
+    treatments     = db.Column(db.JSON,    nullable=True)   # ['Embossment', 'Foil Stamping', ...]
+    active         = db.Column(db.Boolean, default=True)
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    product              = db.relationship('ProductMaster', back_populates='variants')
+    supplier_price_lists = db.relationship('SupplierPriceList', back_populates='variant',
+                                           lazy='dynamic')
+
+    def __repr__(self):
+        return f'<ProductVariant {self.variant_id}: {self.variant_label}>'
+
+    def to_dict(self):
+        return {
+            'variant_id':     self.variant_id,
+            'product_id':     self.product_id,
+            'product_name':   self.product.name if self.product else None,
+            'sku_variant':    self.sku_variant,
+            'variant_label':  self.variant_label,
+            'dimensions':     self.dimensions,
+            'material_type':  self.material_type,
+            'material_grade': self.material_grade,
+            'gsm_thickness':  float(self.gsm_thickness) if self.gsm_thickness else None,
+            'print_colors':   self.print_colors,
+            'multi_side':     self.multi_side,
+            'print_size':     self.print_size,
+            'treatments':     self.treatments,
+            'active':         self.active,
+            'created_at':     self.created_at.isoformat() if self.created_at else None,
+            'updated_at':     self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class SupplierPriceList(db.Model):
+    __tablename__  = 'Supplier_Price_List'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+
+    spl_id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    supplier_id     = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Supplier_Master.supplier_id',
+                                ondelete='RESTRICT'), nullable=False, index=True)
+    variant_id      = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Product_Variant.variant_id',
+                                ondelete='RESTRICT'), nullable=False, index=True)
+    unit_cost       = db.Column(db.Numeric(10, 2), nullable=False)
+    currency        = db.Column(db.String,  default='GBP')
+    min_qty         = db.Column(db.Integer, default=1)
+    lead_time_weeks = db.Column(db.Integer, nullable=True)
+    effective_from  = db.Column(db.Date,    nullable=False)
+    effective_to    = db.Column(db.Date,    nullable=True)
+    notes           = db.Column(db.Text,    nullable=True)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship('SupplierMaster', backref='price_lists')
+    variant  = db.relationship('ProductVariant',  back_populates='supplier_price_lists')
+
+    def __repr__(self):
+        return
+
 
 class RoleMaster(db.Model):
     __tablename__ = 'Role_Master'
@@ -1308,6 +1478,143 @@ class ProposalDetails(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
+class Quotation(db.Model):
+    __tablename__ = 'Quotations'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+ 
+    quotation_id             = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id                = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    client_id                = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    project_id               = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'), nullable=True)
+    employee_id              = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=True)
+    reference_number         = db.Column(db.String, nullable=False, unique=True)
+    total                    = db.Column(db.Numeric(10, 2), default=0)
+    status                   = db.Column(db.String, default='Draft')
+    notes                    = db.Column(db.Text, nullable=True)
+    valid_until              = db.Column(db.DateTime(timezone=False), nullable=True)
+    created_at               = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    updated_at               = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+ 
+    # Customer snapshot
+    customer_name            = db.Column(db.String(255), nullable=True)
+    customer_address         = db.Column(db.Text, nullable=True)
+    customer_phone           = db.Column(db.String(50), nullable=True)
+    customer_email           = db.Column(db.String(255), nullable=True)
+ 
+    # Pricing
+    vat_percentage           = db.Column(db.Numeric(5, 2), default=20.00)
+    global_discount_percent  = db.Column(db.Numeric(5, 2), default=0)
+ 
+    # Interior design fields
+    door_type                = db.Column(db.String(50), default='Carcass Only')
+    room_type                = db.Column(db.String(50), default='Kitchen')
+    carcass_colour           = db.Column(db.String(100), nullable=True)
+    door_colour              = db.Column(db.String(100), nullable=True)
+    door_style               = db.Column(db.String(100), nullable=True)
+    panelwork_colour         = db.Column(db.String(255), nullable=True)
+    room_name                = db.Column(db.String(255), nullable=True)
+    section_discounts        = db.Column(db.JSON, default=dict)
+    filler_type              = db.Column(db.String(50), default='Basic Slab')
+ 
+    # Relationships
+    client   = db.relationship('ClientMaster', backref='quotations')
+    tenant   = db.relationship('TenantMaster', backref='quotations')
+    items    = db.relationship('QuotationItem', back_populates='quotation',
+                               lazy='dynamic', cascade='all, delete-orphan')
+ 
+    def __repr__(self):
+        return f'<Quotation {self.reference_number}>'
+ 
+    def to_dict(self):
+        return {
+            'quotation_id':           self.quotation_id,
+            'reference_number':       self.reference_number,
+            'tenant_id':              self.tenant_id,
+            'client_id':              self.client_id,
+            'project_id':             self.project_id,
+            'employee_id':            self.employee_id,
+            'status':                 self.status or 'Draft',
+            'total':                  float(self.total) if self.total is not None else 0.0,
+            'vat_percentage':         float(self.vat_percentage) if self.vat_percentage is not None else 20.0,
+            'global_discount_percent':float(self.global_discount_percent) if self.global_discount_percent is not None else 0.0,
+            'notes':                  self.notes,
+            'valid_until':            self.valid_until.isoformat() if self.valid_until else None,
+            'created_at':             self.created_at.isoformat() if self.created_at else None,
+            'updated_at':             self.updated_at.isoformat() if self.updated_at else None,
+            'customer_name':          self.customer_name,
+            'customer_address':       self.customer_address,
+            'customer_phone':         self.customer_phone,
+            'customer_email':         self.customer_email,
+            'room_name':              self.room_name,
+            'room_type':              self.room_type,
+            'door_type':              self.door_type,
+            'door_style':             self.door_style,
+            'door_colour':            self.door_colour,
+            'carcass_colour':         self.carcass_colour,
+            'panelwork_colour':       self.panelwork_colour,
+            'filler_type':            self.filler_type,
+            'section_discounts':      self.section_discounts or {},
+        }
+ 
+ 
+class QuotationItem(db.Model):
+    __tablename__ = 'Quotation_Items'
+    __table_args__ = {'schema': 'StreemLyne_MT'}
+ 
+    item_id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    quotation_id     = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Quotations.quotation_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_name        = db.Column(db.String, nullable=False)
+    description      = db.Column(db.Text, nullable=True)
+    color            = db.Column(db.String, nullable=True)
+    quantity         = db.Column(db.Integer, default=1)
+    amount           = db.Column(db.Numeric(10, 2), default=0)
+    width            = db.Column(db.SmallInteger, nullable=True)
+    height           = db.Column(db.SmallInteger, nullable=True)
+    depth            = db.Column(db.SmallInteger, nullable=True)
+    needs_manual_pricing = db.Column(db.Boolean, default=False)
+    pricelist_id     = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.PriceList_Master.pricelist_id'), nullable=True)
+    created_at       = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
+    discount_type    = db.Column(db.String(20), default='none')
+    discount_value   = db.Column(db.Numeric(10, 2), default=0)
+    discounted_amount= db.Column(db.Numeric(10, 2), nullable=True)
+    discount_percent = db.Column(db.Numeric(5, 2), default=0)
+    parent_item_id   = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Quotation_Items.item_id', ondelete='CASCADE'), nullable=True)
+    section          = db.Column(db.String(50), nullable=True)
+    source           = db.Column(db.String(20), default='manual')
+    checklist_key    = db.Column(db.String(50), nullable=True)
+ 
+    # Relationships
+    quotation   = db.relationship('Quotation', back_populates='items')
+    pricelist   = db.relationship('PriceListMaster', backref='quotation_items')
+    sub_items   = db.relationship('QuotationItem', backref=db.backref('parent', remote_side=[item_id]),
+                                   lazy='dynamic', cascade='all, delete-orphan',
+                                   foreign_keys=[parent_item_id])
+ 
+    def __repr__(self):
+        return f'<QuotationItem {self.item_id}: {self.item_name}>'
+ 
+    def to_dict(self):
+        return {
+            'item_id':           self.item_id,
+            'quotation_id':      self.quotation_id,
+            'item_name':         self.item_name,
+            'description':       self.description,
+            'color':             self.color,
+            'quantity':          self.quantity or 1,
+            'amount':            float(self.amount) if self.amount is not None else 0.0,
+            'width':             self.width,
+            'height':            self.height,
+            'depth':             self.depth,
+            'pricelist_id':      self.pricelist_id,
+            'discount_type':     self.discount_type,
+            'discount_value':    float(self.discount_value) if self.discount_value is not None else 0.0,
+            'discount_percent':  float(self.discount_percent) if self.discount_percent is not None else 0.0,
+            'discounted_amount': float(self.discounted_amount) if self.discounted_amount is not None else None,
+            'parent_item_id':    self.parent_item_id,
+            'section':           self.section,
+            'source':            self.source,
+            'created_at':        self.created_at.isoformat() if self.created_at else None,
+        }
 
 class InvoiceMaster(db.Model):
     __tablename__ = 'Invoice_Master'
@@ -1489,7 +1796,7 @@ def get_new_schema_models() -> list:
         'OpportunityDetails', 'ProjectDetails',
         'CaseDocuments', 'CustomerDocuments', 'EnergyContractMaster',
         'TasksMaster', 'ProposalMaster', 'ProposalDetails', 'InvoiceMaster',
-        'InvoiceDetails', 'ChatHistory',
+        'InvoiceDetails', 'ChatHistory', 'PriceListMaster', 'ProductMaster', 'ProductVariant', 'SupplierPriceList', 'Quotation', 'QuotationItem'
     ]
 
 
@@ -1498,33 +1805,24 @@ def get_legacy_schema_models() -> list:
 
 
 __all__ = [
-    # Tenancy
     'TenantMaster', 'SubscriptionPlan', 'SubscriptionPlans', 'ModuleMaster',
     'SubscriptionModuleMapping', 'TenantModuleMapping', 'TenantSubscription',
     'SubscriptionInvoice', 'PaymentAttempt', 'SubscriptionPause', 'ProcessedWebhookEvent',
-    # Masters
     'CountryMaster', 'CurrencyMaster', 'DesignationMaster', 'ServicesMaster',
     'UOMMaster', 'StageMaster', 'SupplierMaster', 'RoleMaster',
     'PermissionCatalog', 'RolePermissionMapping', 'TaxMaster', 'ContactMethodMaster',
-    # Core
     'ClientMaster', 'ClientInteractions', 'EmployeeMaster', 'UserMaster',
     'UserRoleMapping', 'CustomerAuth', 'CustomerPasswordReset',
     'OpportunityDetails', 'ProjectDetails',
     'CaseDocuments', 'CustomerDocuments', 'EnergyContractMaster',
-    # Tasks / Scheduling
     'TasksMaster', 'Assignment',
-    # Proposals & Invoices
     'ProposalMaster', 'ProposalDetails', 'InvoiceMaster', 'InvoiceDetails',
-    # Chat
-    'ChatHistory',
-    # Removed stubs (kept for import compatibility)
-    'ChatConversation', 'ChatMessage', 'CustomerFormData', 'FormSubmission',
+    'ChatHistory', 'ChatConversation', 'ChatMessage', 'CustomerFormData', 'FormSubmission',
     'DataImport', 'AuditLog', 'VersionedSnapshot', 'Activity',
     'OpportunityNote', 'DocumentTemplate', 'DunningConfig',
     'NotificationPreference', 'NotificationLog', 'PendingPlanChange',
-    # Flags
     'EDUCATION_MODULE_AVAILABLE', 'INTERIOR_MODULE_AVAILABLE',
     'DRAWING_MODULE_AVAILABLE', 'LEGACY_MODELS_AVAILABLE',
     'is_module_available', 'get_available_modules',
-    'get_new_schema_models', 'get_legacy_schema_models',
+    'get_new_schema_models', 'get_legacy_schema_models', 'PriceListMaster', 'ProductMaster', 'ProductVariant', 'SupplierPriceList', 'Quotation', 'QuotationItem'
 ]
