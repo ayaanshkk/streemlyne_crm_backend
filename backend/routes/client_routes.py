@@ -616,31 +616,26 @@ def list_financial_documents(client_id: int):
     # Verify client belongs to this tenant
     _get_or_404(client_id)
 
-    from models import ProposalMaster, InvoiceMaster
-
+    from models import Quotation, InvoiceMaster
     docs = []
-
-    # ── Proposals / Quotations ────────────────────────────────────────────
-    # proposal_routes scopes via Client_Master join; mirror that here.
-    proposals = (
-        ProposalMaster.query
+    quotations = (
+        Quotation.query
         .filter_by(client_id=client_id)
-        .order_by(ProposalMaster.created_at.desc())
+        .order_by(Quotation.created_at.desc())
         .all()
     )
-
-    for p in proposals:
-        total = float(p.total_amount) if p.total_amount is not None else 0.0
+    for q in quotations:
+        total = float(q.total) if q.total is not None else 0.0
         docs.append({
-            'id':          p.proposal_id,
+            'id':          q.quotation_id,
             'type':        'quotation',
-            'title':       f"Quote {p.quote_id or f'#{p.proposal_id}'}",
-            'reference':   str(p.quote_id) if p.quote_id else f"#{p.proposal_id}",
+            'title':       f"Quote {q.reference_number}",
+            'reference':   q.reference_number,
             'total':       total,
             'amount_paid': 0.0,
             'balance':     total,
-            'status':      'draft',
-            'created_at':  p.created_at.isoformat() if p.created_at else None,
+            'status':      (q.status or 'Draft').lower(),
+            'created_at':  q.created_at.isoformat() if q.created_at else None,
         })
 
     # ── Invoices ──────────────────────────────────────────────────────────

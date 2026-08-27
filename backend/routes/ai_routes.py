@@ -16,7 +16,6 @@ from middleware import auth_required
 from models import (
     ClientMaster, EmployeeMaster,
     ClientInteractions, ContactMethodMaster,
-    ProposalMaster, ProposalDetails,
 )
 from limiter import limiter
 from services.usage_service import check_ai_limit, record_ai_message
@@ -425,61 +424,108 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
     # ── create_quote ──────────────────────────────────────────────────────────
     if tool_name == 'create_quote':
+        from models import Quotation, QuotationItem
         client = find_client(args)
         if not client:
             return {'success': False, 'message': 'Customer not found. Please specify a valid customer.'}
-        items_data   = args.get('items', [])
-        sub_total    = sum(float(item.get('quantity', 1)) * float(item.get('unit_price', 0)) for item in items_data)
-        total_amount = sub_total
-        proposal = ProposalMaster(
-            tenant_id=    tenant_id,
-            client_id=    client.client_id,
-            sub_total=    sub_total,
-            total_amount= total_amount,
-            notes=        args.get('notes'),
-            created_at=   datetime.utcnow(),
+        items_data = args.get('items', [])
+ 
+        # Auto-generate reference number
+        from sqlalchemy import text as sa_text
+        row = db.session.execute(
+            sa_text("""
+                SELECT reference_number FROM "StreemLyne_MT"."Quotations"
+                WHERE tenant_id = :tid
+                ORDER BY quotation_id DESC LIMIT 1
+            """),
+            {'tid': tenant_id}
+        ).fetchone()
+        if row and row[0] and row[0].startswith('QT-'):
+            try:
+                ref = f"QT-{int(row[0].split('-')[1]) + 1:05d}"
+            except Exception:
+                ref = 'QT-00001'
+        else:
+            ref = 'QT-00001'
+ 
+        quotation = Quotation(
+            tenant_id=        tenant_id,
+            client_id=        client.client_id,
+            reference_number= ref,
+            status=           'Draft',
+            notes=            args.get('notes'),
+            vat_percentage=   20,
+            customer_name=    client.client_contact_name or client.client_company_name,
+            customer_email=   client.client_email,
+            customer_phone=   client.client_phone,
+            customer_address= client.address,
         )
-        db.session.add(proposal)
+        db.session.add(quotation)
         db.session.flush()
+ 
+        sub_total = 0
         for item in items_data:
-            db.session.add(ProposalDetails(proposal_id=proposal.proposal_id, quantity=float(item.get('quantity', 1)), created_at=datetime.utcnow()))
+            qty   = float(item.get('quantity', 1))
+            price = float(item.get('unit_price', 0))
+            qi = QuotationItem(
+                quotation_id= quotation.quotation_id,
+                item_name=    item.get('description', 'Item'),
+                quantity=     int(qty),
+                amount=       price,
+                source=       'manual',
+            )
+            db.session.add(qi)
+            sub_total += qty * price
+ 
+        from decimal import Decimal
+        quotation.total = Decimal(str(sub_total * 1.2))  # 20% VAT
         db.session.commit()
+ 
         client_name = client.client_contact_name or client.client_company_name or 'Customer'
         return {
-            'success':     True,
-            'message':     f'Quote {proposal.quote_id} created for {client_name}',
-            'proposal_id': proposal.proposal_id,
-            'quote_id':    proposal.quote_id,
-            'total':       total_amount,
-            'view_url':    f'/dashboard/quotes/{proposal.proposal_id}/view',
+            'success':      True,
+            'message':      f'Quote {ref} created for {client_name}',
+            'quotation_id': quotation.quotation_id,
+            'reference':    ref,
+            'total':        float(quotation.total),
+            'view_url':     f'/dashboard/quotes/{quotation.quotation_id}/view',
         }
-
+ 
     # ── get_quotes ────────────────────────────────────────────────────────────
     if tool_name == 'get_quotes':
-        query = ProposalMaster.query.filter_by(tenant_id=tenant_id)
+        from models import Quotation
+        query = Quotation.query.join(
+            ClientMaster, Quotation.client_id == ClientMaster.client_id
+        ).filter(ClientMaster.tenant_id == tenant_id)
+ 
         if args.get('client_id'):
-            query = query.filter_by(client_id=args['client_id'])
+            query = query.filter(Quotation.client_id == args['client_id'])
         if args.get('search_term'):
             s = args['search_term']
             client_ids = [c.client_id for c in ClientMaster.query.filter(
                 ClientMaster.tenant_id == tenant_id,
-                db.or_(ClientMaster.client_contact_name.ilike(f'%{s}%'), ClientMaster.client_company_name.ilike(f'%{s}%'))
+                db.or_(
+                    ClientMaster.client_contact_name.ilike(f'%{s}%'),
+                    ClientMaster.client_company_name.ilike(f'%{s}%'),
+                )
             ).all()]
             if client_ids:
-                query = query.filter(ProposalMaster.client_id.in_(client_ids))
-        limit     = min(args.get('limit', 20), 50)
-        proposals = query.order_by(ProposalMaster.created_at.desc()).limit(limit).all()
-        results   = []
-        for p in proposals:
-            client      = ClientMaster.query.filter_by(client_id=p.client_id).first()
+                query = query.filter(Quotation.client_id.in_(client_ids))
+ 
+        limit      = min(args.get('limit', 20), 50)
+        quotations = query.order_by(Quotation.created_at.desc()).limit(limit).all()
+        results    = []
+        for q in quotations:
+            client      = ClientMaster.query.filter_by(client_id=q.client_id).first()
             client_name = (client.client_contact_name or client.client_company_name or 'Unknown') if client else 'Unknown'
             results.append({
-                'proposal_id': p.proposal_id,
-                'quote_id':    p.quote_id,
-                'client_name': client_name,
-                'total':       float(p.total_amount) if p.total_amount else 0,
-                'created_at':  p.created_at.strftime('%Y-%m-%d') if p.created_at else None,
-                'view_url':    f'/dashboard/quotes/{p.proposal_id}/view',
+                'quotation_id':    q.quotation_id,
+                'reference':       q.reference_number,
+                'client_name':     client_name,
+                'total':           float(q.total) if q.total else 0,
+                'status':          q.status or 'Draft',
+                'created_at':      q.created_at.strftime('%Y-%m-%d') if q.created_at else None,
+                'view_url':        f'/dashboard/quotes/{q.quotation_id}/view',
             })
         return {'success': True, 'count': len(results), 'data': results}
 
