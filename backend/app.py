@@ -30,7 +30,6 @@ def create_app(test_config=None):
         "https://streemlyne.techmynt.com",
         "https://streemlyne.vercel.app",
         "https://streemlyne-crm-frontend.vercel.app",
-        r"https://[a-zA-Z0-9-]+\.vercel\.app",
     ]
     
     CORS(
@@ -40,6 +39,7 @@ def create_app(test_config=None):
         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-ID"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         expose_headers=["Content-Type", "Authorization"],
+        vary_header=True,   
     )
 
     @app.before_request
