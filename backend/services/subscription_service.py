@@ -724,6 +724,10 @@ class SubscriptionService:
             and subscription.subscription_end_date
             and today > subscription.subscription_end_date
             and not subscription.auto_renew
+            and (
+                subscription.current_period_end is None
+                or now > _as_utc(subscription.current_period_end)
+            )
         ):
             subscription.status    = "expired"
             subscription.is_active = False
