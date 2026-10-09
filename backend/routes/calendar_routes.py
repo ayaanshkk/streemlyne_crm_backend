@@ -10,7 +10,7 @@ Endpoints:
   PUT    /api/assignments/<id>         — update
   DELETE /api/assignments/<id>         — delete
 
-Backed by:  "StreemLyne_MT"."Tasks_Master"
+Backed by:  "<DB_SCHEMA>"."Tasks_Master"
 
 Field mapping (frontend → Tasks_Master column):
   frontend.staff_name  → team_member
@@ -25,7 +25,7 @@ from flask import Blueprint, request, jsonify, g
 from sqlalchemy import text
 from datetime import datetime, date
 
-from database import db
+from database import db, DB_SCHEMA
 from middleware import auth_required
 
 calendar_bp = Blueprint('calendar', __name__, url_prefix='')
@@ -113,7 +113,7 @@ def list_assignments():
                 t.status,
                 t.created_at,
                 t.updated_at
-            FROM "StreemLyne_MT"."Tasks_Master" t
+            FROM "{DB_SCHEMA}"."Tasks_Master" t
             WHERE {where_clause}
             ORDER BY t.start_date ASC, t.start_time ASC NULLS LAST
         """)
@@ -167,8 +167,8 @@ def create_assignment():
         # ── employee_id for created_by (required NOT NULL column) ─────────
         employee_id = getattr(g.current_user, 'employee_id', None)
 
-        insert_query = text("""
-            INSERT INTO "StreemLyne_MT"."Tasks_Master" (
+        insert_query = text(f"""
+            INSERT INTO "{DB_SCHEMA}"."Tasks_Master" (
                 tenant_id, type, title,
                 date, start_date, end_date,
                 start_time, end_time,
@@ -315,7 +315,7 @@ def update_assignment(task_id):
                 params[field] = data[field]
 
         update_query = text(f"""
-            UPDATE "StreemLyne_MT"."Tasks_Master"
+            UPDATE "{DB_SCHEMA}"."Tasks_Master"
             SET {', '.join(set_parts)}
             WHERE task_id = :task_id AND tenant_id = :tenant_id
             RETURNING
@@ -351,8 +351,8 @@ def delete_assignment(task_id):
     """DELETE /api/assignments/<task_id>"""
     try:
         result = db.session.execute(
-            text("""
-                DELETE FROM "StreemLyne_MT"."Tasks_Master"
+            text(f"""
+                DELETE FROM "{DB_SCHEMA}"."Tasks_Master"
                 WHERE task_id = :task_id AND tenant_id = :tenant_id
             """),
             {'task_id': task_id, 'tenant_id': str(g.tenant_id)},
@@ -376,7 +376,7 @@ def delete_assignment(task_id):
 def _fetch_task(task_id: str, tenant_id):
     """Return the Tasks_Master row or None — always scoped to tenant."""
     result = db.session.execute(
-        text("""
+        text(f"""
             SELECT
                 task_id, type, title,
                 start_date AS date, start_date, end_date,
@@ -384,7 +384,7 @@ def _fetch_task(task_id: str, tenant_id):
                 project_id, client_id, customer_name,
                 estimated_hours, notes, priority, status,
                 created_at, updated_at
-            FROM "StreemLyne_MT"."Tasks_Master"
+            FROM "{DB_SCHEMA}"."Tasks_Master"
             WHERE task_id = :task_id AND tenant_id = :tenant_id
         """),
         {'task_id': task_id, 'tenant_id': str(tenant_id)},

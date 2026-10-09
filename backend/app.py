@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 
 from config import Config
-from database import db, init_db
+from database import db, init_db, DB_SCHEMA
 
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
@@ -341,7 +341,7 @@ def create_app(test_config=None):
     print("StreemLyne CRM Backend Starting...")
     print("=" * 60)
     print(f"{'[test] Database: SQLite (Test Mode)' if test_config else '[ok] Database: Supabase PostgreSQL'}")
-    print("[ok] Schema:   StreemLyne_MT")
+    print(f"[ok] Schema:   {DB_SCHEMA}")
     print("[ok] CORS:     Enabled (localhost:3000, 3001)")
     print("[ok] Auth:     JWT - staff (UserMaster) + portal (CustomerAuth)")
     print("[ok] RBAC:     Role_Master / Permission_Catalog")

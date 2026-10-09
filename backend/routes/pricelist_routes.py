@@ -13,7 +13,7 @@ Endpoints:
 
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
-from database import db
+from database import db, DB_SCHEMA
 from middleware import auth_required
 from datetime import datetime
 from decimal import Decimal
@@ -28,7 +28,7 @@ from database import db
 
 class PriceListMaster(db.Model):
     __tablename__  = 'PriceList_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     pricelist_id      = db.Column(db.Integer, primary_key=True, autoincrement=True)
     tenant_id         = db.Column(db.String,  nullable=False, index=True)

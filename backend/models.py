@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import db
+from database import db, DB_SCHEMA
 
 
 # ============================================================================
@@ -34,7 +34,7 @@ from database import db
 
 class TenantMaster(db.Model):
     __tablename__ = 'Tenant_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
  
     tenant_id           = db.Column(db.String, primary_key=True)
     tenant_company_name = db.Column(db.String(255))
@@ -114,7 +114,7 @@ class TenantMaster(db.Model):
 
 class SubscriptionPlan(db.Model):
     __tablename__ = 'Subscription_Plans'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     subscription_id   = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     subscription_code = db.Column(db.String(50), unique=True, nullable=False)
@@ -124,7 +124,7 @@ class SubscriptionPlan(db.Model):
     is_active         = db.Column(db.Boolean, nullable=False)
     billing_cycle     = db.Column(db.SmallInteger, nullable=False)
     price             = db.Column(db.Numeric(10, 2), nullable=False)
-    currency_id       = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
+    currency_id       = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'), nullable=False)
     created_at        = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     updated_at        = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     stripe_price_id   = db.Column(db.String(255))
@@ -177,7 +177,7 @@ SubscriptionPlans = SubscriptionPlan
 
 class ModuleMaster(db.Model):
     __tablename__ = 'Module_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     module_id   = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     module_code = db.Column(db.String(50), unique=True, nullable=False)
@@ -211,12 +211,12 @@ class SubscriptionModuleMapping(db.Model):
     __tablename__ = 'Subscription_Module_Mapping'
     __table_args__ = (
         db.UniqueConstraint('subscription_id', 'module_id', name='uq_subscription_module'),
-        {'schema': 'StreemLyne_MT'},
+        {'schema': DB_SCHEMA},
     )
 
     subscription_module_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    subscription_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'), nullable=False)
-    module_id       = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Module_Master.module_id'), nullable=False)
+    subscription_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Subscription_Plans.subscription_id'), nullable=False)
+    module_id       = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Module_Master.module_id'), nullable=False)
     created_at      = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
 
     subscription = db.relationship('SubscriptionPlan', back_populates='module_mappings')
@@ -236,12 +236,12 @@ class TenantModuleMapping(db.Model):
     __tablename__ = 'Tenant_Module_Mapping'
     __table_args__ = (
         db.UniqueConstraint('tenant_id', 'module_id', name='uq_tenant_module'),
-        {'schema': 'StreemLyne_MT'},
+        {'schema': DB_SCHEMA},
     )
 
     tenant_module_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id  = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
-    module_id  = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Module_Master.module_id'))
+    tenant_id  = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    module_id  = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Module_Master.module_id'))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     tenant = db.relationship('TenantMaster', back_populates='module_mappings')
@@ -264,12 +264,12 @@ class TenantSubscription(db.Model):
         db.Index('ix_tenant_subscription_tenant_id', 'tenant_id'),
         db.Index('idx_tenant_subscription_status', 'tenant_id', 'status'),
         db.Index('idx_tenant_subscription_trial_end', 'tenant_id', 'trial_end_date'),
-        {'schema': 'StreemLyne_MT'},
+        {'schema': DB_SCHEMA},
     )
 
     tenant_subscription_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id               = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
-    subscription_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Plans.subscription_id'))
+    tenant_id               = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    subscription_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Subscription_Plans.subscription_id'))
     subscription_start_date = db.Column(db.Date)
     subscription_end_date   = db.Column(db.Date)
     is_active               = db.Column(db.Boolean)
@@ -278,7 +278,7 @@ class TenantSubscription(db.Model):
     updated_at              = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
     status = db.Column(
         SAEnum('trialing', 'active', 'expired', 'canceled',
-               name='subscription_status_enum', schema='StreemLyne_MT', create_type=False),
+               name='subscription_status_enum', schema=DB_SCHEMA, create_type=False),
         nullable=False, default='trialing',
     )
     trial_end_date         = db.Column(db.DateTime(timezone=True))
@@ -347,18 +347,18 @@ class SubscriptionInvoice(db.Model):
     __table_args__ = (
         db.Index('idx_invoice_tenant', 'tenant_id', 'status'),
         db.Index('idx_subscription_invoice_stripe', 'stripe_invoice_id'),
-        {'schema': 'StreemLyne_MT'},
+        {'schema': DB_SCHEMA},
     )
 
     invoice_id             = db.Column(db.SmallInteger().with_variant(db.Integer, "sqlite"), primary_key=True, autoincrement=True)
-    tenant_id              = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
-    subscription_id        = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'))
+    tenant_id              = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    subscription_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Subscription.tenant_subscription_mapping_id'))
     stripe_invoice_id      = db.Column(db.String(255), unique=True)
     invoice_number         = db.Column(db.String(50), nullable=False, unique=True)
     amount                 = db.Column(db.Numeric(10, 2), nullable=False)
     tax_amount             = db.Column(db.Numeric(10, 2), default=0)
     total_amount           = db.Column(db.Numeric(10, 2), nullable=False)
-    currency_id            = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
+    currency_id            = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'), nullable=False)
     status                 = db.Column(db.String(50), default='pending')
     period_start           = db.Column(db.Date)
     period_end             = db.Column(db.Date)
@@ -395,16 +395,16 @@ class SubscriptionInvoice(db.Model):
 
 class PaymentAttempt(db.Model):
     __tablename__ = 'Payment_Attempt'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     payment_attempt_id       = db.Column(db.BigInteger().with_variant(db.Integer, "sqlite"), primary_key=True, autoincrement=True)
-    tenant_id                = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
-    subscription_id          = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
+    tenant_id                = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    subscription_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
     stripe_payment_intent_id = db.Column(db.String)
-    invoice_id               = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Subscription_Invoice.invoice_id'))
+    invoice_id               = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Subscription_Invoice.invoice_id'))
     attempt_number           = db.Column(db.Integer, nullable=False)
     amount                   = db.Column(db.Numeric, nullable=False)
-    currency_id              = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'), nullable=False)
+    currency_id              = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'), nullable=False)
     status                   = db.Column(db.String, nullable=False)
     failure_reason           = db.Column(db.Text)
     failure_code             = db.Column(db.String)
@@ -418,10 +418,10 @@ class PaymentAttempt(db.Model):
 
 class SubscriptionPause(db.Model):
     __tablename__ = 'Subscription_Pause'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     pause_id                        = db.Column(db.SmallInteger().with_variant(db.Integer, "sqlite"), primary_key=True, autoincrement=True)
-    tenant_subscription_mapping_id  = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
+    tenant_subscription_mapping_id  = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
     paused_at    = db.Column(db.DateTime(timezone=True), nullable=False)
     resume_at    = db.Column(db.DateTime(timezone=True))
     pause_reason = db.Column(db.String)
@@ -432,7 +432,7 @@ class SubscriptionPause(db.Model):
 
 class ProcessedWebhookEvent(db.Model):
     __tablename__ = 'Processed_Webhook_Event'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     id              = db.Column(PG_UUID(as_uuid=False).with_variant(db.String(36), "sqlite"), primary_key=True, default=lambda: str(uuid.uuid4()))
     stripe_event_id = db.Column(db.String(255), unique=True, nullable=False)
@@ -456,7 +456,7 @@ class ProcessedWebhookEvent(db.Model):
 
 class CountryMaster(db.Model):
     __tablename__ = 'Country_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     country_id       = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     country_name     = db.Column(db.String(100), nullable=False, unique=True, index=True)
@@ -471,7 +471,7 @@ class CountryMaster(db.Model):
 
 class CurrencyMaster(db.Model):
     __tablename__ = 'Currency_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     currency_id   = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     currency_name = db.Column(db.String(100))
@@ -486,7 +486,7 @@ class CurrencyMaster(db.Model):
 
 class DesignationMaster(db.Model):
     __tablename__ = 'Designation_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     designation_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     designation_description = db.Column(db.String(100), nullable=False, unique=True)
@@ -500,15 +500,15 @@ class DesignationMaster(db.Model):
 
 class ServicesMaster(db.Model):
     __tablename__ = 'Services_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     service_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id           = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
+    tenant_id           = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
     service_code        = db.Column(db.String(50), nullable=False)
     service_title       = db.Column(db.String(255), nullable=False)
     service_description = db.Column(db.String)
     service_rate        = db.Column(db.Float(precision=24))
-    currency_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    currency_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     supplier_id         = db.Column(db.SmallInteger)
     date_from           = db.Column(db.Date)
     date_to             = db.Column(db.Date)
@@ -535,7 +535,7 @@ class ServicesMaster(db.Model):
 
 class UOMMaster(db.Model):
     __tablename__ = 'UOM_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     uom_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     uom_description = db.Column(db.String(50), nullable=False, unique=True)
@@ -548,7 +548,7 @@ class UOMMaster(db.Model):
 
 class StageMaster(db.Model):
     __tablename__ = 'Stage_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     stage_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     stage_name         = db.Column(db.String(100), nullable=False, unique=True)
@@ -566,7 +566,7 @@ class StageMaster(db.Model):
 
 class SupplierMaster(db.Model):
     __tablename__ = 'Supplier_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     supplier_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     supplier_company_name = db.Column(db.String(255), nullable=False)
@@ -584,7 +584,7 @@ class SupplierMaster(db.Model):
 
 class RoleMaster(db.Model):
     __tablename__ = 'Role_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     role_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     role_name        = db.Column(db.String(100), nullable=False, unique=True)
@@ -606,7 +606,7 @@ class RoleMaster(db.Model):
 
 class PermissionCatalog(db.Model):
     __tablename__ = 'Permission_Catalog'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     permission_id   = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     permission_code = db.Column(db.String(100), nullable=False, unique=True)
@@ -623,11 +623,11 @@ class PermissionCatalog(db.Model):
 
 class RolePermissionMapping(db.Model):
     __tablename__ = 'Role_Permission_Mapping'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     role_permission_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    role_id       = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Role_Master.role_id'), nullable=False)
-    permission_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Permission_Catalog.permission_id'), nullable=False)
+    role_id       = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Role_Master.role_id'), nullable=False)
+    permission_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Permission_Catalog.permission_id'), nullable=False)
     created_at    = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
     edited_at     = db.Column(db.Date)
 
@@ -644,7 +644,7 @@ class RolePermissionMapping(db.Model):
 
 class TaxMaster(db.Model):
     __tablename__ = 'Tax_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     tax_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     tax_name        = db.Column(db.String(100), nullable=False)
@@ -662,7 +662,7 @@ class TaxMaster(db.Model):
 
 class ContactMethodMaster(db.Model):
     __tablename__ = 'Contact_Method_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     contact_method_id  = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     method_name        = db.Column(db.String(50), nullable=False, unique=True)
@@ -682,12 +682,12 @@ class ContactMethodMaster(db.Model):
 
 class ClientMaster(db.Model):
     __tablename__ = 'Client_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     client_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id           = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    country_id          = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Country_Master.country_id'))
-    default_currency_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    tenant_id           = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    country_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Country_Master.country_id'))
+    default_currency_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     client_company_name = db.Column(db.String(255), nullable=False)
     client_contact_name = db.Column(db.String(255))
     address             = db.Column(db.String)
@@ -699,8 +699,8 @@ class ClientMaster(db.Model):
     stage               = db.Column(db.String(50), nullable=True)
     stage_updated_at    = db.Column(db.DateTime(timezone=True), nullable=True)
     is_deleted          = db.Column(db.Boolean, default=False, nullable=True)
-    assigned_employee_id    = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=True)
-    created_by_employee_id  = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=True)
+    assigned_employee_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=True)
+    created_by_employee_id  = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=True)
     tenant             = db.relationship('TenantMaster', back_populates='clients')
     country            = db.relationship('CountryMaster', backref='clients')
     default_currency   = db.relationship('CurrencyMaster', backref='default_currency_clients')
@@ -747,10 +747,10 @@ class ClientMaster(db.Model):
 
 class ClientInteractions(db.Model):
     __tablename__ = 'Client_Interactions'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     interaction_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
+    client_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
     contact_date   = db.Column(db.Date, nullable=False)
     contact_method = db.Column(db.SmallInteger, nullable=False)
     notes          = db.Column(db.String)
@@ -776,11 +776,11 @@ class ClientInteractions(db.Model):
 
 class EmployeeMaster(db.Model):
     __tablename__ = 'Employee_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     employee_id             = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id               = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    employee_designation_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Designation_Master.designation_id'))
+    tenant_id               = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    employee_designation_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Designation_Master.designation_id'))
     employee_name           = db.Column(db.String(255), nullable=False)
     phone                   = db.Column(db.String(50))
     email                   = db.Column(db.String(255), unique=True)
@@ -830,15 +830,15 @@ class EmployeeMaster(db.Model):
 
 class UserMaster(db.Model):
     __tablename__ = 'User_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
  
     user_id                = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    employee_id            = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    employee_id            = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
     user_name              = db.Column(db.String(100), unique=True)
     password               = db.Column(db.String(255))
     created_at             = db.Column(db.DateTime(timezone=True),  nullable=False, default=datetime.utcnow)
     updated_at             = db.Column(db.Date, onupdate=datetime.utcnow)
-    tenant_id              = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
+    tenant_id              = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
     is_active              = db.Column(db.Boolean, default=False)       # False until invite accepted
     is_invite_pending      = db.Column(db.Boolean, default=False)
     invite_token           = db.Column(db.String(100), unique=True)     # cleared after acceptance
@@ -846,7 +846,7 @@ class UserMaster(db.Model):
     created_by_employee_id = db.Column(db.SmallInteger)                 # who sent the invite
  
     employee = db.relationship('EmployeeMaster', back_populates='user')
-    roles    = db.relationship('RoleMaster', secondary='StreemLyne_MT.User_Role_Mapping', backref='users')
+    roles    = db.relationship('RoleMaster', secondary=f'{DB_SCHEMA}.User_Role_Mapping', backref='users')
  
     def __repr__(self):
         return f'<UserMaster {self.user_id}: {self.user_name}>'
@@ -897,12 +897,12 @@ class UserMaster(db.Model):
 
 class AIUsageLog(db.Model):
     __tablename__ = 'AI_Usage_Log'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
  
     id         = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
-    tenant_id  = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id',
+    tenant_id  = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id',
                            ondelete='CASCADE'), nullable=False, index=True)
-    user_id    = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.User_Master.user_id',
+    user_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id',
                            ondelete='SET NULL'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
  
@@ -919,19 +919,19 @@ class AIUsageLog(db.Model):
 
 class UserRoleMapping(db.Model):
     __tablename__ = 'User_Role_Mapping'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
-    user_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.User_Master.user_id'), primary_key=True)
-    role_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Role_Master.role_id'), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'), primary_key=True)
+    role_id = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Role_Master.role_id'), primary_key=True)
 
 
 class CustomerAuth(db.Model):
     __tablename__ = 'Customer_Auth'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     customer_user_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    client_id        = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
-    tenant_id        = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
+    tenant_id        = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     email            = db.Column(db.String(255), unique=True, nullable=False)
     password_hash    = db.Column(db.Text, nullable=False)
     is_active        = db.Column(db.Boolean, default=True)
@@ -957,10 +957,10 @@ class CustomerAuth(db.Model):
 
 class CustomerPasswordReset(db.Model):
     __tablename__ = 'Customer_Password_Reset'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     id               = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    customer_user_id = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Customer_Auth.customer_user_id'))
+    customer_user_id = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Customer_Auth.customer_user_id'))
     token            = db.Column(db.Text, nullable=False)
     expires_at       = db.Column(db.DateTime(timezone=False), nullable=False)
     used             = db.Column(db.Boolean, default=False)
@@ -977,16 +977,16 @@ class CustomerPasswordReset(db.Model):
 
 class OpportunityDetails(db.Model):
     __tablename__ = 'Opportunity_Details'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     opportunity_id                = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id                     = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
-    tenant_id                     = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'))
-    opportunity_owner_employee_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
-    assigned_to_employee_id       = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
-    stage_id                      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Stage_Master.stage_id'), nullable=False)
-    currency_id                   = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
-    service_id                    = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'))
+    client_id                     = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
+    tenant_id                     = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    opportunity_owner_employee_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
+    assigned_to_employee_id       = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
+    stage_id                      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Stage_Master.stage_id'), nullable=False)
+    currency_id                   = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
+    service_id                    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'))
     opportunity_title             = db.Column(db.String(255), nullable=False)
     opportunity_description       = db.Column(db.String)
     opportunity_date              = db.Column(db.Date)
@@ -1049,12 +1049,12 @@ class OpportunityDetails(db.Model):
 
 class ProjectDetails(db.Model):
     __tablename__ = 'Project_Details'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     project_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id           = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
-    opportunity_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
-    employee_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
+    client_id           = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
+    opportunity_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Opportunity_Details.opportunity_id'), nullable=False)
+    employee_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=False)
     project_title       = db.Column(db.String(255), nullable=False)
     project_description = db.Column(db.String)
     start_date          = db.Column(db.Date, nullable=False)
@@ -1092,12 +1092,12 @@ class ProjectDetails(db.Model):
 
 class CaseDocuments(db.Model):
     __tablename__ = 'Case_Documents'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     id             = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'), nullable=False)
-    client_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
-    tenant_id      = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Opportunity_Details.opportunity_id'), nullable=False)
+    client_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
+    tenant_id      = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     uploaded_by    = db.Column(db.String(255), nullable=False)
     document_type  = db.Column(db.String(100))
     file_name      = db.Column(db.String(255), nullable=False)
@@ -1117,11 +1117,11 @@ class CaseDocuments(db.Model):
 
 class CustomerDocuments(db.Model):
     __tablename__ = 'Customer_Documents'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     id             = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    client_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'), nullable=False)
-    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'))
+    client_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
+    opportunity_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Opportunity_Details.opportunity_id'))
     file_url       = db.Column(db.Text, nullable=False)
     file_name      = db.Column(db.Text, nullable=False)
     uploaded_at    = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
@@ -1137,14 +1137,14 @@ class CustomerDocuments(db.Model):
 
 class EnergyContractMaster(db.Model):
     __tablename__ = 'Energy_Contract_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     energy_contract_master_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    project_id          = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'))
-    employee_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
-    supplier_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Supplier_Master.supplier_id'), nullable=False)
-    service_id          = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
-    currency_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    project_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
+    employee_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=False)
+    supplier_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Supplier_Master.supplier_id'), nullable=False)
+    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'), nullable=False)
+    currency_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     contract_start_date = db.Column(db.Date, nullable=False)
     contract_end_date   = db.Column(db.Date, nullable=False)
     terms_of_sale       = db.Column(db.String, nullable=False)
@@ -1183,10 +1183,10 @@ class EnergyContractMaster(db.Model):
 class TasksMaster(db.Model):
     """Tasks / scheduling — maps to Tasks_Master table."""
     __tablename__ = 'Tasks_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     task_id                  = db.Column(db.String(50), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id                = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False)
+    tenant_id                = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     type                     = db.Column(db.String, default='job')
     title                    = db.Column(db.String, nullable=False)
     date                     = db.Column(db.Date)
@@ -1195,19 +1195,19 @@ class TasksMaster(db.Model):
     start_time               = db.Column(db.Time)
     end_time                 = db.Column(db.Time)
     estimated_hours          = db.Column(db.Numeric(5, 2))
-    assigned_to_employee_id  = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    assigned_to_employee_id  = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
     team_member              = db.Column(db.String)
-    client_id                = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+    client_id                = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
     customer_name            = db.Column(db.String)
-    project_id               = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'))
-    opportunity_id           = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Opportunity_Details.opportunity_id'))
+    project_id               = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
+    opportunity_id           = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Opportunity_Details.opportunity_id'))
     job_type                 = db.Column(db.String)
     notes                    = db.Column(db.Text)
     priority                 = db.Column(db.String, default='Medium')
     status                   = db.Column(db.String, default='Scheduled')
-    created_by_employee_id   = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'), nullable=False)
+    created_by_employee_id   = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=False)
     created_at               = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by_employee_id   = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Employee_Master.employee_id'))
+    updated_by_employee_id   = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
     updated_at               = db.Column(db.DateTime)
     work_stage               = db.Column(db.String(50))
 
@@ -1233,15 +1233,15 @@ class TasksMaster(db.Model):
 
 class ProposalMaster(db.Model):
     __tablename__ = 'Proposal_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     quote_id = db.Column(db.String(10), unique=True, nullable=False,
-                         server_default=text("'QUO-' || lpad(nextval('\"StreemLyne_MT\".quote_id_seq')::text, 3, '0')"))
+                         server_default=text(f"'QUO-' || lpad(nextval('\"{DB_SCHEMA}\".quote_id_seq')::text, 3, '0')"))
     proposal_id      = db.Column(db.Integer, primary_key=True)
-    tenant_id        = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), index=True)  # ← ADD THIS
-    client_id        = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
+    tenant_id        = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), index=True)  # ← ADD THIS
+    client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
     project_id       = db.Column(db.SmallInteger)
-    currency_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    currency_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     sub_total        = db.Column(db.Numeric(12, 2))
     total_amount     = db.Column(db.Numeric(12, 2), nullable=False)
     discount_percent = db.Column(db.Float(precision=24))
@@ -1280,14 +1280,14 @@ class ProposalMaster(db.Model):
 
 class ProposalDetails(db.Model):
     __tablename__ = 'Proposal_Details'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     proposal_details_id = db.Column(db.Integer, primary_key=True)
-    proposal_id         = db.Column(db.Integer, db.ForeignKey('StreemLyne_MT.Proposal_Master.proposal_id'), nullable=False)
+    proposal_id         = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Proposal_Master.proposal_id'), nullable=False)
     quantity            = db.Column(db.Numeric(10, 2), nullable=False)
     amount              = db.Column(db.Numeric(12, 2))
-    service_id          = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=False)
-    uom_id              = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=False)
+    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'), nullable=False)
+    uom_id              = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=False)
     service_name        = db.Column(db.String(255))
     created_at          = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at          = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
@@ -1311,13 +1311,13 @@ class ProposalDetails(db.Model):
 
 class InvoiceMaster(db.Model):
     __tablename__ = 'Invoice_Master'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     invoice_id       = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id        = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Client_Master.client_id'))
-    project_id       = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Project_Details.project_id'))
-    proposal_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Proposal_Master.proposal_id'))
-    currency_id      = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Currency_Master.currency_id'))
+    client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
+    project_id       = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
+    proposal_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Proposal_Master.proposal_id'))
+    currency_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     invoice_number   = db.Column(db.String, nullable=False)
     billing_remarks  = db.Column(db.String)
     sub_total        = db.Column(db.Float(precision=24))
@@ -1362,12 +1362,12 @@ class InvoiceMaster(db.Model):
 
 class InvoiceDetails(db.Model):
     __tablename__ = 'Invoice_Details'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     invoice_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    invoice_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Invoice_Master.invoice_id'), nullable=False)
-    service_id         = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.Services_Master.service_id'), nullable=True)
-    uom_id             = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.UOM_Master.uom_id'), nullable=True)
+    invoice_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Invoice_Master.invoice_id'), nullable=False)
+    service_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'), nullable=True)
+    uom_id             = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=True)
     quantity           = db.Column(db.Float(precision=24), nullable=True, default=1.0)
     service_name       = db.Column(db.String(500), nullable=True)
     unit_price         = db.Column(db.Float(precision=24), nullable=True)
@@ -1398,11 +1398,11 @@ class InvoiceDetails(db.Model):
 class ChatHistory(db.Model):
     """AI chat session storage — maps to Chat_History table."""
     __tablename__ = 'Chat_History'
-    __table_args__ = {'schema': 'StreemLyne_MT'}
+    __table_args__ = {'schema': DB_SCHEMA}
 
     id         = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id  = db.Column(db.String, db.ForeignKey('StreemLyne_MT.Tenant_Master.tenant_id'), nullable=False, index=True)
-    user_id    = db.Column(db.SmallInteger, db.ForeignKey('StreemLyne_MT.User_Master.user_id'), nullable=False, index=True)
+    tenant_id  = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    user_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'), nullable=False, index=True)
     session_id = db.Column(db.String(100), nullable=False, index=True)
     title      = db.Column(db.String(255))
     messages   = db.Column(db.JSON, nullable=False)
