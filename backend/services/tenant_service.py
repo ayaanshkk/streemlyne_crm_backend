@@ -53,22 +53,19 @@ class TenantService:
         company_name: str,
         contact_name: str = None,
         onboarding_date: date = None,
-        tenant_id: str = None,
     ) -> TenantMaster:
         """Create a new tenant and provision a 7-day trial subscription atomically."""
         from database import db
 
-        tid = tenant_id or _generate_tenant_id(company_name)
-
         tenant = TenantMaster(
-            tenant_id=tid,
             tenant_company_name=company_name,
             tenant_contact_name=contact_name,
             onboarding_Date=onboarding_date or date.today(),
             is_active=True,
         )
         db.session.add(tenant)
-        db.session.flush()
+        db.session.flush()  # tenant_id is assigned by the database sequence
+        tid = tenant.tenant_id
 
         from services.subscription_service import SubscriptionService
         SubscriptionService().create_trial_subscription(tid)

@@ -116,13 +116,30 @@ def login():
         employee = EmployeeMaster.query.filter_by(email=identifier.lower()).first()
         if employee:
             user_by_email = UserMaster.query.filter_by(employee_id=employee.employee_id).first()
-            if user_by_email and user_by_email.check_password(password):
+            if user_by_email and user_by_email.is_active and user_by_email.check_password(password):
                 user = user_by_email
 
     print(f"[DEBUG] user found: {user}")
 
     if not user:
         return jsonify({'error': 'Invalid credentials'}), 401
+
+    # Tenants whose software runs as its own app (e.g. FAI): sign the user
+    # in there too and send them to it, so they only sign in once.
+    from services.external_apps import (
+        get_external_app, login_to_external_app, build_redirect_url, ExternalLoginError,
+    )
+    external_app = get_external_app(user.tenant_id)
+    if external_app:
+        try:
+            app_token = login_to_external_app(external_app, user.user_name, password)
+        except ExternalLoginError as e:
+            return jsonify({'error': str(e)}), 502
+        return jsonify({
+            'message': 'Login successful',
+            'app': external_app.get('name'),
+            'redirect_url': build_redirect_url(external_app, app_token),
+        }), 200
 
     if not user.employee:
         return jsonify({'error': 'User account is not linked to an employee'}), 500
@@ -231,14 +248,12 @@ def register():
 
     try:
         # ── Tenant setup ──────────────────────────────────────────────────────
-        if not data.get('tenant_id'):
-            from services.tenant_service import TenantService
-            company_name = (data.get('company_name') or '').strip() or data['employee_name']
-            tenant = TenantService().create_tenant(company_name=company_name)
-            g.tenant_id = tenant.tenant_id
-        else:
-            g.tenant_id = str(data['tenant_id'])
-            tenant = None
+        # Public sign-up always creates a new tenant. Joining an existing
+        # tenant is only possible through an admin invitation.
+        from services.tenant_service import TenantService
+        company_name = (data.get('company_name') or '').strip() or data['employee_name']
+        tenant = TenantService().create_tenant(company_name=company_name)
+        g.tenant_id = tenant.tenant_id
 
         from services.subscription_service import SubscriptionService
         SubscriptionService().ensure_user_limit_available(g.tenant_id)

@@ -31,7 +31,7 @@ class PriceListMaster(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     pricelist_id      = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    tenant_id         = db.Column(db.String,  nullable=False, index=True)
+    tenant_id         = db.Column(db.Integer, nullable=False, index=True)
     category          = db.Column(db.String,  nullable=False)
     item_name         = db.Column(db.String,  nullable=False)
     description       = db.Column(db.Text)

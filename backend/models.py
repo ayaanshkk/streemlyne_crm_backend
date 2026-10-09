@@ -36,7 +36,7 @@ class TenantMaster(db.Model):
     __tablename__ = 'Tenant_Master'
     __table_args__ = {'schema': DB_SCHEMA}
  
-    tenant_id           = db.Column(db.String, primary_key=True)
+    tenant_id           = db.Column(db.Integer, primary_key=True, autoincrement=True)
     tenant_company_name = db.Column(db.String(255))
     tenant_contact_name = db.Column(db.String(255))
     onboarding_Date     = db.Column(db.Date)
@@ -240,7 +240,7 @@ class TenantModuleMapping(db.Model):
     )
 
     tenant_module_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id  = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    tenant_id  = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
     module_id  = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Module_Master.module_id'))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
@@ -268,7 +268,7 @@ class TenantSubscription(db.Model):
     )
 
     tenant_subscription_mapping_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id               = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    tenant_id               = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
     subscription_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Subscription_Plans.subscription_id'))
     subscription_start_date = db.Column(db.Date)
     subscription_end_date   = db.Column(db.Date)
@@ -351,7 +351,7 @@ class SubscriptionInvoice(db.Model):
     )
 
     invoice_id             = db.Column(db.SmallInteger().with_variant(db.Integer, "sqlite"), primary_key=True, autoincrement=True)
-    tenant_id              = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    tenant_id              = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     subscription_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Subscription.tenant_subscription_mapping_id'))
     stripe_invoice_id      = db.Column(db.String(255), unique=True)
     invoice_number         = db.Column(db.String(50), nullable=False, unique=True)
@@ -398,7 +398,7 @@ class PaymentAttempt(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     payment_attempt_id       = db.Column(db.BigInteger().with_variant(db.Integer, "sqlite"), primary_key=True, autoincrement=True)
-    tenant_id                = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    tenant_id                = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     subscription_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Subscription.tenant_subscription_mapping_id'), nullable=False)
     stripe_payment_intent_id = db.Column(db.String)
     invoice_id               = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Subscription_Invoice.invoice_id'))
@@ -503,7 +503,7 @@ class ServicesMaster(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     service_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id           = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    tenant_id           = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
     service_code        = db.Column(db.String(50), nullable=False)
     service_title       = db.Column(db.String(255), nullable=False)
     service_description = db.Column(db.String)
@@ -685,7 +685,7 @@ class ClientMaster(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     client_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id           = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    tenant_id           = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
     country_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Country_Master.country_id'))
     default_currency_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     client_company_name = db.Column(db.String(255), nullable=False)
@@ -779,7 +779,7 @@ class EmployeeMaster(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     employee_id             = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id               = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    tenant_id               = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
     employee_designation_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Designation_Master.designation_id'))
     employee_name           = db.Column(db.String(255), nullable=False)
     phone                   = db.Column(db.String(50))
@@ -834,11 +834,11 @@ class UserMaster(db.Model):
  
     user_id                = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     employee_id            = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
-    user_name              = db.Column(db.String(100), unique=True)
+    user_name              = db.Column('username', db.String(100), unique=True)  # dev2 column is "username"
     password               = db.Column(db.String(255))
     created_at             = db.Column(db.DateTime(timezone=True),  nullable=False, default=datetime.utcnow)
     updated_at             = db.Column(db.Date, onupdate=datetime.utcnow)
-    tenant_id              = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    tenant_id              = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
     is_active              = db.Column(db.Boolean, default=False)       # False until invite accepted
     is_invite_pending      = db.Column(db.Boolean, default=False)
     invite_token           = db.Column(db.String(100), unique=True)     # cleared after acceptance
@@ -900,7 +900,7 @@ class AIUsageLog(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
  
     id         = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
-    tenant_id  = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id',
+    tenant_id  = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id',
                            ondelete='CASCADE'), nullable=False, index=True)
     user_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id',
                            ondelete='SET NULL'), nullable=True)
@@ -931,7 +931,7 @@ class CustomerAuth(db.Model):
 
     customer_user_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
-    tenant_id        = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    tenant_id        = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     email            = db.Column(db.String(255), unique=True, nullable=False)
     password_hash    = db.Column(db.Text, nullable=False)
     is_active        = db.Column(db.Boolean, default=True)
@@ -981,7 +981,7 @@ class OpportunityDetails(db.Model):
 
     opportunity_id                = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     client_id                     = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
-    tenant_id                     = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    tenant_id                     = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
     opportunity_owner_employee_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
     assigned_to_employee_id       = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
     stage_id                      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Stage_Master.stage_id'), nullable=False)
@@ -1097,7 +1097,7 @@ class CaseDocuments(db.Model):
     id             = db.Column(db.Integer, primary_key=True, autoincrement=True)
     opportunity_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Opportunity_Details.opportunity_id'), nullable=False)
     client_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
-    tenant_id      = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    tenant_id      = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     uploaded_by    = db.Column(db.String(255), nullable=False)
     document_type  = db.Column(db.String(100))
     file_name      = db.Column(db.String(255), nullable=False)
@@ -1186,7 +1186,7 @@ class TasksMaster(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     task_id                  = db.Column(db.String(50), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id                = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    tenant_id                = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
     type                     = db.Column(db.String, default='job')
     title                    = db.Column(db.String, nullable=False)
     date                     = db.Column(db.Date)
@@ -1238,7 +1238,7 @@ class ProposalMaster(db.Model):
     quote_id = db.Column(db.String(10), unique=True, nullable=False,
                          server_default=text(f"'QUO-' || lpad(nextval('\"{DB_SCHEMA}\".quote_id_seq')::text, 3, '0')"))
     proposal_id      = db.Column(db.Integer, primary_key=True)
-    tenant_id        = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), index=True)  # ← ADD THIS
+    tenant_id        = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), index=True)  # ← ADD THIS
     client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
     project_id       = db.Column(db.SmallInteger)
     currency_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
@@ -1401,7 +1401,7 @@ class ChatHistory(db.Model):
     __table_args__ = {'schema': DB_SCHEMA}
 
     id         = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id  = db.Column(db.String, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
+    tenant_id  = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
     user_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'), nullable=False, index=True)
     session_id = db.Column(db.String(100), nullable=False, index=True)
     title      = db.Column(db.String(255))
