@@ -98,6 +98,11 @@ def enforce_subscription():
     if request.method == "OPTIONS" or is_allowed_for_expired(request.method, request.path):
         return None
 
+    # The FAI module is billed outside StreemLyne's plans; access to it is
+    # controlled by FAI_TENANT_IDS in fai/routes/auth_helpers.py instead.
+    if request.path.startswith("/api/fai/"):
+        return None
+
     tenant_id = getattr(g, "tenant_id", None) or _populate_request_context()
     if not tenant_id:
         return None

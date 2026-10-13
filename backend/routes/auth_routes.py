@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from database import db
 from models import UserMaster, EmployeeMaster, CustomerAuth, CustomerPasswordReset
 from middleware import auth_required, get_current_user
+from services.tenant_home import get_tenant_home_path
 from datetime import datetime, timedelta, date
 import secrets
 import re
@@ -124,23 +125,6 @@ def login():
     if not user:
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    # Tenants whose software runs as its own app (e.g. FAI): sign the user
-    # in there too and send them to it, so they only sign in once.
-    from services.external_apps import (
-        get_external_app, login_to_external_app, build_redirect_url, ExternalLoginError,
-    )
-    external_app = get_external_app(user.tenant_id)
-    if external_app:
-        try:
-            app_token = login_to_external_app(external_app, user.user_name, password)
-        except ExternalLoginError as e:
-            return jsonify({'error': str(e)}), 502
-        return jsonify({
-            'message': 'Login successful',
-            'app': external_app.get('name'),
-            'redirect_url': build_redirect_url(external_app, app_token),
-        }), 200
-
     if not user.employee:
         return jsonify({'error': 'User account is not linked to an employee'}), 500
 
@@ -149,7 +133,9 @@ def login():
     return jsonify({
         'message': 'Login successful',
         'token': token,
-        'user': user.to_dict()
+        'user': user.to_dict(),
+        # Where this user's software lives in the frontend, e.g. "/fai" for FAI
+        'home_path': get_tenant_home_path(user.tenant_id),
     }), 200
 
 

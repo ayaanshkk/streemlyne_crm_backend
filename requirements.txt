@@ -18,3 +18,8 @@ openai>=1.12.0
 requests
 reportlab
 flask-limiter==3.5.0
+
+# FAI module
+anthropic==0.40.0
+pypdfium2==5.14.0
+supabase==2.31.0

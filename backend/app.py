@@ -316,6 +316,10 @@ def create_app(test_config=None):
         prefix = bp.url_prefix or ""
         app.register_blueprint(bp, url_prefix=f"/api{prefix}")
 
+    # FAI (Forklift Academy of India) module: served under /api/fai
+    from fai.integration import register_fai
+    register_fai(app)
+
     from middleware.subscription_middleware import enforce_subscription
     app.before_request(enforce_subscription)
 
