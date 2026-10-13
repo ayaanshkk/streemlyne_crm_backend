@@ -220,3 +220,47 @@ def admin_required(f):
         except jwt.InvalidTokenError:
             return jsonify({'error': 'Invalid token'}), 401
     return decorated_function
+
+# =========================================================
+# CURRENT USER (used by the FAI screens inside StreemLyne)
+# Sign-in happens at the StreemLyne login; this returns the signed-in
+# user in the shape FAI's screens expect, with the same role logic as
+# login() above.
+# =========================================================
+from .auth_helpers import token_required  # noqa: E402
+
+
+@auth_bp.route("/auth/me", methods=["GET"])
+@token_required
+def me():
+    current = request.current_user
+    session = SessionLocal()
+    try:
+        mapping_roles = get_roles_from_mapping(session, current.user_id)
+        if mapping_roles:
+            role_names = [role[1] for role in mapping_roles]
+        else:
+            role_names = current.roles or []
+        primary_role = role_names[0] if role_names else 'Staff'
+        return jsonify({
+            'user': {
+                'id': current.user_id,
+                'user_id': current.user_id,
+                'name': current.username,
+                'username': current.username,
+                'email': current.email or current.username,
+                'first_name': '',
+                'last_name': '',
+                'full_name': current.employee_name or '',
+                'role': primary_role,
+                'roles': role_names,
+                'is_admin': any('admin' in r.lower() for r in role_names),
+                'phone': current.phone,
+                'employee_id': current.employee_id,
+                'tenant_id': current.tenant_id,
+                'is_active': True,
+                'is_verified': True,
+            }
+        }), 200
+    finally:
+        session.close()
