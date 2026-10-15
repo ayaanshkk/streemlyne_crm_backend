@@ -502,16 +502,17 @@ class ServicesMaster(db.Model):
     __tablename__ = 'Services_Master'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    service_id          = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    tenant_id           = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
-    service_code        = db.Column(db.String(50), nullable=False)
-    service_title       = db.Column(db.String(255), nullable=False)
-    service_description = db.Column(db.String)
-    service_rate        = db.Column(db.Float(precision=24))
-    currency_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
-    supplier_id         = db.Column(db.SmallInteger)
-    date_from           = db.Column(db.Date)
-    date_to             = db.Column(db.Date)
+    # Services_Master was rebuilt as a service catalogue with capitalised
+    # column names; the Python attribute names are kept so callers don't change.
+    service_id          = db.Column('Services_Master_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    tenant_id           = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), index=True)
+    service_code        = db.Column('Service_Code', db.String)
+    service_title       = db.Column('Service_Name', db.String)
+    service_description = db.Column('Service_Description', db.String)
+    service_rate        = db.Column('Service_Rate', db.Float)
+    currency_id         = db.Column('Currency_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
+    supplier_id         = db.Column('Supplier_ID', db.Integer)
+    service_status_id   = db.Column('Service_Status_ID', db.Integer)
     created_at          = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     tenant   = db.relationship('TenantMaster', back_populates='services')
@@ -527,8 +528,7 @@ class ServicesMaster(db.Model):
             'service_description': self.service_description, 'service_rate': self.service_rate,
             'currency_id': self.currency_id,
             'currency_code': self.currency.currency_code if self.currency else None,
-            'date_from': self.date_from.isoformat() if self.date_from else None,
-            'date_to': self.date_to.isoformat() if self.date_to else None,
+            'service_status_id': self.service_status_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -547,11 +547,13 @@ class UOMMaster(db.Model):
 
 
 class StageMaster(db.Model):
-    __tablename__ = 'Stage_Master'
+    # Stage_Master was replaced by Pipeline_Stage_Master (same columns);
+    # per-tenant stage names live in Tenant_Pipeline_Stage_Mapping.
+    __tablename__ = 'Pipeline_Stage_Master'
     __table_args__ = {'schema': DB_SCHEMA}
 
     stage_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    stage_name         = db.Column(db.String(100), nullable=False, unique=True)
+    stage_name         = db.Column(db.String(100), nullable=False)
     stage_description  = db.Column(db.String)
     preceding_stage_id = db.Column(db.SmallInteger)
     stage_type         = db.Column(db.SmallInteger, nullable=False)
@@ -984,9 +986,9 @@ class OpportunityDetails(db.Model):
     tenant_id                     = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
     opportunity_owner_employee_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
     assigned_to_employee_id       = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
-    stage_id                      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Stage_Master.stage_id'), nullable=False)
+    stage_id                      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Pipeline_Stage_Master.stage_id'), nullable=False)
     currency_id                   = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
-    service_id                    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'))
+    service_id                    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'))
     opportunity_title             = db.Column(db.String(255), nullable=False)
     opportunity_description       = db.Column(db.String)
     opportunity_date              = db.Column(db.Date)
@@ -1143,7 +1145,7 @@ class EnergyContractMaster(db.Model):
     project_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
     employee_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=False)
     supplier_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Supplier_Master.supplier_id'), nullable=False)
-    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'), nullable=False)
+    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'), nullable=False)
     currency_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     contract_start_date = db.Column(db.Date, nullable=False)
     contract_end_date   = db.Column(db.Date, nullable=False)
@@ -1286,7 +1288,7 @@ class ProposalDetails(db.Model):
     proposal_id         = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Proposal_Master.proposal_id'), nullable=False)
     quantity            = db.Column(db.Numeric(10, 2), nullable=False)
     amount              = db.Column(db.Numeric(12, 2))
-    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'), nullable=False)
+    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'), nullable=False)
     uom_id              = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=False)
     service_name        = db.Column(db.String(255))
     created_at          = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
@@ -1366,7 +1368,7 @@ class InvoiceDetails(db.Model):
 
     invoice_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
     invoice_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Invoice_Master.invoice_id'), nullable=False)
-    service_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.service_id'), nullable=True)
+    service_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'), nullable=True)
     uom_id             = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=True)
     quantity           = db.Column(db.Float(precision=24), nullable=True, default=1.0)
     service_name       = db.Column(db.String(500), nullable=True)
@@ -1435,6 +1437,181 @@ Assignment = TasksMaster
 
 # These models were removed (no backing table) but may still be imported.
 # Provide stubs so existing imports don't crash at startup.
+
+# ===========================================================================
+# New tables designed by the client for StreemLyne + FAI (Oct 2026).
+# Existing clients keep using the old tables (Quotation_Master, Invoice_Master,
+# Opportunity_Details, ...); StreemLyne, FAI and future clients use these.
+# Column names follow the database exactly (some contain capitals or spaces),
+# Python attribute names are snake_case.
+# ===========================================================================
+
+class TenantPipelineStage(db.Model):
+    __tablename__ = 'Tenant_Pipeline_Stage_Mapping'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    tenant_pipeline_stage_mapping_id = db.Column('Tenant_Pipeline_Stage_Mapping_id', db.BigInteger, primary_key=True, autoincrement=True)
+    pipeline_stage_id              = db.Column('Pipeline_Stage_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Pipeline_Stage_Master.stage_id'))
+    tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    stage_name                     = db.Column('Stage_Name', db.String)
+    description                    = db.Column('Description', db.String)
+    preceding_stage_id             = db.Column('Preceding_Stage_ID', db.BigInteger)
+    created_at                     = db.Column(db.DateTime(timezone=True), nullable=False)
+
+
+class LeadMaster(db.Model):
+    __tablename__ = 'Lead_Master'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    lead_id                        = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id                      = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    client_id                      = db.Column('client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
+    assigned_employee_id           = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'))
+    stage_id                       = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Pipeline_Stage_Master.stage_id'), nullable=False)
+    lead_title                     = db.Column(db.String, nullable=False)
+    lead_description               = db.Column(db.String, nullable=False)
+    lead_date                      = db.Column(db.Date, nullable=False)
+    expected_value                 = db.Column(db.Integer)
+    currency_id                    = db.Column(db.Integer)
+    lead_source                    = db.Column(db.String)
+    qualification_status           = db.Column('qualification status', db.Integer)
+    priority                       = db.Column(db.Integer)
+    expected_decision_date         = db.Column('expected_decision_date ', db.Date)
+    last_contacted_date            = db.Column(db.Date)
+    next_followup_date             = db.Column(db.Date)
+    created_by                     = db.Column(db.Integer)
+    created_date                   = db.Column(db.Date)
+    modified_by                    = db.Column(db.Integer)
+    modified_date                  = db.Column(db.Date)
+    won_at                         = db.Column(db.DateTime(timezone=True))
+
+
+class QuotationMasterNew(db.Model):
+    __tablename__ = 'Quotation_Master_new'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    client_id                      = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
+    lead_id                        = db.Column('Lead_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Lead_Master.lead_id'))
+    project_id                     = db.Column('Project_ID', db.Integer)
+    quotation_number               = db.Column('Quotation_Number', db.String, nullable=False)
+    created_by_user_id             = db.Column('Created_by_user_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'), nullable=False)
+    quotation_date                 = db.Column('Quotation_Date', db.Date, nullable=False)
+    valid_until                    = db.Column('Valid_Until', db.Date)
+    contact_id                     = db.Column('Contact_ID', db.Integer)
+    status_id                      = db.Column('Status_ID', db.Integer, nullable=False)
+    approved_by_user_id            = db.Column('Approved_By_User_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'))
+    approval_date                  = db.Column('Approval_Date', db.Date)
+    sub_total                      = db.Column('Sub_Total', db.Numeric, nullable=False)
+    tax_amount                     = db.Column('Tax_Amount', db.Numeric, nullable=False)
+    currency_id                    = db.Column('Currency_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
+    discount_percent               = db.Column('Discount_percent', db.Float)
+    updated_at                     = db.Column('Updated_At', db.DateTime(timezone=True))
+    updated_by                     = db.Column('Updated_By', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'))
+    notes                          = db.Column(db.String)
+    terms                          = db.Column(db.Text)
+
+
+class QuotationDetailsNew(db.Model):
+    __tablename__ = 'Quotation_Details_new'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    quotation_details_id           = db.Column('Quotation_Details_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'), nullable=False)
+    product_variant_id             = db.Column('Product_Variant_ID', db.Integer, nullable=False)
+    quantity                       = db.Column('Quantity', db.Float, nullable=False)
+    uom_id                         = db.Column('UOM_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=False)
+    rate                           = db.Column('Rate', db.Float, nullable=False)
+    price_list_id                  = db.Column('Price_List_ID', db.Integer)
+    discount_amount                = db.Column('Discount_Amount', db.Float, nullable=False)
+    tax_id                         = db.Column('Tax_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tax_Master.tax_id'))
+    tax_amount                     = db.Column('Tax_Amount', db.Float)
+    item_name                      = db.Column('Item_Name', db.String, nullable=False)
+    description                    = db.Column('Description', db.String)
+    total_amount                   = db.Column('Total_Amount', db.Float, nullable=False)
+
+
+class InvoiceMasterNew(db.Model):
+    __tablename__ = 'Invoice_Master_New'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    invoice_id                     = db.Column('Invoice_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'))
+    tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    client_id                      = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
+    project_id                     = db.Column('Project_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
+    invoice_number                 = db.Column('Invoice_Number', db.String)
+    invoice_date                   = db.Column('Invoice_Date', db.Date)
+    po_reference                   = db.Column('PO_Reference', db.String)
+    due_date                       = db.Column('Due_Date', db.Date)
+    contact_id                     = db.Column('Contact_ID', db.BigInteger)
+    status_id                      = db.Column('Status_ID', db.Integer)
+    sub_total                      = db.Column('Sub_Total', db.Float)
+    tax_amount                     = db.Column('Tax_Amount', db.Float)
+    currency_id                    = db.Column('Currency_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
+    discount_amount                = db.Column('Discount_Amount', db.Float)
+
+
+class TrainingMasterNew(db.Model):
+    __tablename__ = 'Training_Master_New'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    training_id                    = db.Column('Training_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'))
+    tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
+    client_id                      = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
+    service_id                     = db.Column('Service_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'), nullable=False)
+    training_start_date            = db.Column('Training_Start_Date', db.Date, nullable=False)
+    training_end_date              = db.Column('Training_End_Date', db.Date, nullable=False)
+    training_location_city_id      = db.Column('Training_Location_City_ID', db.BigInteger, nullable=False)
+    stage_id                       = db.Column('Stage_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Pipeline_Stage_Master.stage_id'), nullable=False)
+    created_at                     = db.Column('Created_At', db.DateTime(timezone=True))
+
+
+class TrainingDetailsNew(db.Model):
+    __tablename__ = 'Training_Details_New'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    training_details_id            = db.Column('Training_Details_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    training_id                    = db.Column('Training_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Training_Master_New.Training_ID'), nullable=False)
+    event_number                   = db.Column('Event_Number', db.String, nullable=False)
+    batch_start_date               = db.Column('Batch_Start_Date', db.Date, nullable=False)
+    batch_end_date                 = db.Column('Batch_End_Date', db.Date, nullable=False)
+    no_of_participants             = db.Column('No_Of_Participants', db.Integer, nullable=False)
+    trainer_id                     = db.Column('Trainer_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=False)
+    stage_id                       = db.Column('Stage_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Pipeline_Stage_Master.stage_id'), nullable=False)
+    remarks                        = db.Column('Remarks', db.String)
+    created_at                     = db.Column(db.DateTime(timezone=True))
+
+
+class MHEMaster(db.Model):
+    __tablename__ = 'MHE_Master'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    mhe_id                         = db.Column('MHE_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    mhe_name                       = db.Column('MHE_Name', db.String)
+    description                    = db.Column('Description', db.String)
+
+
+class TrainingParticipantData(db.Model):
+    __tablename__ = 'Training_Participant_Data'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    training_participant_data_id   = db.Column('Training_Participant_Data_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    training_details_id            = db.Column('Training_Details_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Training_Details_New.Training_Details_ID'), nullable=False)
+    participant_name               = db.Column('Participant_Name', db.String, nullable=False)
+    mhe_id                         = db.Column('MHE_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.MHE_Master.MHE_ID'), nullable=False)
+    pre_test                       = db.Column('Pre_Test', db.Integer, nullable=False)
+    post_test                      = db.Column('Post_Test', db.Integer, nullable=False)
+    practical                      = db.Column('Practical', db.Integer)
+    practical_out_of_marks         = db.Column('Practical_out_of_Marks', db.Integer)
+    evaluation_date                = db.Column('Evaluation_Date', db.Date)
+    sweet_points                   = db.Column('Sweet_Points', db.Integer, nullable=False)
+    is_champion                    = db.Column('Is_Champion', db.Boolean, nullable=False)
+    certificate_number             = db.Column('Certificate_Number', db.String)
+
+
 # Routes that use these should be updated to use TasksMaster or removed.
 class _RemovedModel:
     """Placeholder for removed models with no backing table."""

@@ -8,9 +8,9 @@ Schema alignment (StreemLyne_MT):
   Country_Master  : country_id, country_name (UNIQUE), country_isd_code, created_at
   Currency_Master : currency_id, currency_name, currency_code, created_at
   UOM_Master      : uom_id, uom_description, created_at
-  Services_Master : service_id, tenant_id, service_code (NOT NULL), service_title,
-                    service_description, service_rate, currency_id, supplier_id,
-                    date_from, date_to, created_at
+  Services_Master : Services_Master_ID, Tenant_ID, Service_Code, Service_Name,
+                    Service_Description, Service_Rate, Currency_ID, Supplier_ID,
+                    Service_Status_ID, created_at
   Supplier_Master : supplier_id, supplier_company_name, supplier_contact_name,
                     supplier_provisions (smallint), created_at
   Module_Master   : module_id, module_code (UNIQUE), module_name (UNIQUE),
@@ -494,8 +494,6 @@ def create_service():
         service_rate=data.get('service_rate'),
         currency_id=data.get('currency_id'),
         supplier_id=data.get('supplier_id'),
-        date_from=_parse_date(data.get('date_from')),
-        date_to=_parse_date(data.get('date_to'))
     )
 
     try:
@@ -528,11 +526,6 @@ def update_service(service_id: int):
     for field in ['service_title', 'service_description', 'service_rate', 'currency_id', 'supplier_id']:
         if field in data:
             setattr(s, field, data[field])
-
-    if 'date_from' in data:
-        s.date_from = _parse_date(data['date_from'])
-    if 'date_to' in data:
-        s.date_to = _parse_date(data['date_to'])
 
     try:
         db.session.commit()
@@ -801,8 +794,7 @@ def _service_dict(s: ServicesMaster) -> dict:
         'service_rate':        s.service_rate,
         'currency_id':         s.currency_id,
         'supplier_id':         s.supplier_id,
-        'date_from':           s.date_from.isoformat() if s.date_from else None,
-        'date_to':             s.date_to.isoformat()   if s.date_to   else None,
+        'service_status_id':   s.service_status_id,
         'created_at':          s.created_at.isoformat() if s.created_at else None,
     }
 
