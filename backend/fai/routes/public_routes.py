@@ -75,7 +75,7 @@ def get_public_participant(token):
             row = session.execute(
                 text(f"""
                     SELECT service_id, client_id, participants
-                    FROM {T("Services_Master")}
+                    FROM {T("Services_Master_archive")}
                     WHERE participants @> CAST(:match AS jsonb)
                     LIMIT 1
                 """),
@@ -117,7 +117,7 @@ def get_public_participant(token):
             SELECT sm.service_id, sm.event_number, sm.service_title,
                    sm.date_from, sm.date_to, sm.trainer_name, sm.participants,
                    cm.client_company_name AS company_name
-            FROM {T("Services_Master")} sm
+            FROM {T("Services_Master_archive")} sm
             LEFT JOIN {T("Client_Master")} cm ON cm.client_id = sm.client_id
         """
         if contact_id is not None:

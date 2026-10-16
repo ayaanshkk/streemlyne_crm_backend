@@ -264,7 +264,7 @@ def get_calendar_events():
 
                     sm.remarks AS notes
 
-                FROM "{SCHEMA}"."Services_Master" sm
+                FROM "{SCHEMA}"."Services_Master_archive" sm
 
                 LEFT JOIN "{SCHEMA}"."Client_Master" cm
 

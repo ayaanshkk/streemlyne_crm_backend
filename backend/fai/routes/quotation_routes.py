@@ -347,9 +347,9 @@ def _generate_quotation_number(session, tenant_id, on_date: date) -> str:
 
     last = session.execute(
         text(f"""
-            SELECT COALESCE(MAX(CAST(SUBSTRING(quotation_number FROM 7) AS BIGINT)), 0)
+            SELECT COALESCE(MAX(CAST(SUBSTRING("Quotation_Number" FROM 7) AS BIGINT)), 0)
             FROM {T_MASTER}
-            WHERE tenant_id = :tid AND quotation_number ~ :pattern
+            WHERE "Tenant_ID" = :tid AND "Quotation_Number" ~ :pattern
         """),
         {"tid": tenant_id, "pattern": pattern}
     ).scalar() or 0

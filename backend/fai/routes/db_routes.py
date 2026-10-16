@@ -110,7 +110,7 @@ def get_latest_opportunity(session, client_id):
                    od.created_at,
                    sm.stage_name, sm.stage_type
             FROM "streemLyne_mt_dev2"."Opportunity_Details" od
-            LEFT JOIN "streemLyne_mt_dev2"."Stage_Master" sm ON sm.stage_id = od.stage_id
+            LEFT JOIN "streemLyne_mt_dev2"."Pipeline_Stage_Master" sm ON sm.stage_id = od.stage_id
             WHERE od.client_id = :cid
             ORDER BY od.created_at DESC
             LIMIT 1
@@ -458,7 +458,7 @@ def handle_customers():
             # Resolve default sales stage
             stage_row = session.execute(
                 text("""
-                    SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Stage_Master"
+                    SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                     WHERE stage_type = :stype ORDER BY stage_id ASC LIMIT 1
                 """),
                 {"stype": STAGE_TYPE_SALES}
@@ -705,7 +705,7 @@ def update_customer_stage(client_id):
         target_stage_type = STAGE_TYPE_TRAINING if pipeline_type == 'training' else STAGE_TYPE_SALES
         stage_row = session.execute(
             text("""
-                SELECT stage_id FROM "streemLyne_mt_dev2"."Stage_Master"
+                SELECT stage_id FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                 WHERE LOWER(stage_name) = LOWER(:sname)
                 AND stage_type = :stype LIMIT 1
             """),
@@ -729,7 +729,7 @@ def update_customer_stage(client_id):
             if new_stage == 'Converted' and not existing_misc.get('training_stage'):
                 training_stage_row = session.execute(
                     text("""
-                        SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Stage_Master"
+                        SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                         WHERE stage_type = :stype ORDER BY stage_id ASC LIMIT 1
                     """),
                     {"stype": STAGE_TYPE_TRAINING}
@@ -828,7 +828,7 @@ def get_pipeline_data(pipeline_type):
                        sm.stage_name, sm.stage_type
                 FROM "streemLyne_mt_dev2"."Client_Master" cm
                 JOIN "streemLyne_mt_dev2"."Opportunity_Details" od ON od.client_id = cm.client_id
-                JOIN "streemLyne_mt_dev2"."Stage_Master" sm ON sm.stage_id = od.stage_id
+                JOIN "streemLyne_mt_dev2"."Pipeline_Stage_Master" sm ON sm.stage_id = od.stage_id
                 WHERE cm.tenant_id = :tid
                 AND sm.stage_type = :stype
                 ORDER BY cm.client_company_name ASC

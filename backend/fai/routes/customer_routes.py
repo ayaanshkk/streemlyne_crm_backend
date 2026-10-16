@@ -279,7 +279,7 @@ def auto_advance_training_stage(session, client_id, tenant_id, target_stage):
 
     stage_row = session.execute(
         text("""
-            SELECT stage_id FROM "streemLyne_mt_dev2"."Stage_Master"
+            SELECT stage_id FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
             WHERE stage_type = :stype AND stage_name = :sname
             LIMIT 1
         """),
@@ -1098,7 +1098,7 @@ def get_latest_opportunity(session, client_id):
                    od.created_at,
                    sm.stage_name, sm.stage_type
             FROM "streemLyne_mt_dev2"."Opportunity_Details" od
-            LEFT JOIN "streemLyne_mt_dev2"."Stage_Master" sm ON sm.stage_id = od.stage_id
+            LEFT JOIN "streemLyne_mt_dev2"."Pipeline_Stage_Master" sm ON sm.stage_id = od.stage_id
             WHERE od.client_id = :cid
             AND sm.stage_type = 2
             ORDER BY od.created_at DESC
@@ -1119,7 +1119,7 @@ def get_latest_opportunity(session, client_id):
                    od.created_at,
                    sm.stage_name, sm.stage_type
             FROM "streemLyne_mt_dev2"."Opportunity_Details" od
-            LEFT JOIN "streemLyne_mt_dev2"."Stage_Master" sm ON sm.stage_id = od.stage_id
+            LEFT JOIN "streemLyne_mt_dev2"."Pipeline_Stage_Master" sm ON sm.stage_id = od.stage_id
             WHERE od.client_id = :cid
             AND (sm.stage_type = 1 OR sm.stage_type IS NULL)
             ORDER BY od.created_at DESC
@@ -1626,7 +1626,7 @@ def update_customer_stage(client_id):
         # Look up the new stage_id from Stage_Master (using backend stage name)
         stage_row = session.execute(
             text("""
-                SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Stage_Master"
+                SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                 WHERE LOWER(stage_name) = LOWER(:sname)
                 AND stage_type = :stype
                 LIMIT 1
@@ -1638,7 +1638,7 @@ def update_customer_stage(client_id):
         if not stage_row:
             stage_row = session.execute(
                 text("""
-                    SELECT stage_id, stage_name, stage_type FROM "streemLyne_mt_dev2"."Stage_Master"
+                    SELECT stage_id, stage_name, stage_type FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                     WHERE LOWER(stage_name) = LOWER(:sname)
                     LIMIT 1
                 """),
@@ -1682,7 +1682,7 @@ def update_customer_stage(client_id):
             if new_stage == 'Converted' and not existing_misc.get('training_stage'):
                 training_stage_row = session.execute(
                     text("""
-                        SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Stage_Master"
+                        SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                         WHERE stage_type = :stype
                         AND stage_name = 'Awaiting Scheduling'
                         LIMIT 1
@@ -1936,7 +1936,7 @@ def get_customer_stats():
                 SELECT sm.stage_name, sm.stage_type, COUNT(od.opportunity_id) AS cnt
                 FROM "streemLyne_mt_dev2"."Opportunity_Details" od
                 JOIN "streemLyne_mt_dev2"."Client_Master" cm ON cm.client_id = od.client_id
-                JOIN "streemLyne_mt_dev2"."Stage_Master" sm  ON sm.stage_id  = od.stage_id
+                JOIN "streemLyne_mt_dev2"."Pipeline_Stage_Master" sm  ON sm.stage_id  = od.stage_id
                 WHERE cm.tenant_id = :tid
                 GROUP BY sm.stage_name, sm.stage_type
             """),

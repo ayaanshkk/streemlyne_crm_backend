@@ -123,10 +123,10 @@ def _allocate_service_ids(session, how_many):
     creating batches at the same moment cannot receive the same id.
     """
     session.execute(
-        text(f'LOCK TABLE {T("Services_Master")} IN SHARE ROW EXCLUSIVE MODE')
+        text(f'LOCK TABLE {T("Services_Master_archive")} IN SHARE ROW EXCLUSIVE MODE')
     )
     row = session.execute(
-        text(f'SELECT COALESCE(MAX(service_id), 0) + 1 AS next_id FROM {T("Services_Master")}')
+        text(f'SELECT COALESCE(MAX(service_id), 0) + 1 AS next_id FROM {T("Services_Master_archive")}')
     ).fetchone()
     first = int(row.next_id)
     return list(range(first, first + how_many))
@@ -258,7 +258,7 @@ def create_company_training_session(company_id):
 
         result = session.execute(
             text(f"""
-                INSERT INTO {T("Services_Master")}
+                INSERT INTO {T("Services_Master_archive")}
                     (service_id, tenant_id, client_id,
                      service_code, service_title, duration,
                      event_number, date_from, date_to, service_rate,
@@ -324,7 +324,7 @@ def _next_event_base(session, tenant_id) -> int:
     row = session.execute(
         text(f"""
             SELECT MAX(NULLIF(regexp_replace(event_number, '[^0-9]', '', 'g'), '')::int) AS max_event_no
-            FROM {T("Services_Master")} sm
+            FROM {T("Services_Master_archive")} sm
             JOIN {T("Client_Master")} cm ON cm.client_id = sm.client_id
             WHERE cm.tenant_id = :tid AND sm.client_id IS NOT NULL
         """),
@@ -497,7 +497,7 @@ def create_company_training_batches_bulk(company_id):
         for service_id, p in zip(service_ids, prepared):
             session.execute(
                 text(f"""
-                    INSERT INTO {T("Services_Master")}
+                    INSERT INTO {T("Services_Master_archive")}
                         (service_id, tenant_id, client_id,
                          service_code, service_title, duration,
                          event_number, date_from, date_to, service_rate,
@@ -600,7 +600,7 @@ def generate_next_participant_unique_id(db_session, tenant_id, year=None):
                     ''
                 )::bigint
             ), 0) AS max_id
-            FROM {T("Services_Master")} sm
+            FROM {T("Services_Master_archive")} sm
             JOIN {T("Client_Master")} cm ON cm.client_id = sm.client_id,
                  jsonb_array_elements(
                      CASE WHEN jsonb_typeof(sm.participants) = 'array'
@@ -633,7 +633,7 @@ def list_company_training_sessions(company_id):
         rows = session.execute(
             text(f"""
                 SELECT *
-                FROM {T("Services_Master")}
+                FROM {T("Services_Master_archive")}
                 WHERE client_id = :client_id
                 ORDER BY service_id DESC
             """),
@@ -667,7 +667,7 @@ def get_company_training_session(company_id, training_id):
         row = session.execute(
             text(f"""
                 SELECT *
-                FROM {T("Services_Master")}
+                FROM {T("Services_Master_archive")}
                 WHERE service_id = :sid AND client_id = :cid
             """),
             {"sid": training_id, "cid": company_id},
@@ -703,7 +703,7 @@ def update_company_training_session(company_id, training_id):
         existing = session.execute(
             text(f"""
                 SELECT service_id, date_from, date_to
-                FROM {T("Services_Master")}
+                FROM {T("Services_Master_archive")}
                 WHERE service_id = :sid AND client_id = :cid
             """),
             {"sid": training_id, "cid": company_id},
@@ -810,7 +810,7 @@ def update_company_training_session(company_id, training_id):
 
         session.execute(
             text(f"""
-                UPDATE {T("Services_Master")}
+                UPDATE {T("Services_Master_archive")}
                 SET {', '.join(set_clauses)}
                 WHERE service_id = :sid AND client_id = :cid
             """),
@@ -819,7 +819,7 @@ def update_company_training_session(company_id, training_id):
         session.commit()
 
         row = session.execute(
-            text(f'SELECT * FROM {T("Services_Master")} WHERE service_id = :sid'),
+            text(f'SELECT * FROM {T("Services_Master_archive")} WHERE service_id = :sid'),
             {"sid": training_id},
         ).fetchone()
 
@@ -852,7 +852,7 @@ def modify_company_training_participants(company_id, training_id):
         row = session.execute(
             text(f"""
                 SELECT service_id, participants
-                FROM {T("Services_Master")}
+                FROM {T("Services_Master_archive")}
                 WHERE service_id = :sid AND client_id = :cid
             """),
             {"sid": training_id, "cid": company_id},
@@ -919,7 +919,7 @@ def modify_company_training_participants(company_id, training_id):
                                     SELECT
                                         elem->>'qr_token' AS qr_token,
                                         elem->>'participant_unique_id' AS participant_unique_id
-                                    FROM {T("Services_Master")} sm
+                                    FROM {T("Services_Master_archive")} sm
                                     JOIN {T("Client_Master")} cm ON cm.client_id = sm.client_id,
                                          jsonb_array_elements(
                                              CASE WHEN jsonb_typeof(sm.participants) = 'array'
@@ -955,7 +955,7 @@ def modify_company_training_participants(company_id, training_id):
 
         session.execute(
             text(f"""
-                UPDATE {T("Services_Master")}
+                UPDATE {T("Services_Master_archive")}
                 SET participants = :participants, updated_at = NOW()
                 WHERE service_id = :sid
             """),
@@ -1001,7 +1001,7 @@ def update_company_training_stage(company_id, training_id):
         if new_stage in stages.po_required:
             po = session.execute(
                 text(f"""
-                    SELECT po_file_url FROM {T("Services_Master")}
+                    SELECT po_file_url FROM {T("Services_Master_archive")}
                     WHERE service_id = :sid AND client_id = :cid
                 """),
                 {"sid": training_id, "cid": company_id},
@@ -1013,7 +1013,7 @@ def update_company_training_stage(company_id, training_id):
 
         result = session.execute(
             text(f"""
-                UPDATE {T("Services_Master")}
+                UPDATE {T("Services_Master_archive")}
                 SET stage = :stage, updated_at = NOW()
                 WHERE service_id = :sid AND client_id = :cid
             """),
@@ -1075,7 +1075,7 @@ def get_company_next_event_number():
         row = session.execute(
             text(f"""
                 SELECT MAX(NULLIF(regexp_replace(event_number, '[^0-9]', '', 'g'), '')::int) AS max_event_no
-                FROM {T("Services_Master")} sm
+                FROM {T("Services_Master_archive")} sm
                 JOIN {T("Client_Master")} cm ON cm.client_id = sm.client_id
                 WHERE cm.tenant_id = :tid AND sm.client_id IS NOT NULL
             """),
@@ -1121,7 +1121,7 @@ def upload_company_training_po(company_id, training_id):
         batch = session.execute(
             text(f"""
                 SELECT service_id, stage
-                FROM {T("Services_Master")}
+                FROM {T("Services_Master_archive")}
                 WHERE service_id = :sid AND client_id = :cid
             """),
             {"sid": training_id, "cid": company_id},
@@ -1142,7 +1142,7 @@ def upload_company_training_po(company_id, training_id):
 
         session.execute(
             text(f"""
-                UPDATE {T("Services_Master")}
+                UPDATE {T("Services_Master_archive")}
                 SET po_file_url = :url,
                     po_file_name = :name,
                     po_received_at = NOW(),
@@ -1161,7 +1161,7 @@ def upload_company_training_po(company_id, training_id):
         session.commit()
 
         row = session.execute(
-            text(f'SELECT * FROM {T("Services_Master")} WHERE service_id = :sid'),
+            text(f'SELECT * FROM {T("Services_Master_archive")} WHERE service_id = :sid'),
             {"sid": training_id},
         ).fetchone()
         return jsonify(serialize_training(row, stages.default)), 200
