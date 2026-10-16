@@ -354,6 +354,10 @@ def _get_or_404(proposal_id: int) -> ProposalMaster:
         abort(404, description='Proposal not found')
     return proposal
 
+# Status_Master quote statuses
+QUOTE_STATUS_NAMES = {5: 'Draft', 6: 'Pending', 7: 'Sent', 8: 'Approved', 9: 'Rejected'}
+
+
 def _proposal_dict(p: ProposalMaster, include_details: bool = True) -> dict:
     result = {
         'quote_id':         p.quote_id,
@@ -373,7 +377,17 @@ def _proposal_dict(p: ProposalMaster, include_details: bool = True) -> dict:
         'sub_total': float(p.sub_total) if p.sub_total is not None else None,
         'total_amount': float(p.total_amount) if p.total_amount is not None else None,
         'discount_amount': float(p.discount_amount) if p.discount_amount is not None else None,
+        'status_id':        p.status_id,
     }
+    # names used by FAI's copy of the proposals pages
+    result.update({
+        'id':               p.proposal_id,
+        'quotation_number': p.quote_id,
+        'status':           QUOTE_STATUS_NAMES.get(p.status_id, 'Draft'),
+        'grand_total':      result['total_amount'],
+        'date':             result['created_at'],
+        'customer_id':      p.client_id,
+    })
 
     # Fallback: derive customer_name from Client_Master if not stored directly
     if not result['customer_name'] and p.client_id:

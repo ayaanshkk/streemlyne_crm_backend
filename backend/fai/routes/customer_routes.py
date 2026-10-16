@@ -382,8 +382,34 @@ def _pack_calendar_meta(meta: dict) -> str:
 # HELPER: Serialize a Client_Master row to dict
 # Optionally enriches with latest Opportunity
 # ─────────────────────────────────────────────
+class _ClientRow:
+    """Client_Master row in dev2: fields that are not columns there (contact
+    name, city, department contacts, ...) are read from its metadata JSON,
+    either at the top level or under 'legacy_streemlyne_mt' (migrated rows)."""
+
+    def __init__(self, row):
+        self._row = row
+        meta = getattr(row, 'metadata', None) or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except ValueError:
+                meta = {}
+        legacy = meta.get('legacy_streemlyne_mt') if isinstance(meta.get('legacy_streemlyne_mt'), dict) else {}
+        self._extra = {**legacy, **{k: v for k, v in meta.items() if k != 'legacy_streemlyne_mt'}}
+        if 'contact_name' in self._extra and not self._extra.get('client_contact_name'):
+            self._extra['client_contact_name'] = self._extra['contact_name']
+
+    def __getattr__(self, name):
+        try:
+            return getattr(self._row, name)
+        except AttributeError:
+            return self._extra.get(name)
+
+
 def serialize_client(row, opportunity=None):
     """Convert a Client_Master row (and optional opportunity row) to response dict."""
+    row = _ClientRow(row)
 
     client = {
         "id":                   row.client_id,       # legacy alias
