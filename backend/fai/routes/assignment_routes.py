@@ -634,12 +634,12 @@ def get_available_jobs():
             text("""
                 SELECT pd.project_id, pd.project_title, pd.project_description,
                        pd.start_date, pd.end_date, pd.client_id,
-                       pd.misc_col1 AS status,
+                       pd."Misc_Col1" AS status,
                        cm.client_company_name
                 FROM "streemLyne_mt_dev2"."Project_Details" pd
                 LEFT JOIN "streemLyne_mt_dev2"."Client_Master" cm ON cm.client_id = pd.client_id
-                WHERE pd.misc_col1 NOT IN ('Completed', 'Cancelled')
-                   OR pd.misc_col1 IS NULL
+                WHERE pd."Misc_Col1" NOT IN ('Completed', 'Cancelled')
+                   OR pd."Misc_Col1" IS NULL
                 ORDER BY pd.project_id DESC
             """)
         ).fetchall()

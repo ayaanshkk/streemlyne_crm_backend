@@ -259,14 +259,14 @@ def add_detail_line(proposal_id: int):
     _get_or_404(proposal_id)
     data = request.get_json() or {}
 
-    required = ['service_id', 'quantity', 'uom_id']
+    required = ['quantity', 'uom_id']
     missing = [f for f in required if data.get(f) is None]
     if missing:
         return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
 
     detail = ProposalDetails(
         proposal_id=proposal_id,
-        service_id=item.get('service_id'),
+        service_id=data.get('service_id'),
         quantity=Decimal(str(data['quantity'])),
         amount=Decimal(str(data['amount'])) if data.get('amount') else None,
         uom_id=data['uom_id'],

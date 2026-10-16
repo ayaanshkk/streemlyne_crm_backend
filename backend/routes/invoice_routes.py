@@ -584,7 +584,6 @@ def _invoice_dict(i: InvoiceMaster, include_details: bool = True) -> dict:
         result['details'] = [
             _detail_dict(d)
             for d in InvoiceDetails.query
-            .options(db.joinedload(InvoiceDetails.service))
             .filter_by(invoice_id=i.invoice_id).all()
         ]
 

@@ -61,6 +61,11 @@ def register_fai(app):
             name=f"fai_{bp.name}",
         )
 
+    # FAI's Proposals page is a copy of StreemLyne's and has no FAI backend
+    # route; serve StreemLyne's (same login, same quotations table) under /fai.
+    from routes.proposal_routes import proposal_bp
+    app.register_blueprint(proposal_bp, url_prefix=URL_PREFIX + proposal_bp.url_prefix, name="fai_proposal")
+
     if os.getenv("TELEGRAM_BOT_TOKEN"):
         from .reminder_scheduler import start_scheduler
         start_scheduler()

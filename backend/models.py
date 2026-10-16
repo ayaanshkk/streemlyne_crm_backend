@@ -21,11 +21,23 @@ from datetime import datetime, date, timezone
 from typing import cast
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import Enum as SAEnum, text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.ext.mutable import MutableDict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import db, DB_SCHEMA
+
+
+def _current_user_id():
+    from flask import g, has_request_context
+    return getattr(g, 'user_id', None) if has_request_context() else None
+
+
+def _current_employee_id():
+    from flask import g, has_request_context
+    return getattr(g, 'employee_id', None) if has_request_context() else None
 
 
 # ============================================================================
@@ -686,23 +698,83 @@ class ClientMaster(db.Model):
     __tablename__ = 'Client_Master'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    client_id           = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
+    client_id           = db.Column(db.Integer, primary_key=True, autoincrement=True)
     tenant_id           = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False, index=True)
     country_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Country_Master.country_id'))
     default_currency_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     client_company_name = db.Column(db.String(255), nullable=False)
-    client_contact_name = db.Column(db.String(255))
     address             = db.Column(db.String)
     post_code           = db.Column(db.String(20))
     client_phone        = db.Column(db.String(50))
     client_email        = db.Column(db.String(255))
     client_website      = db.Column(db.String(255))
     created_at          = db.Column(db.DateTime(timezone=False), default=datetime.utcnow)
-    stage               = db.Column(db.String(50), nullable=True)
     stage_updated_at    = db.Column(db.DateTime(timezone=True), nullable=True)
-    is_deleted          = db.Column(db.Boolean, default=False, nullable=True)
-    assigned_employee_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=True)
-    created_by_employee_id  = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'), nullable=True)
+    status_id           = db.Column(db.BigInteger, nullable=False, default=1)   # Status_Master: 1 Active, 4 Deleted
+    # dev2 column "created_by_user_id" references Employee_Master despite its name
+    created_by_employee_id  = db.Column('created_by_user_id', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Employee_Master.employee_id'),
+                                        nullable=False, default=_current_employee_id)
+    # Client_Master in dev2 has no contact-name / stage / assigned-employee
+    # columns; StreemLyne keeps them in its "metadata" JSON column instead.
+    extra_data          = db.Column('metadata', MutableDict.as_mutable(JSONB), default=dict)
+
+    def _get_extra(self, key):
+        return (self.extra_data or {}).get(key)
+
+    def _set_extra(self, key, value):
+        if self.extra_data is None:
+            self.extra_data = {}
+        self.extra_data[key] = value
+
+    @hybrid_property
+    def client_contact_name(self):
+        return self._get_extra('contact_name')
+
+    @client_contact_name.setter
+    def client_contact_name(self, value):
+        self._set_extra('contact_name', value)
+
+    @client_contact_name.expression
+    def client_contact_name(cls):
+        return cls.extra_data['contact_name'].astext
+
+    @hybrid_property
+    def stage(self):
+        return self._get_extra('stage')
+
+    @stage.setter
+    def stage(self, value):
+        self._set_extra('stage', value)
+
+    @stage.expression
+    def stage(cls):
+        return cls.extra_data['stage'].astext
+
+    @hybrid_property
+    def assigned_employee_id(self):
+        v = self._get_extra('assigned_employee_id')
+        return int(v) if v is not None else None
+
+    @assigned_employee_id.setter
+    def assigned_employee_id(self, value):
+        self._set_extra('assigned_employee_id', int(value) if value not in (None, '') else None)
+
+    @assigned_employee_id.expression
+    def assigned_employee_id(cls):
+        return cls.extra_data['assigned_employee_id'].astext.cast(db.Integer)
+
+    @hybrid_property
+    def is_deleted(self):
+        return self.status_id == 4
+
+    @is_deleted.setter
+    def is_deleted(self, value):
+        self.status_id = 4 if value else 1
+
+    @is_deleted.expression
+    def is_deleted(cls):
+        return cls.status_id == 4
+
     tenant             = db.relationship('TenantMaster', back_populates='clients')
     country            = db.relationship('CountryMaster', backref='clients')
     default_currency   = db.relationship('CurrencyMaster', backref='default_currency_clients')
@@ -1234,28 +1306,55 @@ class TasksMaster(db.Model):
 # ============================================================================
 
 class ProposalMaster(db.Model):
-    __tablename__ = 'Proposal_Master'
+    # StreemLyne quotes live in the client's Quotation_Master_new (shared with
+    # FAI). Attribute names are kept so the routes work unchanged; fields that
+    # have no column there are plain, unsaved attributes.
+    __tablename__ = 'Quotation_Master_new'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    quote_id = db.Column(db.String(10), unique=True, nullable=False,
-                         server_default=text(f"'QUO-' || lpad(nextval('\"{DB_SCHEMA}\".quote_id_seq')::text, 3, '0')"))
-    proposal_id      = db.Column(db.Integer, primary_key=True)
-    tenant_id        = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), index=True)  # ← ADD THIS
-    client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
-    project_id       = db.Column(db.SmallInteger)
-    currency_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
-    sub_total        = db.Column(db.Numeric(12, 2))
-    total_amount     = db.Column(db.Numeric(12, 2), nullable=False)
-    discount_percent = db.Column(db.Float(precision=24))
-    discount_amount  = db.Column(db.Numeric(12, 2))
-    tax_id           = db.Column(db.SmallInteger)
-    customer_name    = db.Column(db.String(255))
-    notes            = db.Column(db.Text)
-    company_details  = db.Column(db.JSON)
-    payment_details  = db.Column(db.JSON)
-    tax_breakdown    = db.Column(db.JSON)
-    created_at       = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at       = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    proposal_id      = db.Column('Quotation_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    quote_id         = db.Column('Quotation_Number', db.String, nullable=False,
+                                 default=lambda: 'QUO-' + datetime.utcnow().strftime('%y%m%d-%H%M%S'))
+    tenant_id        = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), index=True)
+    client_id        = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
+    project_id       = db.Column('Project_ID', db.Integer)
+    currency_id      = db.Column('Currency_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
+    sub_total        = db.Column('Sub_Total', db.Numeric, nullable=False, default=0)
+    tax_amount       = db.Column('Tax_Amount', db.Numeric, nullable=False, default=0)
+    discount_percent = db.Column('Discount_percent', db.Float)
+    notes            = db.Column('notes', db.String)
+    terms            = db.Column('terms', db.Text)
+    status_id        = db.Column('Status_ID', db.Integer, nullable=False, default=5)   # 5 = Draft
+    valid_until      = db.Column('Valid_Until', db.Date)
+    created_by_user_id = db.Column('Created_by_user_ID', db.Integer, nullable=False, default=_current_user_id)
+    created_at       = db.Column('Quotation_Date', db.Date, nullable=False, default=date.today)
+    updated_at       = db.Column('Updated_At', db.DateTime(timezone=True), onupdate=datetime.utcnow)
+
+    # not stored in Quotation_Master_new
+    tax_id = customer_name = company_details = payment_details = tax_breakdown = None
+    _discount_amount = None
+
+    @property
+    def discount_amount(self):
+        if self._discount_amount is not None:
+            return self._discount_amount
+        if self.discount_percent and self.sub_total:
+            return float(self.sub_total) * float(self.discount_percent) / 100
+        return 0
+
+    @discount_amount.setter
+    def discount_amount(self, value):
+        self._discount_amount = value
+
+    @property
+    def total_amount(self):
+        return float(self.sub_total or 0) + float(self.tax_amount or 0) - float(self.discount_amount or 0)
+
+    @total_amount.setter
+    def total_amount(self, value):
+        # the table stores sub total + tax; keep the tax part of a given total
+        if value is not None and self.sub_total is not None:
+            self.tax_amount = max(float(value) - float(self.sub_total) + float(self.discount_amount or 0), 0)
 
     client           = db.relationship('ClientMaster', back_populates='proposals')
     currency         = db.relationship('CurrencyMaster', backref='proposals')
@@ -1281,21 +1380,26 @@ class ProposalMaster(db.Model):
 
 
 class ProposalDetails(db.Model):
-    __tablename__ = 'Proposal_Details'
+    # Lines of StreemLyne quotes, in the client's Quotation_Details_new.
+    # Product_Variant_ID and UOM_ID are required there.
+    __tablename__ = 'Quotation_Details_new'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    proposal_details_id = db.Column(db.Integer, primary_key=True)
-    proposal_id         = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Proposal_Master.proposal_id'), nullable=False)
-    quantity            = db.Column(db.Numeric(10, 2), nullable=False)
-    amount              = db.Column(db.Numeric(12, 2))
-    service_id          = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'), nullable=False)
-    uom_id              = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=False)
-    service_name        = db.Column(db.String(255))
-    created_at          = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at          = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    proposal_details_id = db.Column('Quotation_Details_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    proposal_id         = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'), nullable=False)
+    product_variant_id  = db.Column('Product_Variant_ID', db.Integer, nullable=False)
+    quantity            = db.Column('Quantity', db.Float, nullable=False, default=1)
+    uom_id              = db.Column('UOM_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=False)
+    rate                = db.Column('Rate', db.Float, nullable=False, default=0)
+    line_discount       = db.Column('Discount_Amount', db.Float, nullable=False, default=0)
+    amount              = db.Column('Total_Amount', db.Float, nullable=False, default=0)
+    service_name        = db.Column('Item_Name', db.String, nullable=False, default='Item')
+    description         = db.Column('Description', db.String)
+
+    # not stored in Quotation_Details_new
+    service_id = service = created_at = updated_at = None
 
     proposal = db.relationship('ProposalMaster', back_populates='proposal_details')
-    service  = db.relationship('ServicesMaster', backref='proposal_details')
     uom      = db.relationship('UOMMaster', backref='proposal_details')
 
     def to_dict(self):
@@ -1312,26 +1416,37 @@ class ProposalDetails(db.Model):
 
 
 class InvoiceMaster(db.Model):
-    __tablename__ = 'Invoice_Master'
+    # StreemLyne invoices live in the client's Invoice_Master_New.
+    __tablename__ = 'Invoice_Master_New'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    invoice_id       = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    client_id        = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
-    project_id       = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
-    proposal_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Proposal_Master.proposal_id'))
-    currency_id      = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
-    invoice_number   = db.Column(db.String, nullable=False)
-    billing_remarks  = db.Column(db.String)
-    sub_total        = db.Column(db.Float(precision=24))
-    vat              = db.Column(db.Numeric(precision=12, scale=2))
-    other_taxes      = db.Column(db.Numeric(precision=12, scale=2))
-    total_amount     = db.Column(db.Float(precision=24), nullable=False)
-    discount_percent = db.Column(db.Float(precision=24))
-    discount_amount  = db.Column(db.Float(precision=24))
-    payment_status   = db.Column(db.String(50), nullable=True, default='Not Paid')
-    tax_id           = db.Column(db.SmallInteger, nullable=False)
-    created_at       = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at       = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
+    invoice_id       = db.Column('Invoice_ID', db.BigInteger, primary_key=True, autoincrement=True)
+    tenant_id        = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'),
+                                 default=lambda: getattr(__import__('flask').g, 'tenant_id', None))
+    client_id        = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
+    project_id       = db.Column('Project_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
+    proposal_id      = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'))
+    currency_id      = db.Column('Currency_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
+    invoice_number   = db.Column('Invoice_Number', db.String, nullable=False)
+    billing_remarks  = db.Column('PO_Reference', db.String)
+    sub_total        = db.Column('Sub_Total', db.Float)
+    vat              = db.Column('Tax_Amount', db.Float)
+    discount_amount  = db.Column('Discount_Amount', db.Float)
+    status_id        = db.Column('Status_ID', db.Integer)
+    due_date         = db.Column('Due_Date', db.Date)
+    created_at       = db.Column('Invoice_Date', db.Date, default=date.today)
+
+    # not stored in Invoice_Master_New
+    other_taxes = discount_percent = tax_id = updated_at = None
+    payment_status = 'Not Paid'
+
+    @property
+    def total_amount(self):
+        return float(self.sub_total or 0) + float(self.vat or 0) - float(self.discount_amount or 0)
+
+    @total_amount.setter
+    def total_amount(self, value):
+        pass
 
     client          = db.relationship('ClientMaster', back_populates='invoices')
     project         = db.relationship('ProjectDetails', back_populates='invoices')
@@ -1366,18 +1481,20 @@ class InvoiceDetails(db.Model):
     __tablename__ = 'Invoice_Details'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    invoice_details_id = db.Column(db.SmallInteger, primary_key=True, autoincrement=True)
-    invoice_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Invoice_Master.invoice_id'), nullable=False)
-    service_id         = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'), nullable=True)
+    invoice_details_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    invoice_id         = db.Column(db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Invoice_Master_New.Invoice_ID'), nullable=False)
+    product_variant_id = db.Column('Product_Variant_ID', db.SmallInteger, nullable=False)
     uom_id             = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=True)
-    quantity           = db.Column(db.Float(precision=24), nullable=True, default=1.0)
-    service_name       = db.Column(db.String(500), nullable=True)
+    quantity           = db.Column(db.Float(precision=24), nullable=False, default=1.0)
+    service_name       = db.Column('Product_name', db.String(500), nullable=True)
     unit_price         = db.Column(db.Float(precision=24), nullable=True)
+    description        = db.Column(db.Text)
+    amount             = db.Column(db.Numeric, default=0)
     created_at         = db.Column(db.DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at         = db.Column(db.DateTime(timezone=False), onupdate=datetime.utcnow)
 
     invoice = db.relationship('InvoiceMaster', back_populates='invoice_details')
-    service = db.relationship('ServicesMaster', backref='invoice_details')
+    service = service_id = None   # lines reference Product_Variant now, not Services_Master
     uom     = db.relationship('UOMMaster', backref='invoice_details')
 
     def to_dict(self):
@@ -1486,71 +1603,8 @@ class LeadMaster(db.Model):
     won_at                         = db.Column(db.DateTime(timezone=True))
 
 
-class QuotationMasterNew(db.Model):
-    __tablename__ = 'Quotation_Master_new'
-    __table_args__ = {'schema': DB_SCHEMA}
-
-    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, primary_key=True, autoincrement=True)
-    tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'), nullable=False)
-    client_id                      = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'), nullable=False)
-    lead_id                        = db.Column('Lead_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Lead_Master.lead_id'))
-    project_id                     = db.Column('Project_ID', db.Integer)
-    quotation_number               = db.Column('Quotation_Number', db.String, nullable=False)
-    created_by_user_id             = db.Column('Created_by_user_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'), nullable=False)
-    quotation_date                 = db.Column('Quotation_Date', db.Date, nullable=False)
-    valid_until                    = db.Column('Valid_Until', db.Date)
-    contact_id                     = db.Column('Contact_ID', db.Integer)
-    status_id                      = db.Column('Status_ID', db.Integer, nullable=False)
-    approved_by_user_id            = db.Column('Approved_By_User_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'))
-    approval_date                  = db.Column('Approval_Date', db.Date)
-    sub_total                      = db.Column('Sub_Total', db.Numeric, nullable=False)
-    tax_amount                     = db.Column('Tax_Amount', db.Numeric, nullable=False)
-    currency_id                    = db.Column('Currency_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
-    discount_percent               = db.Column('Discount_percent', db.Float)
-    updated_at                     = db.Column('Updated_At', db.DateTime(timezone=True))
-    updated_by                     = db.Column('Updated_By', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id'))
-    notes                          = db.Column(db.String)
-    terms                          = db.Column(db.Text)
-
-
-class QuotationDetailsNew(db.Model):
-    __tablename__ = 'Quotation_Details_new'
-    __table_args__ = {'schema': DB_SCHEMA}
-
-    quotation_details_id           = db.Column('Quotation_Details_ID', db.BigInteger, primary_key=True, autoincrement=True)
-    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'), nullable=False)
-    product_variant_id             = db.Column('Product_Variant_ID', db.Integer, nullable=False)
-    quantity                       = db.Column('Quantity', db.Float, nullable=False)
-    uom_id                         = db.Column('UOM_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.UOM_Master.uom_id'), nullable=False)
-    rate                           = db.Column('Rate', db.Float, nullable=False)
-    price_list_id                  = db.Column('Price_List_ID', db.Integer)
-    discount_amount                = db.Column('Discount_Amount', db.Float, nullable=False)
-    tax_id                         = db.Column('Tax_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Tax_Master.tax_id'))
-    tax_amount                     = db.Column('Tax_Amount', db.Float)
-    item_name                      = db.Column('Item_Name', db.String, nullable=False)
-    description                    = db.Column('Description', db.String)
-    total_amount                   = db.Column('Total_Amount', db.Float, nullable=False)
-
-
-class InvoiceMasterNew(db.Model):
-    __tablename__ = 'Invoice_Master_New'
-    __table_args__ = {'schema': DB_SCHEMA}
-
-    invoice_id                     = db.Column('Invoice_ID', db.BigInteger, primary_key=True, autoincrement=True)
-    quotation_id                   = db.Column('Quotation_ID', db.BigInteger, db.ForeignKey(f'{DB_SCHEMA}.Quotation_Master_new.Quotation_ID'))
-    tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
-    client_id                      = db.Column('Client_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Client_Master.client_id'))
-    project_id                     = db.Column('Project_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Project_Details.project_id'))
-    invoice_number                 = db.Column('Invoice_Number', db.String)
-    invoice_date                   = db.Column('Invoice_Date', db.Date)
-    po_reference                   = db.Column('PO_Reference', db.String)
-    due_date                       = db.Column('Due_Date', db.Date)
-    contact_id                     = db.Column('Contact_ID', db.BigInteger)
-    status_id                      = db.Column('Status_ID', db.Integer)
-    sub_total                      = db.Column('Sub_Total', db.Float)
-    tax_amount                     = db.Column('Tax_Amount', db.Float)
-    currency_id                    = db.Column('Currency_ID', db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
-    discount_amount                = db.Column('Discount_Amount', db.Float)
+# Quotation_Master_new / Quotation_Details_new / Invoice_Master_New are mapped
+# by ProposalMaster / ProposalDetails / InvoiceMaster above.
 
 
 class TrainingMasterNew(db.Model):
@@ -1705,3 +1759,64 @@ __all__ = [
     'is_module_available', 'get_available_modules',
     'get_new_schema_models', 'get_legacy_schema_models',
 ]
+
+# ----------------------------------------------------------------------------
+# Quote / invoice lines in the shared tables must point at a Product_Variant.
+# StreemLyne's forms send free-text lines, so those use a per-tenant
+# "Custom line" product (created on first use).
+# ----------------------------------------------------------------------------
+CUSTOM_LINE_CODE = 'CUSTOM-LINE'
+
+
+def custom_line_variant_id(connection, tenant_id):
+    S = f'"{DB_SCHEMA}"'
+    row = connection.execute(text(f"""
+        SELECT v.variant_id FROM {S}."Product_Master" p
+        JOIN {S}."Product_Variant" v ON v.product_id = p.product_id
+        WHERE p.tenant_id = :t AND p.item_code = :c ORDER BY v.variant_id LIMIT 1"""),
+        {'t': tenant_id, 'c': CUSTOM_LINE_CODE}).first()
+    if row:
+        return row[0]
+    pid = connection.execute(text(f"""
+        SELECT product_id FROM {S}."Product_Master" WHERE tenant_id = :t AND item_code = :c LIMIT 1"""),
+        {'t': tenant_id, 'c': CUSTOM_LINE_CODE}).scalar()
+    if pid is None:
+        pid = connection.execute(text(f"""
+            INSERT INTO {S}."Product_Master"(tenant_id, sku, item_name, description, category, active,
+                                             created_at, updated_at, item_code, unit, base_price)
+            VALUES (:t, :sku, 'Custom line', 'Free-text quote / invoice line', 'Custom', true,
+                    now(), now(), :c, 'each', 0)
+            RETURNING product_id"""), {'t': tenant_id, 'sku': f'{CUSTOM_LINE_CODE}-{tenant_id}', 'c': CUSTOM_LINE_CODE}).scalar()
+    return connection.execute(text(f"""
+        INSERT INTO {S}."Product_Variant"(product_id, sku_variant, variant_label, active,
+                                          created_at, updated_at, tenant_id, is_sub_item)
+        VALUES (:p, :sku, 'Standard', true, now(), now(), :t, false) RETURNING variant_id"""),
+        {'p': pid, 'sku': f'{CUSTOM_LINE_CODE}-{tenant_id}', 't': tenant_id}).scalar()
+
+
+def _line_tenant(target, parent_attr):
+    parent = getattr(target, parent_attr, None)
+    if parent is not None and getattr(parent, 'tenant_id', None):
+        return parent.tenant_id
+    from flask import g, has_request_context
+    return getattr(g, 'tenant_id', None) if has_request_context() else None
+
+
+@db.event.listens_for(ProposalDetails, 'before_insert')
+@db.event.listens_for(ProposalDetails, 'before_update')
+def _fill_quote_line(mapper, connection, target):
+    qty = float(target.quantity or 1)
+    if target.amount is not None and not target.rate:
+        target.rate = float(target.amount) / qty if qty else float(target.amount)
+    if target.amount is None:
+        target.amount = float(target.rate or 0) * qty - float(target.line_discount or 0)
+    if not target.service_name:
+        target.service_name = 'Item'
+    if target.product_variant_id is None:
+        target.product_variant_id = custom_line_variant_id(connection, _line_tenant(target, 'proposal'))
+
+
+@db.event.listens_for(InvoiceDetails, 'before_insert')
+def _fill_invoice_line(mapper, connection, target):
+    if target.product_variant_id is None:
+        target.product_variant_id = custom_line_variant_id(connection, _line_tenant(target, 'invoice'))

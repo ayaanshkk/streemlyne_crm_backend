@@ -703,8 +703,8 @@ def get_next_event_number():
         row = session.execute(
             text("""
                 SELECT MAX(NULLIF(regexp_replace(event_number, '[^0-9]', '', 'g'), '')::int) AS max_event_no
-                FROM "streemLyne_mt_dev2"."Training_Details" td
-                JOIN "streemLyne_mt_dev2"."Client_Master" cm ON cm.client_id = td.client_id
+                FROM "streemLyne_mt_dev2"."Services_Master_archive" sm
+                JOIN "streemLyne_mt_dev2"."Client_Master" cm ON cm.client_id = sm.client_id
                 WHERE cm.tenant_id = :tid
             """),
             {"tid": tenant_id}
@@ -1954,7 +1954,7 @@ def get_customer_stats():
         # Status breakdown from Misc_Col1
         all_opps = session.execute(
             text("""
-                SELECT od."Misc_Col1"
+                SELECT od."Misc_Col1" AS misc_col1
                 FROM "streemLyne_mt_dev2"."Opportunity_Details" od
                 JOIN "streemLyne_mt_dev2"."Client_Master" cm ON cm.client_id = od.client_id
                 WHERE cm.tenant_id = :tid

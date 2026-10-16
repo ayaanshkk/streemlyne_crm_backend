@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from database import db, DB_SCHEMA
 from middleware import auth_required
 from datetime import datetime
+import uuid
 from decimal import Decimal
 
 pricelist_bp = Blueprint('pricelist', __name__, url_prefix='/pricelist')
@@ -26,29 +27,65 @@ pricelist_bp = Blueprint('pricelist', __name__, url_prefix='/pricelist')
 from sqlalchemy import Column, Integer, String, Numeric, Text, DateTime
 from database import db
 
+class ProductMaster(db.Model):
+    __tablename__  = 'Product_Master'
+    __table_args__ = {'schema': DB_SCHEMA}
+
+    product_id  = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id   = db.Column(db.Integer, nullable=False)
+    sku         = db.Column(db.String, nullable=False)
+    item_name   = db.Column(db.String, nullable=False)
+    description = db.Column(db.Text)
+    category    = db.Column(db.String)
+    active      = db.Column(db.Boolean, default=True)
+    item_code   = db.Column(db.String)
+    brand       = db.Column(db.String)
+    unit        = db.Column(db.String, default='each')
+    base_price  = db.Column(db.Numeric)
+    alias_codes = db.Column(db.Text)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+def _product_field(name, default=None):
+    """Price-list item details (name, unit, code, ...) are stored on the linked
+    Product_Master row in the shared database; read/write them through it."""
+    def getter(self):
+        return getattr(self.product, name, None) if self.product else default
+
+    def setter(self, value):
+        if self.product is None:
+            self.product = ProductMaster(tenant_id=self.tenant_id, sku='PL-' + uuid.uuid4().hex[:10].upper(),
+                                         item_name='Item', category=self.category)
+        setattr(self.product, name, value)
+    return property(getter, setter)
+
+
 class PriceListMaster(db.Model):
     __tablename__  = 'PriceList_Master'
     __table_args__ = {'schema': DB_SCHEMA}
 
-    pricelist_id      = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    tenant_id         = db.Column(db.Integer, nullable=False, index=True)
-    category          = db.Column(db.String,  nullable=False)
-    item_name         = db.Column(db.String,  nullable=False)
-    description       = db.Column(db.Text)
-    base_price        = db.Column(db.Numeric(10, 2))
-    unit              = db.Column(db.String,  default='each')
-    item_code         = db.Column(db.String(50))
-    dimension_based   = db.Column(db.Boolean, default=False)
-    dimension_formula = db.Column(db.String)
-    door_type         = db.Column(db.String(100))
-    width             = db.Column(db.Integer)
-    height            = db.Column(db.Integer)
-    depth             = db.Column(db.Integer)
-    brand             = db.Column(db.String(50))
-    colour            = db.Column(db.String(255))
-    alias_codes       = db.Column(db.Text)
-    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at        = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    pricelist_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    tenant_id    = db.Column(db.Integer, nullable=False, index=True)
+    category     = db.Column(db.String,  nullable=False)
+    base_price   = db.Column(db.Numeric(10, 2))
+    product_id   = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Product_Master.product_id'))
+    variant_id   = db.Column(db.Integer)
+    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at   = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    product = db.relationship(ProductMaster, lazy='joined')
+
+    item_name   = _product_field('item_name')
+    description = _product_field('description')
+    unit        = _product_field('unit', 'each')
+    item_code   = _product_field('item_code')
+    brand       = _product_field('brand')
+    alias_codes = _product_field('alias_codes')
+
+    # no place for these in the shared database
+    dimension_based = False
+    dimension_formula = door_type = width = height = depth = colour = None
 
     def to_dict(self):
         return {
@@ -116,7 +153,7 @@ def list_items():
     category = request.args.get('category')
     search   = request.args.get('search', '').strip().lower()
 
-    query = PriceListMaster.query.filter_by(tenant_id=g.tenant_id)
+    query = PriceListMaster.query.outerjoin(ProductMaster, PriceListMaster.product).filter(PriceListMaster.tenant_id == g.tenant_id)
 
     if category:
         query = query.filter(PriceListMaster.category == category)
@@ -124,13 +161,13 @@ def list_items():
     if search:
         query = query.filter(
             db.or_(
-                PriceListMaster.item_name.ilike(f'%{search}%'),
-                PriceListMaster.description.ilike(f'%{search}%'),
+                ProductMaster.item_name.ilike(f'%{search}%'),
+                ProductMaster.description.ilike(f'%{search}%'),
                 PriceListMaster.category.ilike(f'%{search}%'),
             )
         )
 
-    items = query.order_by(PriceListMaster.category, PriceListMaster.item_name).all()
+    items = query.order_by(PriceListMaster.category, ProductMaster.item_name).all()
     return jsonify([i.to_dict() for i in items]), 200
 
 

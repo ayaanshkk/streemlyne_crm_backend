@@ -84,7 +84,7 @@ def serialize_project(row) -> dict:
         'job_number':  job_number,
         'customer_id': row.client_id,
         'description': description_title or description,
-        'status':      row.misc_col1 or 'Pending',
+        'status':      row._mapping.get("Misc_Col1") or 'Pending',
         'notes':       notes,
         # New field names
         'project_id':          row.project_id,
@@ -132,7 +132,7 @@ def get_jobs():
             params["client_id"] = client_id
 
         if status:
-            query += ' AND pd.misc_col1 = :status'
+            query += ' AND pd."Misc_Col1" = :status'
             params["status"] = status
 
         query += " ORDER BY pd.created_at DESC"
@@ -243,7 +243,7 @@ def create_job():
                 INSERT INTO "streemLyne_mt_dev2"."Project_Details"
                     (client_id, opportunity_id, project_title, project_description,
                      start_date, end_date, employee_id, created_at, updated_at,
-                     misc_col1, tenant_id)
+                     "Misc_Col1", tenant_id)
                 VALUES
                     (:client_id, :opportunity_id, :project_title, :project_description,
                      :start_date, :end_date, :employee_id, :created_at, :updated_at,
@@ -336,7 +336,7 @@ def update_job(project_id):
             updates['project_title'] = f"{job_number} | {new_desc[:80]}" if new_desc else job_number
 
         if 'status' in data:
-            updates['misc_col1'] = data['status']
+            updates['"Misc_Col1"'] = data['status']
 
         if 'start_date' in data:
             updates['start_date'] = parse_date(data['start_date'])
@@ -447,9 +447,9 @@ def get_job_stats():
 
         status_rows = session.execute(
             text("""
-                SELECT misc_col1 AS status, COUNT(*) AS cnt
+                SELECT "Misc_Col1" AS status, COUNT(*) AS cnt
                 FROM "streemLyne_mt_dev2"."Project_Details"
-                GROUP BY misc_col1
+                GROUP BY "Misc_Col1"
             """)
         ).fetchall()
 
@@ -494,7 +494,7 @@ def update_job_status(project_id):
         if not data.get('status'):
             return jsonify({'error': 'Status is required'}), 400
 
-        old_status = row.misc_col1 or 'Pending'
+        old_status = row._mapping.get("Misc_Col1") or 'Pending'
         new_status = data['status']
 
         updates = {
@@ -519,7 +519,7 @@ def update_job_status(project_id):
             if k == 'pid':
                 continue
             if k == 'status':
-                set_clauses.append('misc_col1 = :status')
+                set_clauses.append('"Misc_Col1" = :status')
             else:
                 set_clauses.append(f'"{k}" = :{k}')
             params[k] = v

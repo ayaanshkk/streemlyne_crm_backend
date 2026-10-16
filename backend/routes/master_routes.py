@@ -291,7 +291,7 @@ def create_tax():
     t = TaxMaster(
         tax_name=data['tax_name'].strip(),
         tax_rate=tax_rate,
-        description=data.get('description'),
+        tax_description=data.get('description'),
         is_active=data.get('is_active', True),
     )
     try:
@@ -327,7 +327,7 @@ def update_tax(tax_id: int):
         except (ValueError, TypeError):
             return jsonify({'error': 'tax_rate must be a number'}), 400
     if 'description' in data:
-        t.description = data['description']
+        t.tax_description = data['description']
     if 'is_active' in data:
         t.is_active = bool(data['is_active'])
 
@@ -770,7 +770,7 @@ def _tax_dict(t: TaxMaster) -> dict:
         'tax_id':      t.tax_id,
         'tax_name':    t.tax_name,
         'tax_rate':    t.tax_rate,
-        'description': t.description,
+        'description': t.tax_description,
         'is_active':   t.is_active,
         'created_at':  t.created_at.isoformat() if t.created_at else None,
     }

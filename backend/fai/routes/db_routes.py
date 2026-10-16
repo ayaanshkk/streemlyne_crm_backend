@@ -249,7 +249,7 @@ def handle_users():
         # GET — join User_Master + Employee_Master
         rows = session.execute(
             text("""
-                SELECT um.user_id, um.user_name, um.created_at AS user_created_at,
+                SELECT um.user_id, um.username AS user_name, um.created_at AS user_created_at,
                        em.employee_id, em.employee_name, em.email, em.phone,
                        em.role_ids, em.tenant_id, em.date_of_joining,
                        em.commission_percentage
@@ -310,7 +310,7 @@ def handle_single_user(user_id):
     try:
         row = session.execute(
             text("""
-                SELECT um.user_id, um.user_name, um.created_at AS user_created_at,
+                SELECT um.user_id, um.username AS user_name, um.created_at AS user_created_at,
                        em.employee_id, em.employee_name, em.email, em.phone,
                        em.role_ids, em.tenant_id
                 FROM "streemLyne_mt_dev2"."User_Master" um
