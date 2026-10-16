@@ -21,7 +21,7 @@ def register_fai(app):
         company_training_routes, contact_files_routes, contact_interactions_routes,
         contact_routes, customer_routes, db_routes, file_routes, invoice_routes,
         job_routes, notification_routes, pipeline_routes, pricelist_routes,
-        proposal_routes, public_routes, quotation_routes, telegram_routes,
+        public_routes, quotation_routes, telegram_routes,
         tenant_routes, test_grading_routes,
     )
 
@@ -36,7 +36,6 @@ def register_fai(app):
         assignment_routes.assignment_bp,
         file_routes.file_bp,
         job_routes.job_bp,
-        proposal_routes.proposal_bp,
         test_grading_routes.test_grading_bp,
         tenant_routes.tenant_bp,
         calendar_routes.calendar_bp,

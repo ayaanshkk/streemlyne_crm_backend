@@ -2,7 +2,7 @@ from .auth_routes import auth_bp
 from .customer_routes import customer_bp
 from .assignment_routes import assignment_bp
 from .job_routes import job_bp
-from .proposal_routes import proposal_bp
+#from .proposal_routes import proposal_bp
 from .db_routes import db_bp
 from .file_routes import file_bp
 from .test_grading_routes import test_grading_bp

@@ -34,8 +34,10 @@ def T(table_name):
     return f'"{SCHEMA}"."{table_name}"'
 
 
-VALID_STATUSES = {"Open", "In Progress", "Closed"}
+
+VALID_STATUSES = {"Draft", "Open", "In Progress", "Closed"}
 VALID_PRIORITIES = {"Low", "Medium", "High"}
+
 
 COMMERCIAL_CATEGORY_ID = 1   # Client_Category_Master.Category_Name = 'Commercial'
 ACTIVE_STATUS_ID = 1         # Status_Master.status = 'Active'

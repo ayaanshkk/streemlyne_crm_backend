@@ -106,7 +106,7 @@ def get_latest_opportunity(session, client_id):
             SELECT od.opportunity_id, od.client_id, od.stage_id,
                    od.opportunity_title, od.opportunity_description,
                    od.opportunity_owner_employee_id, od.opportunity_value,
-                   od.currency_id, od.misc_col1 AS misc_col1,
+                   od.currency_id, od."Misc_Col1" AS misc_col1,
                    od.created_at,
                    sm.stage_name, sm.stage_type
             FROM "streemLyne_mt_dev2"."Opportunity_Details" od
@@ -822,7 +822,7 @@ def get_pipeline_data(pipeline_type):
 
         rows = session.execute(
             text("""
-                SELECT cm.*, od.opportunity_id, od.stage_id, od.misc_col1 AS misc_col1,
+                SELECT cm.*, od.opportunity_id, od.stage_id, od."Misc_Col1" AS misc_col1,
                        od.opportunity_value, od.currency_id,
                        od.opportunity_owner_employee_id,
                        sm.stage_name, sm.stage_type

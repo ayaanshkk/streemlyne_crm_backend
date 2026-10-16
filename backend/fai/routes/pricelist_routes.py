@@ -9,6 +9,21 @@ SCHEMA = "streemLyne_mt_dev2"
 DEFAULT_TENANT_ID = 3
 
 
+# Product_Master.unit is free text, but quotation lines need a numeric UOM_Master.uom_id.
+# Match the text against uom_code first, then uom_description (case/space-insensitive).
+# No match -> uom_id is NULL and the quotation form refuses that row instead of guessing a unit.
+UOM_JOIN = f"""
+                LEFT JOIN LATERAL (
+                    SELECT um.uom_id, um.uom_code
+                    FROM "{SCHEMA}"."UOM_Master" um
+                    WHERE UPPER(TRIM(um.uom_code)) = UPPER(TRIM(p.unit))
+                       OR UPPER(TRIM(um.uom_description)) = UPPER(TRIM(p.unit))
+                    ORDER BY (UPPER(TRIM(um.uom_code)) = UPPER(TRIM(p.unit))) DESC, um.uom_id
+                    LIMIT 1
+                ) u ON TRUE
+"""
+
+
 def get_tenant_id():
     """Get tenant_id from request, defaulting to FAI tenant."""
     try:
@@ -47,10 +62,13 @@ def lookup_pricelist_item():
                     pl.effective_to,
                     pl.pricelist_id,
                     pl.product_id,
-                    pl.variant_id
+                    pl.variant_id,
+                    u.uom_id,
+                    u.uom_code
                 FROM "{SCHEMA}"."PriceList_Master" pl
                 JOIN "{SCHEMA}"."Product_Master" p
                     ON p.product_id = pl.product_id
+                {UOM_JOIN}
                 WHERE UPPER(p.item_code) = :code
                   AND pl.tenant_id = :tid
                   AND p.tenant_id = :tid
@@ -78,6 +96,8 @@ def lookup_pricelist_item():
             "description": row.description or row.item_name,
             "unit_rate": float(row.base_price or 0),
             "unit": row.unit,
+            "uom_id": row.uom_id,
+            "uom_code": row.uom_code,
             "category": row.category,
             "list_type": row.list_type,
             "min_qty": row.min_qty,
@@ -112,11 +132,17 @@ def list_pricelist():
     tenant_id = get_tenant_id()
     search = request.args.get('q', '').strip()
 
+    # Default stays 100 for existing callers; pickers that need the whole list pass ?limit=
+    try:
+        limit = max(1, min(int(request.args.get('limit', 100)), 1000))
+    except (TypeError, ValueError):
+        limit = 100
+
     session = SessionLocal()
 
     try:
         search_condition = ""
-        params = {"tid": tenant_id}
+        params = {"tid": tenant_id, "limit": limit}
 
         if search:
             search_condition = """
@@ -144,16 +170,19 @@ def list_pricelist():
                     p.item_code,
                     p.item_name,
                     p.description,
-                    p.unit
+                    p.unit,
+                    u.uom_id,
+                    u.uom_code
                 FROM "{SCHEMA}"."PriceList_Master" pl
                 JOIN "{SCHEMA}"."Product_Master" p
                     ON p.product_id = pl.product_id
+                {UOM_JOIN}
                 WHERE pl.tenant_id = :tid
                   AND p.tenant_id = :tid
                   AND (p.active IS NULL OR p.active = TRUE)
                   {search_condition}
-                ORDER BY p.item_code
-                LIMIT 100
+                ORDER BY p.item_code, pl.pricelist_id
+                LIMIT :limit
             """),
             params
         ).fetchall()
@@ -168,6 +197,8 @@ def list_pricelist():
                 "description": r.description or r.item_name,
                 "unit_rate": float(r.base_price or 0),
                 "unit": r.unit,
+                "uom_id": r.uom_id,
+                "uom_code": r.uom_code,
                 "category": r.category,
                 "list_type": r.list_type,
                 "min_qty": r.min_qty,

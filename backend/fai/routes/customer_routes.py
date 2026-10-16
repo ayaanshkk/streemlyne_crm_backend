@@ -1336,7 +1336,7 @@ def create_customer():
         # Resolve default sales stage (first stage with stage_type=1)
         stage_row = session.execute(
             text("""
-                SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Stage_Master"
+                SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master""
                 WHERE stage_type = :stype
                 ORDER BY stage_id ASC
                 LIMIT 1

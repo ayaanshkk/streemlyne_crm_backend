@@ -79,7 +79,7 @@ def get_latest_sales_opportunity(session, company_id):
             SELECT od.opportunity_id, od.stage_id, od."Misc_Col1" AS misc_col1,
                    od.created_at, sm.stage_name
             FROM "streemLyne_mt_dev2"."Opportunity_Details" od
-            JOIN "streemLyne_mt_dev2"."Stage_Master" sm ON sm.stage_id = od.stage_id
+            JOIN "streemLyne_mt_dev2"."Pipeline_Stage_Master" sm ON sm.stage_id = od.stage_id
             WHERE od.client_id = :cid AND sm.stage_type = :stype
             ORDER BY od.created_at DESC
             LIMIT 1
@@ -360,31 +360,66 @@ def list_companies():
         if not employee_id:
             return jsonify({'error': 'No employee record linked to this user'}), 400
         search = request.args.get('search', '').strip()
+        # The Client module opts into this filter explicitly so shared company
+        # pickers and other consumers of GET /companies can still fetch all
+        # active commercial companies when they omit clients_only.
+        clients_only = request.args.get('clients_only', '').strip().lower() in {"1", "true", "yes"}
 
         query = f"""
-            SELECT * FROM {T("Client_Master")}
-            WHERE tenant_id = :tenant_id
-              AND "Client_Category_Master_ID" = :cat_id AND status_id = :active_id
+            SELECT cm.*
+            FROM {T("Client_Master")} cm
+            WHERE cm.tenant_id = :tenant_id
+              AND cm."Client_Category_Master_ID" = :cat_id
+              AND cm.status_id = :active_id
         """
         params = {"tenant_id": tenant_id, "cat_id": COMMERCIAL_CATEGORY_ID, "active_id": ACTIVE_STATUS_ID}
 
+        if clients_only:
+            # Lead_Master is the source of truth for client eligibility.
+            # EXISTS avoids duplicate company rows if multiple leads reference
+            # the same Client_Master record. Stage IDs are not hardcoded.
+            query += f"""
+              AND EXISTS (
+                  SELECT 1
+                  FROM {T("Lead_Master")} lm
+                  JOIN {T("Pipeline_Stage_Master")} psm
+                    ON psm.stage_id = lm.stage_id
+                  WHERE lm."client_ID" = cm.client_id
+                    AND lm.tenant_id = cm.tenant_id
+                    AND psm.stage_type = :sales_stage_type
+                    AND LOWER(TRIM(psm.stage_name)) = LOWER(:won_stage_name)
+              )
+            """
+            params["sales_stage_type"] = STAGE_TYPE_SALES
+            params["won_stage_name"] = "Won"
+
         if search:
-            query += """ AND (client_company_name ILIKE :search
-                               OR client_email ILIKE :search
-                               OR client_phone ILIKE :search)"""
+            query += """ AND (cm.client_company_name ILIKE :search
+                               OR cm.client_email ILIKE :search
+                               OR cm.client_phone ILIKE :search)"""
             params["search"] = f"%{search}%"
 
-        query += " ORDER BY client_company_name ASC"
+        query += " ORDER BY cm.client_company_name ASC"
 
         rows = session.execute(text(query), params).fetchall()
         company_ids = [row.client_id for row in rows]
         contacts_map = resolve_company_contacts_map(session, tenant_id, company_ids)
         last_activity_map = resolve_last_activity_map(session, company_ids)
 
-        return jsonify([
-            serialize_company(row, contacts_map, last_activity_map, get_latest_sales_opportunity(session, row.client_id))
-            for row in rows
-        ]), 200
+        companies = []
+        for row in rows:
+            company = serialize_company(
+                row,
+                contacts_map,
+                last_activity_map,
+                get_latest_sales_opportunity(session, row.client_id),
+            )
+            if clients_only:
+                # Report the stage that qualified this company for the Client list.
+                company["sales_stage"] = "Won"
+            companies.append(company)
+
+        return jsonify(companies), 200
     except Exception as e:
         current_app.logger.exception(f"Error in GET /companies: {e}")
         return jsonify({'error': 'Failed to fetch companies', 'details': str(e)}), 500
@@ -510,14 +545,14 @@ def update_company_sales_stage(company_id):
 
         stage_row = session.execute(
             text("""
-                SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Stage_Master"
+                SELECT stage_id, stage_name FROM "streemLyne_mt_dev2"."Pipeline_Stage_Master"
                 WHERE LOWER(stage_name) = LOWER(:sname) AND stage_type = :stype
                 LIMIT 1
             """),
             {"sname": backend_stage, "stype": STAGE_TYPE_SALES}
         ).fetchone()
         if not stage_row:
-            return jsonify({'error': f"Stage '{new_stage}' not configured in Stage_Master"}), 400
+            return jsonify({'error': f"Stage '{new_stage}' not configured in Pipeline_Stage_Master"}), 400
 
         old_stage = opp.stage_name if opp else None
         existing_misc['status'] = 'Lost' if new_stage == 'Lost' else 'Active'
@@ -998,28 +1033,52 @@ def export_companies():
     try:
         tenant_id = request.current_user.tenant_id
         fmt = request.args.get('format', 'csv').lower()
-        rows = session.execute(
-            text(f"""
-                SELECT client_id,
-                       client_company_name AS company_name,
-                       client_website AS company_website,
-                       address, post_code,
-                       company_number AS vendor_registration_number,
-                       notes
-                FROM {T("Client_Master")}
-                WHERE tenant_id = :tenant_id
-                  AND "Client_Category_Master_ID" = :cat_id AND status_id = :active_id
-                ORDER BY client_company_name ASC
-            """),
-            {"tenant_id": tenant_id, "cat_id": COMMERCIAL_CATEGORY_ID, "active_id": ACTIVE_STATUS_ID}
-        ).fetchall()
+        clients_only = request.args.get('clients_only', '').strip().lower() in {"1", "true", "yes"}
+        rows_query = f"""
+            SELECT cm.client_id,
+                   cm.client_company_name AS company_name,
+                   cm.client_website AS company_website,
+                   cm.address, cm.post_code,
+                   cm.company_number AS vendor_registration_number,
+                   cm.notes
+            FROM {T("Client_Master")} cm
+            WHERE cm.tenant_id = :tenant_id
+              AND cm."Client_Category_Master_ID" = :cat_id
+              AND cm.status_id = :active_id
+        """
+        params = {"tenant_id": tenant_id, "cat_id": COMMERCIAL_CATEGORY_ID, "active_id": ACTIVE_STATUS_ID}
 
-        # Only Converted companies are clients (same rule as the Clients list)
-        converted_rows = [
-            row for row in rows
-            if derive_sales_stage(get_latest_sales_opportunity(session, row.client_id)) == "Converted"
-        ]
-        dict_rows = [dict(row._mapping) for row in converted_rows]
+        if clients_only:
+            # Keep Client-module export in sync with its Lead_Master-based list.
+            
+            rows_query += f"""
+            AND EXISTS (
+                SELECT 1
+                FROM {T("Lead_Master")} lm
+                JOIN {T("Pipeline_Stage_Master")} psm
+                ON psm.stage_id = lm.stage_id
+                WHERE lm."client_ID" = cm.client_id
+                AND lm.tenant_id = cm.tenant_id
+                AND psm.stage_type = :sales_stage_type
+                AND LOWER(TRIM(psm.stage_name)) = LOWER(:won_stage_name)
+                )
+            """
+
+            params["sales_stage_type"] = STAGE_TYPE_SALES
+            params["won_stage_name"] = "Won"
+
+        rows_query += " ORDER BY cm.client_company_name ASC"
+        rows = session.execute(text(rows_query), params).fetchall()
+
+        if clients_only:
+            dict_rows = [dict(row._mapping) for row in rows]
+        else:
+            # Preserve the existing export behaviour for other company-module callers.
+            converted_rows = [
+                row for row in rows
+                if derive_sales_stage(get_latest_sales_opportunity(session, row.client_id)) == "Converted"
+            ]
+            dict_rows = [dict(row._mapping) for row in converted_rows]
 
         if fmt == 'xlsx':
             return build_xlsx_response(COMPANY_EXPORT_FIELDS, dict_rows, "companies_export.xlsx")

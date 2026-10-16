@@ -2,7 +2,7 @@
 backend/routes/company_interactions_routes.py
 
 Interaction logging (calls, emails, notes, tasks, meetings) for a Company
-(streemLyne_mt_dev2.Client_Master, "Client_Category_Master_ID" = Commercial),
+(streemLyne_mt_dev2.Client_Master, "client_category_master_id " = Commercial),
 mirroring contact_interactions_routes.py but scoped to companies instead of
 contacts, and running on the dev DB connection (SessionLocal) like
 company_routes.py / company_enquiry_routes.py.

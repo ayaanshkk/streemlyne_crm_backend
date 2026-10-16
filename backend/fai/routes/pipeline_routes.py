@@ -8,13 +8,13 @@ Training pipeline:
 
 - Uses Services_Master as the source of training/course records.
 
-- Services_Master is tenant-scoped.
+\- Services_Master is tenant-scoped.
 
-- Training-specific fields are read from Services_Master.
+\- Training-specific fields are read from Services_Master.
 
-- Client_Master is used only to resolve the company name.
+\- Client_Master is used only to resolve the company name.
 
-- "Awaiting Scheduling" cards are derived (no batch row): a company whose
+\- "Awaiting Scheduling" cards are derived (no batch row): a company whose
 
   latest sales stage is Converted and which has no batch created after its
 
@@ -22,17 +22,15 @@ Training pipeline:
 
 Stage names
 
------------
+\-----------
 
-Stage names are never written in this file. They are looked up from
+Training stages are loaded from Tenant_Pipeline_Stage_Mapping for the
 
-Stage_Master by stage_id on every request, so renaming a stage in the
-
-database is picked up automatically. Stages are identified by the IDs below.
+current tenant, with Pipeline_Stage_Master (stage_type = 2) as fallback.
 
 Configuration
 
--------------
+\-------------
 
 Nothing environment-specific is hardcoded here. Every value below is read at
 
@@ -46,7 +44,7 @@ silently using a default.
 
     STAGE_TYPE_SALES             Stage_Master.stage_type value for sales stages
 
-    COMMERCIAL_CATEGORY_ID        Client_Category_Master_ID for commercial clients
+    COMMERCIAL_CATEGORY_ID        "Client_Category_Master_ID" for commercial clients
 
     ACTIVE_STATUS_ID              status_id meaning "active"
 
@@ -54,11 +52,17 @@ silently using a default.
 
     STAGE_ID_CONVERTED           Stage_Master.stage_id of the Converted stage
 
-    STAGE_ID_AWAITING_SCHEDULING Stage_Master.stage_id of the awaiting stage
+    STAGE_ID_AWAITING_SCHEDULING Pipeline_Stage_Master.stage_id of the
 
-    STAGE_ID_TRAINING_DEFAULT    stage_id used when a Services_Master row has
+                                 awaiting-scheduling stage
 
-                                 no stage
+    STAGE_ID_TRAINING_DEFAULT    Pipeline_Stage_Master.stage_id used when a
+
+                                 Services_Master row has no stage
+
+    STAGE_ID_PO_RECEIVED         Pipeline_Stage_Master.stage_id where PO is
+
+                                 first required
 
     STAGE_LABEL_ENQUIRY          Display label shown instead of the Lead stage
 
@@ -160,7 +164,7 @@ def _load_stage_names(session, stage_ids):
 
             SELECT stage_id, stage_name
 
-            FROM {T("Stage_Master")}
+            FROM {T("Pipeline_Stage_Master")}
 
             WHERE stage_id = ANY(:ids)
 
@@ -189,84 +193,112 @@ def _load_stage_names(session, stage_ids):
     return names
 
 def _current_employee_id(session, tenant_id):
+
     """Resolve the authenticated Employee_Master.employee_id for the tenant."""
+
     user = getattr(request, "current_user", None)
+
     if isinstance(user, dict):
+
         user_id_candidates = [user.get(k) for k in ("user_id", "id", "userId")]
+
         employee_id_candidates = [user.get("employee_id")]
+
     else:
+
         user_id_candidates = [getattr(user, k, None) for k in ("user_id", "id", "userId")]
+
         employee_id_candidates = [getattr(user, "employee_id", None)]
 
     user_id_candidates += [getattr(request, "user_id", None)]
+
     employee_id_candidates += [getattr(request, "employee_id", None)]
 
     for value in employee_id_candidates:
+
         if value is None or not str(value).strip():
+
             continue
+
         try:
+
             employee_id = int(value)
+
         except (TypeError, ValueError):
+
             continue
+
         row = session.execute(
+
             text(f"""
+
                 SELECT employee_id
+
                 FROM {T("Employee_Master")}
+
                 WHERE employee_id = :employee_id
+
                   AND tenant_id = :tenant_id
+
                 LIMIT 1
+
             """),
+
             {"employee_id": employee_id, "tenant_id": tenant_id},
+
         ).fetchone()
+
         if row:
+
             return int(row.employee_id)
 
     for value in user_id_candidates:
+
         if value is None or not str(value).strip():
+
             continue
+
         try:
+
             user_id = int(value)
+
         except (TypeError, ValueError):
+
             continue
+
         row = session.execute(
+
             text(f"""
+
                 SELECT em.employee_id
+
                 FROM {T("User_Master")} um
+
                 JOIN {T("Employee_Master")} em
+
                   ON em.employee_id = um.employee_id
+
                 WHERE um.user_id = :user_id
+
                   AND em.tenant_id = :tenant_id
+
                 LIMIT 1
+
             """),
+
             {"user_id": user_id, "tenant_id": tenant_id},
+
         ).fetchone()
+
         if row:
+
             return int(row.employee_id)
 
     raise RuntimeError(
+
         "Authenticated user is not linked to a valid Employee_Master record for this tenant."
+
     )
-
-
-def _current_user_id():
-    """Resolve the authenticated user's employee ID."""
-    user = getattr(request, "current_user", None)
-
-    if isinstance(user, dict):
-        for key in ("employee_id", "user_id", "id", "userId"):
-            value = user.get(key)
-            if value is not None:
-                return int(value)
-
-    for attr in ("employee_id", "user_id", "id"):
-        value = getattr(user, attr, None)
-        if value is not None:
-            return int(value)
-
-    raise RuntimeError(
-        "Authenticated employee ID is required to create records."
-    )
-
 
 def _clean_value(value):
 
@@ -398,15 +430,15 @@ def _build_lead_misc(data, company_name, website, vendor_registration_number,
 
     return json.dumps(misc, default=str)
 
-def _insert_opportunity_record(session, tenant_id, data, default_stage_id):
+def _insert_lead_record(session, tenant_id, data, default_stage_id):
 
     """
 
-    Create/find Client_Master and then create its Opportunity_Details row.
+    Create/find Client_Master and insert the lead into Lead_Master.
 
     The operation is performed in the caller's transaction. Therefore a lead
 
-    or imported row cannot leave an orphan Client_Master if the opportunity
+    or imported row cannot leave an orphan Client_Master if the Lead_Master
 
     insert fails.
 
@@ -449,11 +481,14 @@ def _insert_opportunity_record(session, tenant_id, data, default_stage_id):
     state = _first(data, "state", "State")
 
     post_code = _first(
-        data, "post_code", "postcode", "pin_code", "postal_code", "Post Code"
-    )
 
+        data, "post_code", "postcode", "pin_code", "postal_code", "Post Code"
+
+    )
+    # Postal codes are identifiers, not numbers: preserve leading zeroes and
+    # keep the value compatible with Client_Master.post_code (varchar/text).
     if post_code is not None:
-        post_code = str(post_code)
+        post_code = str(post_code).strip() or None
 
     notes = _first(data, "notes", "Notes")
 
@@ -669,7 +704,7 @@ def _insert_opportunity_record(session, tenant_id, data, default_stage_id):
 
                 address = COALESCE(:address, address),
 
-                post_code = COALESCE(:post_code, post_code)
+                post_code = COALESCE(CAST(:post_code AS varchar), post_code)
 
             WHERE client_id = :client_id
 
@@ -702,450 +737,335 @@ def _insert_opportunity_record(session, tenant_id, data, default_stage_id):
     )
 
     stage_id = _first(data, "stage_id")
-
     stage_id = int(stage_id) if stage_id is not None else int(default_stage_id)
 
-    opportunity_title = _first(
+    valid_stage = session.execute(
+        text(f"""
+            SELECT stage_id
+            FROM {T("Pipeline_Stage_Master")}
+            WHERE stage_id = :stage_id
+              AND stage_type = :stage_type
+            LIMIT 1
+        """),
+        {
+            "stage_id": stage_id,
+            "stage_type": _cfg("STAGE_TYPE_SALES", int),
+        },
+    ).fetchone()
+    if not valid_stage:
+        raise ValueError(f"Invalid Sales stage_id: {stage_id}")
 
-        data, "opportunity_title", "Opportunity Title", "title"
+    # Lead Title is derived from the company name; it is not a separate form field.
+    lead_title = company_name
+    lead_description = _first(
+        data, "lead_description", "opportunity_description",
+        "description", "Description", "notes", "Notes"
+    ) or f"Lead for {company_name}"
+    lead_date = _first(data, "lead_date", "opportunity_date", "date") or None
 
-    ) or f"Lead - {company_name}"
-
-    opportunity_description = _first(
-
-        data, "opportunity_description", "description", "Description"
-
-    )
-
-    opportunity_owner_employee_id = _current_user_id()
-
-    opportunity_value = _first(data, "opportunity_value")
+    expected_value = _first(data, "expected_value", "opportunity_value", "value")
+    if expected_value is not None:
+        try:
+            expected_value = int(float(expected_value))
+        except (TypeError, ValueError):
+            raise ValueError("expected_value must be an integer")
 
     currency_id = _first(data, "currency_id")
-
-    mobile_no = _first(data, "mobile_no", "mobile", "Mobile")
-
-    misc_col1 = _build_lead_misc(
-
-        data=data,
-
-        company_name=company_name,
-
-        website=website,
-
-        vendor_registration_number=vendor_registration_number,
-
-        gst_number=gst_number,
-
-        address=address,
-
-        city=city,
-
-        state=state,
-
-        post_code=post_code,
-
-        notes=notes,
-
-        stage_id=stage_id,
-
+    assigned_employee_id = _first(data, "assigned_employee_id")
+    qualification_status = _first(
+        data, "qualification status", "qualification_status", "qualification_status_id"
     )
+    priority = _first(data, "priority")
+    expected_decision_date = _first(
+        data, "expected_decision_date", "expected_decision_date ", "decision_date"
+    )
+    last_contacted_date = _first(data, "last_contacted_date")
+    next_followup_date = _first(data, "next_followup_date")
+    lead_source = _first(data, "lead_source", "source", "Lead Source")
 
-    # Only columns confirmed in the supplied Opportunity_Details schema are
+    # The provided schema does not define an identity/sequence default for lead_id.
+    # Lock the table while generating the next ID so concurrent inserts do not
+    # receive the same MAX(lead_id) + 1 value.
+    session.execute(text(f'LOCK TABLE {T("Lead_Master")} IN EXCLUSIVE MODE'))
+    next_id_row = session.execute(
+        text(f'SELECT COALESCE(MAX(lead_id), 0) + 1 AS next_lead_id FROM {T("Lead_Master")}')
+    ).fetchone()
+    lead_id = int(next_id_row.next_lead_id)
 
-    # used here. opportunity_date is always populated with today's date.
+    
+    # created_by references User_Master.user_id, NOT Employee_Master.employee_id.
+    created_by = None
 
-    opp_res = session.execute(
+    current_user = getattr(request, "current_user", None)
 
-        text(
+    if isinstance(current_user, dict):
+        user_id_candidates = [
+            current_user.get(key)
+            for key in ("user_id", "id", "userId")
+        ]
+    else:
+        user_id_candidates = [
+            getattr(current_user, key, None)
+            for key in ("user_id", "id", "userId")
+        ]
 
-            f"""
+    user_id_candidates.append(getattr(request, "user_id", None))
 
-            INSERT INTO {T("Opportunity_Details")} (
+    for candidate in user_id_candidates:
+        if candidate is None or not str(candidate).strip():
+            continue
 
-                client_id,
+        try:
+            user_id = int(candidate)
+        except (TypeError, ValueError):
+            continue
 
-                opportunity_title,
+        user_row = session.execute(
+            text(f"""
+                SELECT um.user_id
+                FROM {T("User_Master")} um
+                JOIN {T("Employee_Master")} em
+                  ON em.employee_id = um.employee_id
+                WHERE um.user_id = :user_id
+                  AND em.tenant_id = :tenant_id
+                LIMIT 1
+            """),
+            {
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+            },
+        ).fetchone()
 
-                opportunity_description,
+        if user_row:
+            created_by = int(user_row.user_id)
+            break
 
-                opportunity_date,
 
-                opportunity_owner_employee_id,
-
-                stage_id,
-
-                opportunity_value,
-
-                currency_id,
-
+    lead_row = session.execute(
+        text(f"""
+            INSERT INTO {T("Lead_Master")} (
+                lead_id,
                 tenant_id,
-
-                mobile_no,
-
-                notes,
-
-                "Misc_Col1",
-
-                created_at
-
+                "client_ID",
+                assigned_employee_id,
+                stage_id,
+                lead_title,
+                lead_description,
+                lead_date,
+                expected_value,
+                currency_id,
+                lead_source,
+                "qualification status",
+                priority,
+                "expected_decision_date ",
+                last_contacted_date,
+                next_followup_date,
+                created_by,
+                created_date
             )
-
             VALUES (
-
-                :client_id,
-
-                :opportunity_title,
-
-                :opportunity_description,
-
-                CURRENT_DATE,
-
-                :opportunity_owner_employee_id,
-
-                :stage_id,
-
-                :opportunity_value,
-
-                :currency_id,
-
+                :lead_id,
                 :tenant_id,
-
-                :mobile_no,
-
-                :notes,
-
-                :misc_col1,
-
-                NOW()
-
+                :client_id,
+                :assigned_employee_id,
+                :stage_id,
+                :lead_title,
+                :lead_description,
+                COALESCE(CAST(:lead_date AS date), CURRENT_DATE),
+                :expected_value,
+                :currency_id,
+                :lead_source,
+                :qualification_status,
+                :priority,
+                CAST(:expected_decision_date AS date),
+                CAST(:last_contacted_date AS date),
+                CAST(:next_followup_date AS date),
+                :created_by,
+                CURRENT_DATE
             )
-
-            RETURNING opportunity_id
-
-            """
-
-        ),
-
+            RETURNING lead_id
+        """),
         {
-
-            "client_id": client_id,
-
-            "opportunity_title": opportunity_title,
-
-            "opportunity_description": opportunity_description,
-
-            "opportunity_owner_employee_id": opportunity_owner_employee_id,
-
-            "stage_id": stage_id,
-
-            "opportunity_value": opportunity_value,
-
-            "currency_id": currency_id,
-
+            "lead_id": lead_id,
             "tenant_id": tenant_id,
-
-            "mobile_no": mobile_no,
-
-            "notes": notes,
-
-            "misc_col1": misc_col1,
-
+            "client_id": client_id,
+            "assigned_employee_id": assigned_employee_id,
+            "stage_id": stage_id,
+            "lead_title": str(lead_title)[:500],
+            "lead_description": str(lead_description)[:5000],
+            "lead_date": lead_date,
+            "expected_value": expected_value,
+            "currency_id": currency_id,
+            "lead_source": str(lead_source)[:200] if lead_source is not None else None,
+            "qualification_status": qualification_status,
+            "priority": priority,
+            "expected_decision_date": expected_decision_date,
+            "last_contacted_date": last_contacted_date,
+            "next_followup_date": next_followup_date,
+            "created_by": created_by,
         },
+    ).fetchone()
 
-    )
+    return int(lead_row.lead_id), client_id
 
-    opportunity_id = opp_res.fetchone().opportunity_id
-
-    return opportunity_id, client_id
 
 @pipeline_bp.route("/pipeline/sales", methods=["GET", "OPTIONS"])
-
 @token_required
-
 def get_sales_pipeline():
-
-    """
-
-    Return one current Sales Pipeline card per client.
-
-    The latest Opportunity_Details row for each client determines the current
-
-    stage/bucket. Existing historical opportunity rows are not modified.
-
-    """
-
+    """Return Sales Pipeline cards exclusively from Lead_Master."""
     if request.method == "OPTIONS":
-
         return jsonify({}), 200
 
     session = SessionLocal()
-
     try:
-
+        tenant_id = request.current_user.tenant_id
         stage_id_lead = _cfg("STAGE_ID_LEAD", int)
-
         stage_label_enquiry = _cfg("STAGE_LABEL_ENQUIRY")
 
-        misc_key_sales_stage = _cfg("MISC_KEY_SALES_STAGE")
-
-        tenant_id = request.current_user.tenant_id
-
-        query = text(
-
-            f"""
-
-            WITH LatestSalesOpportunity AS (
-
-                SELECT DISTINCT ON (od.client_id)
-
-                    od.client_id,
-
-                    od.opportunity_id,
-
-                    od.opportunity_title,
-
-                    od.opportunity_description,
-
-                    od.opportunity_date,
-
-                    od.opportunity_value,
-
-                    od.currency_id,
-
-                    od.mobile_no,
-
-                    od.notes,
-
-                    od.created_at AS opportunity_created_at,
-
-                    od.stage_id,
-
-                    od."Misc_Col1" AS misc_col1,
-
-                    sm.stage_name
-
-                FROM {T("Opportunity_Details")} od
-
-                JOIN {T("Client_Master")} cm_scope
-
-                    ON cm_scope.client_id = od.client_id
-
-                JOIN {T("Stage_Master")} sm
-
-                    ON sm.stage_id = od.stage_id
-
-                WHERE sm.stage_type = :stage_type
-
-                  AND cm_scope.tenant_id = :tenant_id
-
-                  AND cm_scope."Client_Category_Master_ID" = :cat_id
-
-                  AND cm_scope.status_id = :active_id
-
-                ORDER BY od.client_id, od.created_at DESC, od.opportunity_id DESC
-
-            )
-
-            SELECT
-
-                cm.client_id,
-
-                cm.client_company_name,
-
-                cm.address,
-
-                cm.post_code,
-
-                cm.client_phone,
-
-                cm.client_email,
-
-                cm.client_website,
-
-                cm.company_number,
-
-                cm.created_at AS client_created_at,
-
-                lso.opportunity_id,
-
-                lso.opportunity_title,
-
-                lso.opportunity_description,
-
-                lso.opportunity_date,
-
-                lso.opportunity_value,
-
-                lso.currency_id,
-
-                lso.mobile_no,
-
-                lso.notes,
-
-                lso.opportunity_created_at,
-
-                lso.stage_id,
-
-                lso.stage_name,
-
-                lso.misc_col1
-
-            FROM {T("Client_Master")} cm
-
-            JOIN LatestSalesOpportunity lso
-
-                ON lso.client_id = cm.client_id
-
-            WHERE cm.tenant_id = :tenant_id
-
-              AND cm."Client_Category_Master_ID" = :cat_id
-
-              AND cm.status_id = :active_id
-
-            ORDER BY cm.client_company_name ASC
-
-            """
-
-        )
-
-        results = session.execute(
-
-            query,
-
+        rows = session.execute(
+            text(f"""
+                WITH SalesLeads AS (
+                    SELECT
+                        lm.lead_id,
+                        lm.tenant_id,
+                        lm."client_ID" AS client_id,
+                        lm.assigned_employee_id,
+                        lm.stage_id,
+                        lm.lead_title,
+                        lm.lead_description,
+                        lm.lead_date,
+                        lm.expected_value,
+                        lm.currency_id,
+                        lm.lead_source,
+                        lm."qualification status" AS qualification_status,
+                        lm.priority,
+                        lm."expected_decision_date " AS expected_decision_date,
+                        lm.last_contacted_date,
+                        lm.next_followup_date,
+                        lm.created_by,
+                        lm.created_date,
+                        sm.stage_name
+                    FROM {T("Lead_Master")} lm
+                    JOIN {T("Pipeline_Stage_Master")} sm
+                      ON sm.stage_id = lm.stage_id
+                    WHERE lm.tenant_id = :tenant_id
+                      AND sm.stage_type = :stage_type
+                    ORDER BY lm.created_date DESC NULLS LAST, lm.lead_id DESC
+                )
+                SELECT
+                    ll.*,
+                    cm.client_company_name,
+                    cm.address,
+                    cm.post_code,
+                    cm.client_phone,
+                    cm.client_email,
+                    cm.client_website,
+                    cm.company_number,
+                    cm.created_at AS client_created_at
+                FROM SalesLeads ll
+                LEFT JOIN {T("Client_Master")} cm
+                  ON cm.client_id = ll.client_id
+                 AND cm.tenant_id = ll.tenant_id
+                ORDER BY cm.client_company_name ASC NULLS LAST,
+                         ll.created_date DESC NULLS LAST, ll.lead_id DESC
+            """),
             {
-
                 "tenant_id": tenant_id,
-
                 "stage_type": _cfg("STAGE_TYPE_SALES", int),
-
-                "cat_id": _cfg("COMMERCIAL_CATEGORY_ID", int),
-
-                "active_id": _cfg("ACTIVE_STATUS_ID", int),
-
             },
-
         ).fetchall()
 
         pipeline_items = []
-
-        for row in results:
-
-            misc = {}
-
-            if row.misc_col1:
-
-                try:
-
-                    misc = json.loads(row.misc_col1)
-
-                    if not isinstance(misc, dict):
-
-                        misc = {}
-
-                except Exception:
-
-                    misc = {}
-
-            stage = misc.get(misc_key_sales_stage) or (
-
+        for row in rows:
+            stage = (
                 stage_label_enquiry
-
                 if row.stage_id == stage_id_lead
-
                 else row.stage_name
-
             )
-
-            # The frontend identifies/moves a company by client_id, so expose
-
-            # both company_id and client_id.
-
-            pipeline_items.append(
-
-                {
-
-                    "id": f"company-{row.client_id}",
-
-                    "type": "sales",
-
-                    "company_id": row.client_id,
-
-                    "client_id": row.client_id,
-
-                    "opportunity_id": row.opportunity_id,
-
-                    "company_name": row.client_company_name,
-
-                    "address": row.address,
-
-                    "post_code": row.post_code,
-
-                    "phone": row.client_phone,
-
-                    "email": row.client_email,
-
-                    "website": row.client_website,
-
-                    "company_number": row.company_number,
-
-                    "created_at": _iso(row.opportunity_created_at),
-
-                    "client_created_at": _iso(row.client_created_at),
-
-                    "opportunity_title": row.opportunity_title,
-
-                    "opportunity_description": row.opportunity_description,
-
-                    "opportunity_date": _iso(row.opportunity_date),
-
-                    "opportunity_value": row.opportunity_value,
-
-                    "currency_id": row.currency_id,
-
-                    "mobile_no": row.mobile_no,
-
-                    "notes": row.notes,
-
-                    "stage_id": row.stage_id,
-
-                    "stage_name": row.stage_name,
-
-                    "stage": stage,
-
-                    "misc": misc,
-
-                    "pipeline_type": "sales",
-
-                }
-
-            )
+            pipeline_items.append({
+                "id": f"lead-{row.lead_id}",
+                "type": "sales",
+                "lead_id": row.lead_id,
+                "company_id": row.client_id,
+                "client_id": row.client_id,
+                "company_name": row.client_company_name,
+                "address": row.address,
+                "post_code": row.post_code,
+                "phone": row.client_phone,
+                "email": row.client_email,
+                "website": row.client_website,
+                "company_number": row.company_number,
+                "created_at": _iso(row.created_date),
+                "client_created_at": _iso(row.client_created_at),
+                "lead_title": row.lead_title,
+                "lead_description": row.lead_description,
+                "lead_date": _iso(row.lead_date),
+                "expected_value": row.expected_value,
+                "currency_id": row.currency_id,
+                "lead_source": row.lead_source,
+                "assigned_employee_id": row.assigned_employee_id,
+                "qualification_status": row.qualification_status,
+                "priority": row.priority,
+                "expected_decision_date": _iso(row.expected_decision_date),
+                "last_contacted_date": _iso(row.last_contacted_date),
+                "next_followup_date": _iso(row.next_followup_date),
+                "stage_id": row.stage_id,
+                "stage_name": row.stage_name,
+                "stage": stage,
+                "pipeline_type": "sales",
+            })
 
         return jsonify(pipeline_items), 200
-
     except Exception as e:
-
-        current_app.logger.exception(
-
-            f"Error fetching sales pipeline: {e}"
-
-        )
-
-        return jsonify(
-
-            {
-
-                "error": "Failed to fetch sales pipeline",
-
-                "details": str(e),
-
-            }
-
-        ), 500
-
+        current_app.logger.exception(f"Error fetching Sales Pipeline from Lead_Master: {e}")
+        return jsonify({
+            "error": "Failed to fetch sales pipeline",
+            "details": str(e),
+        }), 500
     finally:
-
         session.close()
+
+
+@pipeline_bp.route("/pipeline/sales/stages", methods=["GET", "OPTIONS"])
+@token_required
+def get_sales_stages():
+    """Return configured Sales stages from Pipeline_Stage_Master."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            text(
+                f"""
+                SELECT stage_id, stage_name, preceding_stage_id
+                FROM {T("Pipeline_Stage_Master")}
+                WHERE stage_type = :stage_type
+                ORDER BY stage_id
+                """
+            ),
+            {"stage_type": _cfg("STAGE_TYPE_SALES", int)},
+        ).fetchall()
+
+        return jsonify([
+            {
+                "stage_id": row.stage_id,
+                "name": row.stage_name,
+                "stage_name": row.stage_name,
+                "stage_description": None,
+                "preceding_stage_id": row.preceding_stage_id,
+            }
+            for row in rows
+        ]), 200
+    except Exception as e:
+        current_app.logger.exception(f"Error fetching Sales stages: {e}")
+        return jsonify({
+            "error": "Failed to fetch Sales stages",
+            "details": str(e),
+        }), 500
+    finally:
+        session.close()
+
 
 @pipeline_bp.route("/pipeline/sales/lead", methods=["POST", "OPTIONS"])
 
@@ -1155,9 +1075,7 @@ def create_sales_lead():
 
     """
 
-    Create a Lead by creating/finding Client_Master and then inserting
-
-    Opportunity_Details linked by client_id.
+    Create a Lead by creating/finding Client_Master and inserting into Lead_Master.
 
     """
 
@@ -1175,7 +1093,7 @@ def create_sales_lead():
 
         stage_id_lead = _cfg("STAGE_ID_LEAD", int)
 
-        opportunity_id, client_id = _insert_opportunity_record(
+        lead_id, client_id = _insert_lead_record(
 
             session=session,
 
@@ -1195,7 +1113,7 @@ def create_sales_lead():
 
                 "message": "Lead created successfully",
 
-                "opportunity_id": opportunity_id,
+                "lead_id": lead_id,
 
                 "client_id": client_id,
 
@@ -1243,9 +1161,7 @@ def import_sales_leads():
 
     Bulk import leads from Excel or a JSON array.
 
-    Each row follows the same Client_Master -> Opportunity_Details flow as
-
-    manual Lead creation.
+    Each row follows the same Client_Master -> Lead_Master flow as manual Lead creation.
 
     """
 
@@ -1317,7 +1233,7 @@ def import_sales_leads():
 
                 raise ValueError("Each imported lead must be an object/row")
 
-            opportunity_id, client_id = _insert_opportunity_record(
+            lead_id, client_id = _insert_lead_record(
 
                 session=session,
 
@@ -1333,7 +1249,7 @@ def import_sales_leads():
 
                 {
 
-                    "opportunity_id": opportunity_id,
+                    "lead_id": lead_id,
 
                     "client_id": client_id,
 
@@ -1355,11 +1271,7 @@ def import_sales_leads():
 
                 "records": created_records,
 
-                "opportunity_ids": [
-
-                    item["opportunity_id"] for item in created_records
-
-                ],
+                "lead_ids": [item["lead_id"] for item in created_records],
 
             }
 
@@ -1387,213 +1299,149 @@ def import_sales_leads():
 
         session.close()
 
-@pipeline_bp.route("/pipeline/sales/<int:client_id>/stage", methods=["PATCH", "OPTIONS"])
-
+@pipeline_bp.route("/pipeline/sales/<int:lead_id>/stage", methods=["PATCH", "OPTIONS"])
 @token_required
-
-def update_sales_pipeline_stage(client_id):
-
-    """Update the latest Sales Opportunity stage for a client."""
-
+def update_sales_pipeline_stage(lead_id):
+    """Update the stage of a Lead_Master lead."""
     if request.method == "OPTIONS":
-
         return jsonify({}), 200
 
     session = SessionLocal()
-
     try:
-
         tenant_id = request.current_user.tenant_id
-
         payload = request.get_json(silent=True) or {}
-
         requested_stage = payload.get("stage")
-
         requested_stage_id = payload.get("stage_id")
 
         if requested_stage_id is not None:
-
             try:
-
                 stage_id = int(requested_stage_id)
-
             except (TypeError, ValueError):
-
                 return jsonify({"error": "stage_id must be an integer"}), 400
-
         else:
-
             stage_text = str(requested_stage or "").strip()
-
             if not stage_text:
-
                 return jsonify({"error": "stage or stage_id is required"}), 400
-
-            # The UI calls the Lead stage "Enquiry".
-
             if stage_text.lower() in {"lead", "enquiry", "inquiry"}:
-
                 stage_id = _cfg("STAGE_ID_LEAD", int)
-
             else:
-
                 stage_row = session.execute(
-
-                    text(
-
-                        f"""
-
+                    text(f"""
                         SELECT stage_id
-
-                        FROM {T("Stage_Master")}
-
+                        FROM {T("Pipeline_Stage_Master")}
                         WHERE stage_type = :stage_type
-
                           AND LOWER(stage_name) = LOWER(:stage_name)
-
                         LIMIT 1
-
-                        """
-
-                    ),
-
+                    """),
                     {
-
                         "stage_type": _cfg("STAGE_TYPE_SALES", int),
-
                         "stage_name": stage_text,
-
                     },
-
                 ).fetchone()
-
                 if not stage_row:
-
                     return jsonify({"error": f"Sales stage '{stage_text}' was not found"}), 400
-
                 stage_id = int(stage_row.stage_id)
 
-        # Validate that the target stage belongs to the Sales stage type.
-
         valid_stage = session.execute(
-
-            text(
-
-                f"""
-
+            text(f"""
                 SELECT stage_id, stage_name
-
-                FROM {T("Stage_Master")}
-
+                FROM {T("Pipeline_Stage_Master")}
                 WHERE stage_id = :stage_id
-
                   AND stage_type = :stage_type
-
                 LIMIT 1
-
-                """
-
-            ),
-
-            {"stage_id": stage_id, "stage_type": _cfg("STAGE_TYPE_SALES", int)},
-
+            """),
+            {
+                "stage_id": stage_id,
+                "stage_type": _cfg("STAGE_TYPE_SALES", int),
+            },
         ).fetchone()
-
         if not valid_stage:
-
             return jsonify({"error": "Invalid Sales stage"}), 400
 
-        latest = session.execute(
-
-            text(
-
-                f"""
-
-                SELECT od.opportunity_id
-
-                FROM {T("Opportunity_Details")} od
-
-                JOIN {T("Client_Master")} cm ON cm.client_id = od.client_id
-
-                JOIN {T("Stage_Master")} sm ON sm.stage_id = od.stage_id
-
-                WHERE od.client_id = :client_id
-
-                  AND cm.tenant_id = :tenant_id
-
-                  AND sm.stage_type = :stage_type
-
-                ORDER BY od.created_at DESC, od.opportunity_id DESC
-
+        
+        # Find the Won stage dynamically.
+        won_stage_row = session.execute(
+            text(f"""
+                SELECT stage_id
+                FROM {T("Pipeline_Stage_Master")}
+                WHERE stage_type = :stage_type
+                  AND LOWER(TRIM(stage_name)) = LOWER(:stage_name)
                 LIMIT 1
-
-                """
-
-            ),
-
+            """),
             {
-
-                "client_id": client_id,
-
-                "tenant_id": tenant_id,
-
                 "stage_type": _cfg("STAGE_TYPE_SALES", int),
-
+                "stage_name": "Won",
             },
+        ).fetchone()
 
+        if not won_stage_row:
+            return jsonify({
+                "error": "Won stage is not configured for the Sales Pipeline"
+            }), 500
+
+        won_stage_id = int(won_stage_row.stage_id)
+
+        # Find this lead and its current stage for this tenant.
+        latest = session.execute(
+            text(f"""
+                SELECT lead_id, stage_id
+                FROM {T("Lead_Master")}
+                WHERE lead_id = :lead_id
+                  AND tenant_id = :tenant_id
+                LIMIT 1
+            """),
+            {
+                "lead_id": lead_id,
+                "tenant_id": tenant_id,
+            },
         ).fetchone()
 
         if not latest:
+            return jsonify({
+                "error": "Lead was not found for this tenant"
+            }), 404
 
-            return jsonify({"error": "No Sales Opportunity exists for this client"}), 404
-
+        # Set won_at only when the lead enters Won.
+        # Refresh it if the lead leaves Won and later returns.
         session.execute(
-
-            text(
-
-                f"""
-
-                UPDATE {T("Opportunity_Details")}
-
-                SET stage_id = :stage_id
-
-                WHERE opportunity_id = :opportunity_id
-
-                """
-
-            ),
-
-            {"stage_id": stage_id, "opportunity_id": latest.opportunity_id},
-
+            text(f"""
+                UPDATE {T("Lead_Master")}
+                SET stage_id = :stage_id,
+                    won_at = CASE
+                        WHEN :stage_id = :won_stage_id
+                         AND stage_id IS DISTINCT FROM :won_stage_id
+                        THEN CURRENT_TIMESTAMP
+                        ELSE won_at
+                    END,
+                    modified_date = CURRENT_DATE
+                WHERE lead_id = :lead_id
+                  AND tenant_id = :tenant_id
+            """),
+            {
+                "stage_id": stage_id,
+                "won_stage_id": won_stage_id,
+                "lead_id": latest.lead_id,
+                "tenant_id": tenant_id,
+            },
         )
 
         session.commit()
-
         return jsonify({
-
             "message": "Sales stage updated successfully",
-
-            "client_id": client_id,
-
-            "opportunity_id": latest.opportunity_id,
-
+            "lead_id": latest.lead_id,
             "stage_id": stage_id,
-
             "stage_name": valid_stage.stage_name,
-
         }), 200
-
     except Exception as e:
-
         session.rollback()
-
-        current_app.logger.exception(f"Error updating Sales stage: {e}")
-
-        return jsonify({"error": "Failed to update sales stage", "details": str(e)}), 500
-
+        current_app.logger.exception(f"Error updating Sales stage in Lead_Master: {e}")
+        return jsonify({
+            "error": "Failed to update sales stage",
+            "details": str(e),
+        }), 500
     finally:
-
         session.close()
+
 
 @pipeline_bp.route("/pipeline/training/stages", methods=["GET", "OPTIONS"])
 
@@ -1603,11 +1451,11 @@ def get_training_stages():
 
     """
 
-    Training stages for the board, in board order, read from Stage_Master.
+    Training stages for the board, in tenant-specific board order.
 
     Each item:
 
-      stage_id     Stage_Master id
+      stage_id     Pipeline_Stage_Master id
 
       name         stage name shown as the column title
 
@@ -1629,7 +1477,9 @@ def get_training_stages():
 
     try:
 
-        stages = load_training_stage_context(session)
+        tenant_id = request.current_user.tenant_id
+
+        stages = load_training_stage_context(session, tenant_id)
 
         return jsonify(
 
@@ -1685,15 +1535,15 @@ def get_training_pipeline():
 
     """
 
-    Return training pipeline records from Services_Master.
+    Return existing training pipeline records from Services_Master_archive.
 
-    Services_Master is the source of truth for training batches.
+    Services_Master_archive is the source of truth for existing training batches.
 
     Client_Master is used to resolve the company name.
 
     service_id is exposed as training_id for frontend compatibility.
 
-    stage comes directly from Services_Master.stage.
+    stage comes directly from Services_Master_archive.stage.
 
     client_id is exposed as company_id for the existing frontend.
 
@@ -1715,21 +1565,13 @@ def get_training_pipeline():
 
         stage_id_converted = _cfg("STAGE_ID_CONVERTED", int)
 
-        stage_id_awaiting = _cfg("STAGE_ID_AWAITING_SCHEDULING", int)
-
-        stage_id_default = _cfg("STAGE_ID_TRAINING_DEFAULT", int)
-
         misc_key_converted_at = _cfg("MISC_KEY_CONVERTED_AT")
 
-        stage_names = _load_stage_names(
+        training_stages = load_training_stage_context(session, tenant_id)
 
-            session, [stage_id_awaiting, stage_id_default]
+        stage_awaiting = training_stages.awaiting
 
-        )
-
-        stage_awaiting = stage_names[stage_id_awaiting]
-
-        stage_default = stage_names[stage_id_default]
+        stage_default = training_stages.default
 
         query = text(
 
@@ -1791,7 +1633,7 @@ def get_training_pipeline():
 
                 sm.po_received_at
 
-            FROM {T("Services_Master")} sm
+            FROM {T("Services_Master_archive")} sm
 
             LEFT JOIN {T("Client_Master")} cm
 
@@ -1967,7 +1809,7 @@ def get_training_pipeline():
 
                     FROM {T("Opportunity_Details")} od
 
-                    JOIN {T("Stage_Master")} sm ON sm.stage_id = od.stage_id
+                    JOIN {T("Pipeline_Stage_Master")} sm ON sm.stage_id = od.stage_id
 
                     WHERE od.client_id = cm.client_id
 
@@ -1989,7 +1831,7 @@ def get_training_pipeline():
 
                   AND NOT EXISTS (
 
-                      SELECT 1 FROM {T("Services_Master")} s
+                      SELECT 1 FROM {T("Services_Master_archive")} s
 
                       WHERE s.client_id = cm.client_id
 
@@ -2067,7 +1909,7 @@ def get_training_pipeline():
 
         current_app.logger.exception(
 
-            f"Error fetching training pipeline from Services_Master: {e}"
+            f"Error fetching training pipeline from Services_Master_archive: {e}"
 
         )
 
