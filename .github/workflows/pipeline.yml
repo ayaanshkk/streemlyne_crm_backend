@@ -1,0 +1,139 @@
+# Branch pipeline: dev -> sit -> uat -> main (production)
+#
+#   push to dev  : build check -> deploy dev -> merge dev into sit automatically
+#                  -> deploy sit -> open a pull request sit -> uat (needs approval)
+#   push to uat  : (an approved PR was merged) build check -> deploy uat
+#                  -> open a pull request uat -> main (needs approval)
+#   push to main : build check -> deploy production
+#
+# Deploys call a deploy hook (e.g. Coolify on Hetzner) set per GitHub
+# environment (dev, sit, uat, prod): secret DEPLOY_HOOK_URL, and optional
+# DEPLOY_HOOK_TOKEN sent as a Bearer token. No hook set -> the deploy is skipped.
+
+name: Pipeline
+
+on:
+  push:
+    branches: [dev, sit, uat, main]
+  pull_request:
+    branches: [sit, uat, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile all Python files
+        run: python -m compileall -q backend
+
+      - name: App starts, all routes register, all models map
+        working-directory: backend
+        env:
+          # placeholder only: the check never connects to a database
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:1/ci
+          DB_SCHEMA: streemLyne_mt_dev2
+          JWT_SECRET_KEY: ci-only
+          SECRET_KEY: ci-only
+        run: |
+          python -X utf8 - <<'PY'
+          import app as A
+          from sqlalchemy.orm import configure_mappers
+          rules = list(A.app.url_map.iter_rules())
+          fai = sum(r.rule.startswith('/api/fai') for r in rules)
+          print(f'routes: {len(rules)} (FAI: {fai})')
+          assert fai > 0, 'FAI module did not register'
+          with A.app.app_context():
+              configure_mappers()
+          print('models OK')
+          PY
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+    steps:
+      - name: Call deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
+          DEPLOY_HOOK_TOKEN: ${{ secrets.DEPLOY_HOOK_TOKEN }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "::notice::No DEPLOY_HOOK_URL set for environment '${{ github.ref_name }}' - deploy skipped."
+            exit 0
+          fi
+          if [ -n "$DEPLOY_HOOK_TOKEN" ]; then
+            curl -fsS -X POST -H "Authorization: Bearer $DEPLOY_HOOK_TOKEN" "$DEPLOY_HOOK_URL"
+          else
+            curl -fsS -X POST "$DEPLOY_HOOK_URL"
+          fi
+
+  promote:
+    name: Promote
+    needs: build
+    if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'uat')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Helpers
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cat > /tmp/open_pr.sh <<'SH'
+          # open_pr <base> <head>: open a PR head -> base unless one is open or nothing differs
+          base=$1; head=$2
+          git fetch -q origin "$base" "$head"
+          if [ "$(git rev-list --count "origin/$base..origin/$head")" = "0" ]; then
+            echo "$head has nothing new for $base"; exit 0
+          fi
+          if [ -n "$(gh pr list --base "$base" --head "$head" --state open --json number -q '.[].number')" ]; then
+            echo "Pull request $head -> $base is already open (it now includes the latest commits)"; exit 0
+          fi
+          gh pr create --base "$base" --head "$head" \
+            --title "Promote $head to $base" \
+            --body "Opened by the pipeline after \`$head\` passed its build check. Review and merge to promote to \`$base\`." \
+            || echo "::warning::Could not open the pull request. Enable 'Allow GitHub Actions to create and approve pull requests' in Settings > Actions > General."
+          SH
+
+      - name: dev -> sit (automatic)
+        if: github.ref_name == 'dev'
+        run: |
+          git checkout -B sit origin/sit
+          git merge --no-edit origin/dev
+          git push origin sit
+          # pushes made by the pipeline don't start other runs, so start sit's deploy explicitly
+          gh workflow run pipeline.yml --ref sit
+
+      - name: sit -> uat (pull request for approval)
+        if: github.ref_name == 'dev'
+        run: bash /tmp/open_pr.sh uat sit
+
+      - name: uat -> main (pull request for approval)
+        if: github.ref_name == 'uat'
+        run: bash /tmp/open_pr.sh main uat
