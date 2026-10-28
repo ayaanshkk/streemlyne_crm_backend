@@ -11,7 +11,7 @@ import os
 import json
 import requests
 from datetime import datetime
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, after_this_request, g, jsonify, request
 from middleware import auth_required
 from models import (
     ClientMaster, EmployeeMaster,
@@ -19,7 +19,8 @@ from models import (
     ProposalMaster, ProposalDetails,
 )
 from limiter import limiter
-from services.usage_service import check_ai_limit, record_ai_message
+from services.plan_limits import LimitExceeded
+from services.usage_service import check_limit
 from database import db
 from sqlalchemy import func, case
 
@@ -248,6 +249,9 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
     # ── create_customer ───────────────────────────────────────────────────────
     if tool_name == 'create_customer':
+        limit_payload = check_limit(str(tenant_id), 'contacts')
+        if limit_payload:
+            return {'success': False, 'message': limit_payload['error'], **limit_payload}
         client = ClientMaster(
             tenant_id=              tenant_id,
             client_contact_name=    args.get('client_contact_name'),
@@ -558,13 +562,20 @@ def chat():
         return jsonify({'error': 'Message is required'}), 400
 
     # ── AI usage limit check ──────────────────────────────────────────────────
-    limit_err = check_ai_limit(str(g.tenant_id))
-    if limit_err:
-        return jsonify({
-            'error':         limit_err,
-            'limit_reached': True,
-            'resource':      'ai_messages',
-        }), 403
+    # Atomically check + consume one credit (row-locked, so concurrent requests
+    # cannot overspend).  The credit is refunded below if the request fails.
+    from services.subscription_service import SubscriptionService as _SubSvc
+    _tenant = str(g.tenant_id)
+    try:
+        _credit_id = _SubSvc().reserve_ai_credit(_tenant, getattr(g, 'user_id', None))
+    except LimitExceeded as exc:
+        return jsonify(exc.to_response()), 403
+
+    @after_this_request
+    def _refund_failed_ai_call(response):
+        if response.status_code >= 400:
+            _SubSvc().release_ai_credit(_tenant, _credit_id)
+        return response
 
     conversation_history = data.get('conversation_history', [])
 
@@ -587,13 +598,6 @@ def chat():
     if not use_claude:
         try:
             result = _chat_with_openai(message, conversation_history)
-            try:
-                record_ai_message(
-                    tenant_id=str(g.tenant_id),
-                    user_id=getattr(g, 'user_id', None),
-                )
-            except Exception as e:
-                print(f"[USAGE] Failed to record AI message: {e}")
             return jsonify(result), 200
         except Exception as e:
             print(f"[OPENAI] Chat failed: {e}")
@@ -753,14 +757,6 @@ def chat():
                                 'total':       result_data.get('total'),
                                 'view_url':    f'/dashboard/quotes/{pid}/view',
                             }
-
-            try:
-                record_ai_message(
-                    tenant_id=str(g.tenant_id),
-                    user_id=getattr(g, 'user_id', None),
-                )
-            except Exception as e:
-                print(f"[USAGE] Failed to record AI message: {e}")
 
             if action_metadata['customer_ids'] and not action_metadata['created_customer']:
                 cid = action_metadata['customer_ids'][0]

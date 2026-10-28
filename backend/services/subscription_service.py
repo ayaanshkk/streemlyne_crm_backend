@@ -52,6 +52,14 @@ from flask import current_app, has_app_context
 from database import db
 from models import TenantMaster, TenantSubscription, SubscriptionPlan, UserMaster
 from repositories import TenantRepository, PermissionRepository
+from services.plan_limits import (
+    FEATURES,
+    LimitExceeded,
+    build_usage,
+    check_available,
+    get_usage_counter,
+    resolve_limit,
+)
 
 # [SUB-006] Single source of truth for trial length.
 TRIAL_PERIOD_DAYS: int = 7
@@ -84,8 +92,31 @@ class SubscriptionService:
     # =========================================================================
 
     def get_active_subscription(self, tenant_id: str) -> Optional[TenantSubscription]:
-        """Return the tenant's most recent active TenantSubscription row."""
-        return self.tenant_repo.get_active_subscription(tenant_id)
+        """Return the tenant's current subscription row, never leaving a tenant
+        without a plan: a tenant with no row, a trial, or an expired/canceled
+        subscription is put on the FREE plan (see _sync_subscription_state)."""
+        subscription = self.tenant_repo.get_active_subscription(tenant_id)
+        if subscription is None:
+            return self._start_free_for_tenant_without_subscription(tenant_id)
+        return self._sync_subscription_state(subscription)
+
+    def _start_free_for_tenant_without_subscription(self, tenant_id: str) -> Optional[TenantSubscription]:
+        from database import db
+
+        try:
+            if db.session.get(TenantMaster, tenant_id) is None:
+                return None
+            subscription = self._create_free_subscription(tenant_id)
+            if subscription is not None:
+                db.session.commit()
+            return subscription
+        except Exception:
+            db.session.rollback()
+            if has_app_context():
+                current_app.logger.exception(
+                    "[SUBSCRIPTION] Could not start FREE plan for tenant %s", tenant_id
+                )
+            return None
 
     def get_subscription_plan(self, subscription_id: int) -> Optional[SubscriptionPlan]:
         """Return a SubscriptionPlan by PK."""
@@ -120,9 +151,9 @@ class SubscriptionService:
             .count()
         )
         status = subscription.status if subscription else None
-        plan_max_users = plan.max_users if plan else None
+        plan_max_users = resolve_limit("users", plan) if plan else None  # matrix by plan code
 
-        effective_limit = TRIAL_USER_LIMIT if status == "trialing" else plan_max_users
+        effective_limit = plan_max_users   # no trials: every tenant follows its plan
         is_unlimited = effective_limit is None
         remaining = None if is_unlimited else max(0, effective_limit - current_count)
         limit_reached = False if is_unlimited else current_count >= effective_limit
@@ -138,10 +169,170 @@ class SubscriptionService:
         }
 
     def ensure_user_limit_available(self, tenant_id: str) -> Dict:
+        # Row lock serialises concurrent invites/sign-ups for the same tenant
+        # until the caller's transaction commits (no-op if no subscription).
+        self._lock_active_subscription(tenant_id)
         usage = self.get_user_limit_usage(tenant_id)
         if usage["user_limit_reached"]:
             raise UserLimitExceeded(usage)
         return usage
+
+    # =========================================================================
+    # Subscription matrix limits (contacts, pipelines, forms, booking pages,
+    # automations, email campaigns, AI credits).  Users keep the existing
+    # get_user_limit_usage() path so trial behaviour is unchanged.
+    # =========================================================================
+
+    def _lock_active_subscription(self, tenant_id: str) -> Optional[TenantSubscription]:
+        """SELECT ... FOR UPDATE on the tenant's active subscription row."""
+        subscription = self.get_active_subscription(tenant_id)
+        if not subscription:
+            return None
+        return (
+            db.session.query(TenantSubscription)
+            .filter(
+                TenantSubscription.tenant_subscription_mapping_id
+                == subscription.tenant_subscription_mapping_id
+            )
+            .with_for_update()
+            .first()
+        )
+
+    @staticmethod
+    def get_period_window(subscription: Optional[TenantSubscription]):
+        """Billing period used for monthly features (email, AI credits).
+
+        Follows the subscription's current period (billing-anniversary), and
+        falls back to a rolling 30 days when the period is not recorded --
+        the same rule usage_service already used.
+        """
+        if subscription and subscription.current_period_start and subscription.current_period_end:
+            return subscription.current_period_start, subscription.current_period_end
+        now = datetime.utcnow()
+        return now - timedelta(days=30), now
+
+    def _count_feature_usage(self, tenant_id: str, feature: str, period) -> tuple:
+        """Return (used, tracked) for a feature, always scoped to the tenant."""
+        from models import AIUsageLog, ClientMaster  # local: avoid import cycles
+
+        tid = str(tenant_id)
+        if feature == "users":
+            used = db.session.query(UserMaster).filter(UserMaster.tenant_id == tid).count()
+            return used, True
+        if feature == "contacts":
+            used = (
+                ClientMaster.query.filter_by(tenant_id=tid)
+                .filter(ClientMaster.is_deleted.isnot(True))
+                .count()
+            )
+            return used, True
+        if feature == "ai_credits":
+            start, end = period
+            used = (
+                AIUsageLog.query.filter_by(tenant_id=int(tid))
+                .filter(AIUsageLog.created_at >= start)
+                .filter(AIUsageLog.created_at <= end)
+                .count()
+            )
+            return used, True
+        counter = get_usage_counter(feature)
+        if counter is None:
+            return 0, False  # resource does not exist in this backend yet
+        return int(counter(tid)), True
+
+    def get_limit_usage(
+        self,
+        tenant_id: str,
+        feature: str,
+        subscription: Optional[TenantSubscription] = None,
+        plan: Optional[SubscriptionPlan] = None,
+    ) -> Dict:
+        """Usage payload for one matrix feature (see plan_limits.build_usage)."""
+        if feature not in FEATURES:
+            raise ValueError(f"Unknown feature '{feature}'")
+        subscription = subscription or self.get_active_subscription(tenant_id)
+        if subscription and not plan:
+            plan = self.get_subscription_plan(subscription.subscription_id)
+        period = self.get_period_window(subscription)
+
+        if feature == "users":
+            # Reuse the existing logic, including the fixed trial override.
+            u = self.get_user_limit_usage(tenant_id, subscription=subscription, plan=plan)
+            return build_usage(
+                "users", u["current_user_count"], u["effective_user_limit"],
+                plan_code=u["plan_code"],
+            )
+
+        used, tracked = self._count_feature_usage(tenant_id, feature, period)
+        monthly = FEATURES[feature]["monthly"]
+        return build_usage(
+            feature, used, resolve_limit(feature, plan),
+            tracked=tracked,
+            plan_code=plan.subscription_code if plan else None,
+            period_start=period[0] if monthly else None,
+            period_end=period[1] if monthly else None,
+        )
+
+    def get_all_limit_usage(self, tenant_id: str, subscription=None, plan=None) -> Dict[str, Dict]:
+        subscription = subscription or self.get_active_subscription(tenant_id)
+        if subscription and not plan:
+            plan = self.get_subscription_plan(subscription.subscription_id)
+        return {
+            feature: self.get_limit_usage(tenant_id, feature, subscription, plan)
+            for feature in FEATURES
+        }
+
+    def ensure_limit_available(self, tenant_id: str, feature: str, amount: int = 1) -> Dict:
+        """Raise LimitExceeded unless `amount` more fits under the plan limit.
+
+        Locks the tenant's subscription row so concurrent creates for the same
+        tenant are serialised until the caller commits.  A downgrade below the
+        current usage keeps blocking creation (used >= new limit).
+        """
+        self._lock_active_subscription(tenant_id)
+        usage = self.get_limit_usage(tenant_id, feature)
+        check_available(usage, amount)
+        return usage
+
+    def reserve_ai_credit(self, tenant_id: str, user_id: Optional[int] = None) -> int:
+        """Atomically check the AI allowance and consume one credit.
+
+        Check + insert happen under the subscription row lock in one
+        transaction, so simultaneous requests cannot overspend.  Returns the
+        AI_Usage_Log id so the caller can refund it with release_ai_credit().
+        """
+        from models import AIUsageLog
+
+        try:
+            self._lock_active_subscription(tenant_id)
+            usage = self.get_limit_usage(tenant_id, "ai_credits")
+            check_available(usage, 1)
+            log = AIUsageLog(tenant_id=int(tenant_id), user_id=user_id)
+            db.session.add(log)
+            db.session.commit()  # releases the row lock
+            return log.id
+        except Exception:
+            db.session.rollback()
+            raise
+
+    def release_ai_credit(self, tenant_id: str, log_id: int) -> None:
+        """Refund a credit reserved by reserve_ai_credit (e.g. the AI call failed)."""
+        from models import AIUsageLog
+
+        try:
+            AIUsageLog.query.filter_by(id=log_id, tenant_id=int(tenant_id)).delete()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("Failed to release AI credit %s", log_id)
+
+    def _safe_limits(self, tenant_id: str, subscription, plan) -> Dict:
+        """Limits block for the status API; must never break the status call."""
+        try:
+            return self.get_all_limit_usage(tenant_id, subscription, plan)
+        except Exception:
+            current_app.logger.exception("Failed to build limits for tenant %s", tenant_id)
+            return {}
 
     def check_subscription_status(self, tenant_id: str) -> Dict:
         """
@@ -178,6 +369,7 @@ class SubscriptionService:
                 "is_active":         False,
                 "status":            None,
                 "message":           "No active subscription",
+                "limits":            self._safe_limits(tenant_id, None, None),
                 **{key: value for key, value in usage.items() if key != "plan_code"},
             }
 
@@ -212,6 +404,8 @@ class SubscriptionService:
             "current_period_start":     subscription.current_period_start.isoformat() if subscription.current_period_start else None,
             "current_period_end":       subscription.current_period_end.isoformat() if subscription.current_period_end else None,
             "pause":                    None,
+            # subscription matrix: per-feature limit, used, remaining, reached, unlimited
+            "limits":                   self._safe_limits(tenant_id, subscription, plan),
             **{key: value for key, value in usage.items() if key != "plan_code"},
         }
 
@@ -242,6 +436,71 @@ class SubscriptionService:
     # [SUB-003] Trial provisioning
     # =========================================================================
 
+    def create_initial_subscription(self, tenant_id: str) -> TenantSubscription:
+        """Subscription a brand-new tenant starts with: the FREE plan (no trial).
+
+        The tenant stays on FREE until it buys a plan, and returns to FREE when a
+        paid subscription ends.  Call inside the same transaction as the
+        Tenant_Master INSERT, after flush().
+
+        Raises:
+            ValueError: no active FREE plan in Subscription_Plans.
+        """
+        subscription = self._create_free_subscription(tenant_id)
+        if subscription is None:
+            raise ValueError(
+                "No active FREE plan found in Subscription_Plans "
+                "(subscription_code = 'FREE', is_active = true)."
+            )
+        return subscription
+
+    def _create_free_subscription(self, tenant_id: str) -> Optional[TenantSubscription]:
+        from database import db
+
+        free = (
+            db.session.query(SubscriptionPlan)
+            .filter(
+                db.func.upper(db.func.trim(SubscriptionPlan.subscription_code)) == "FREE",
+                SubscriptionPlan.is_active.is_(True),
+            )
+            .first()
+        )
+        if not free:
+            return None
+
+        now = datetime.now(timezone.utc)
+        sub = TenantSubscription(
+            tenant_id               = tenant_id,
+            subscription_id         = free.subscription_id,
+            subscription_start_date = now.date(),
+            subscription_end_date   = None,      # FREE never lapses by date
+            is_active               = True,
+            auto_renew              = False,
+            created_at              = now,
+            status                  = "active",
+            trial_end_date          = None,
+            stripe_subscription_id  = None,
+        )
+        self._assign_sqlite_subscription_pk(sub)
+        db.session.add(sub)
+        db.session.flush()
+
+        self._reconcile_tenant_modules(tenant_id, free.subscription_id)
+
+        tenant = db.session.get(TenantMaster, tenant_id)
+        if tenant and not tenant.stripe_customer_id:
+            from services.payment_service import PaymentService
+
+            try:
+                PaymentService().ensure_stripe_customer(tenant, commit=False, require_stripe=False)
+            except Exception as exc:
+                if has_app_context():
+                    current_app.logger.warning(
+                        "[SUBSCRIPTION] Free provisioning skipped Stripe customer creation for tenant %s: %s",
+                        tenant_id, exc,
+                    )
+        return sub
+
     def create_trial_subscription(self, tenant_id: str) -> TenantSubscription:
         """
         Provision a 7-day trial for a newly created tenant.
@@ -266,6 +525,9 @@ class SubscriptionService:
         base_plan = (
             db.session.query(SubscriptionPlan)
             .filter_by(is_base_plan=True, is_active=True)
+            # FREE is also a base plan now; the trial must run on a paid-tier plan
+            .filter(db.func.upper(db.func.trim(SubscriptionPlan.subscription_code)) != "FREE")
+            .order_by(SubscriptionPlan.subscription_id)
             .first()
         )
         if not base_plan:
@@ -652,6 +914,42 @@ class SubscriptionService:
             return start_date + relativedelta(months=billing_cycle)
 
     @staticmethod
+    def _move_to_free_plan(subscription: TenantSubscription) -> bool:
+        """Switch this subscription row to the active FREE plan (no commit).
+
+        The same row is reused, so a later Stripe checkout upgrades it in place
+        (the webhook updates the tenant's latest subscription row).
+        Returns False when no active FREE plan exists.
+        """
+        from database import db
+
+        free = (
+            db.session.query(SubscriptionPlan)
+            .filter(
+                db.func.upper(db.func.trim(SubscriptionPlan.subscription_code)) == "FREE",
+                SubscriptionPlan.is_active.is_(True),
+            )
+            .first()
+        )
+        if not free:
+            return False
+
+        subscription.subscription_id      = free.subscription_id
+        subscription.status               = "active"
+        subscription.is_active            = True
+        subscription.auto_renew           = False
+        subscription.cancel_at_period_end = False
+        subscription.subscription_end_date = None   # FREE never lapses by date
+        subscription.current_period_start = None
+        subscription.current_period_end   = None
+        subscription.trial_end_date       = None
+        subscription.stripe_subscription_id = None  # the paid Stripe subscription is over
+        SubscriptionService._reconcile_tenant_modules(
+            subscription.tenant_id, free.subscription_id
+        )
+        return True
+
+    @staticmethod
     def _sync_subscription_state(
         subscription: Optional[TenantSubscription],
     ) -> Optional[TenantSubscription]:
@@ -680,6 +978,17 @@ class SubscriptionService:
             return dt_value.astimezone(timezone.utc)
 
         changed = False
+
+        # No trials: any leftover trial row (without a Stripe subscription)
+        # becomes the FREE plan straight away.
+        if (
+            subscription.status == "trialing"
+            and not subscription.stripe_subscription_id
+            and SubscriptionService._move_to_free_plan(subscription)
+        ):
+            subscription.updated_at = datetime.utcnow()
+            db.session.commit()
+            return subscription
 
         # Trial expiry
         if subscription.status == "trialing" and subscription.trial_end_date:
@@ -735,6 +1044,12 @@ class SubscriptionService:
                 subscription.tenant_id, subscription_id=None
             )
             changed = True
+
+        # A subscription that has ended (expired / canceled) returns the tenant
+        # to the FREE plan until they buy again.
+        if subscription.status in ("expired", "canceled", "cancelled"):
+            if SubscriptionService._move_to_free_plan(subscription):
+                changed = True
 
         if changed:
             subscription.updated_at = datetime.utcnow()

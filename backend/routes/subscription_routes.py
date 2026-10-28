@@ -17,6 +17,7 @@ from models import (
     TenantSubscription,
 )
 from services.subscription_service import SubscriptionService
+from services.plan_limits import plan_limits_dict
 
 # ---------------------------------------------------------------------------
 # Optional Stripe import
@@ -1454,31 +1455,77 @@ def get_plan_modules(subscription_id: int):
     }), 200
 
 
-@subscription_bp.route("/plans/<int:subscription_id>/modules/<int:module_id>", methods=["POST"])
+
+@subscription_bp.route(
+    "/plans/<int:subscription_id>/modules/<int:module_id>",
+    methods=["POST"]
+)
 @auth_required
 @permission_required("subscription.manage_modules")
 def add_module_to_plan(subscription_id: int, module_id: int):
-    """POST /api/subscriptions/plans/<subscription_id>/modules/<module_id>"""
+    """Add a module to a plan and refresh access for existing subscribers."""
+
     _plan_or_404(subscription_id)
+
     if not ModuleMaster.query.get(module_id):
         return jsonify({"error": "Module not found"}), 404
 
-    if SubscriptionModuleMapping.query.filter_by(
-        subscription_id=subscription_id, module_id=module_id
-    ).first():
-        return jsonify({"error": "Module already included in this plan"}), 409
+    existing = SubscriptionModuleMapping.query.filter_by(
+        subscription_id=subscription_id,
+        module_id=module_id
+    ).first()
 
-    mapping = SubscriptionModuleMapping(
-        subscription_id=subscription_id, module_id=module_id
-    )
+    if existing:
+        return jsonify({
+            "error": "Module already included in this plan"
+        }), 409
+
     try:
+        mapping = SubscriptionModuleMapping(
+            subscription_id=subscription_id,
+            module_id=module_id
+        )
         db.session.add(mapping)
+        db.session.flush()
+
+        # Refresh module access for tenants already on this plan.
+        svc = SubscriptionService()
+
+        subscribers = TenantSubscription.query.filter_by(
+            subscription_id=subscription_id,
+            is_active=True
+        ).all()
+
+        for subscription in subscribers:
+            svc._reconcile_tenant_modules(
+                subscription.tenant_id,
+                subscription_id
+            )
+
         db.session.commit()
+
     except IntegrityError:
         db.session.rollback()
-        return jsonify({"error": "Module already included in this plan"}), 409
+        return jsonify({
+            "error": "Module already included in this plan"
+        }), 409
 
-    return jsonify({"message": "Module added to plan"}), 201
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Failed to update plan modules for subscription %s",
+            subscription_id
+        )
+        return jsonify({
+            "error": "Failed to update plan modules"
+        }), 500
+
+    return jsonify({
+        "message": "Module added to plan and existing subscribers refreshed",
+        "subscription_id": subscription_id,
+        "module_id": module_id,
+        "tenants_refreshed": len(subscribers)
+    }), 201
 
 
 @subscription_bp.route("/plans/<int:subscription_id>/modules/<int:module_id>", methods=["DELETE"])
@@ -1558,7 +1605,8 @@ def _plan_dict(p: SubscriptionPlan) -> dict:
         "is_base_plan": p.is_base_plan,
         "is_active": p.is_active,
         "stripe_price_id": p.stripe_price_id,
-        "max_users": p.max_users,
+        "max_users": plan_limits_dict(p)["users"],   # effective limit (None = unlimited)
+        "limits": plan_limits_dict(p),               # all matrix limits (None = unlimited)
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
@@ -1573,7 +1621,7 @@ def _tenant_sub_dict(s: TenantSubscription) -> dict:
         "plan_name":                      plan.subscription_name if plan else None,
         "plan_code":                      plan.subscription_code if plan else None,
         "stripe_price_id":                plan.stripe_price_id if plan else None,
-        "max_users":                      plan.max_users if plan else None,
+        "max_users":                      plan_limits_dict(plan)["users"] if plan else None,
         "subscription_start_date":        s.subscription_start_date.isoformat() if s.subscription_start_date else None,
         "subscription_end_date":          s.subscription_end_date.isoformat() if s.subscription_end_date else None,
         "is_active":                      s.is_active,

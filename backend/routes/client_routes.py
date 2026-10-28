@@ -1,4 +1,4 @@
-from services.usage_service import check_customer_limit
+from services.usage_service import check_limit
 from flask import Blueprint, request, jsonify, g, abort
 from sqlalchemy.exc import IntegrityError
 from database import db
@@ -92,12 +92,13 @@ def check_client_limit():
     )
 
     if not is_trial:
+        contacts = svc.get_limit_usage(str(g.tenant_id), "contacts")
         return jsonify({
             "is_trial":      False,
-            "limit":         None,
+            "limit":         contacts["limit"],      # None = unlimited
             "current_count": current_count,
-            "limit_reached": False,
-            "remaining":     None,
+            "limit_reached": contacts["limit_reached"],
+            "remaining":     contacts["remaining"],
         }), 200
 
     limit_reached = current_count >= TRIAL_CLIENT_LIMIT
@@ -153,9 +154,9 @@ def create_client():
     Returns 403 { "error": "trial_limit_reached", ... } when the limit is hit.
     """
     # ── Limit check ───────────────────────────────────────────────────────────
-    err = check_customer_limit(str(g.tenant_id))
-    if err:
-        return jsonify({"error": err, "limit_reached": True, "resource": "customers"}), 403
+    limit_payload = check_limit(str(g.tenant_id), "contacts")
+    if limit_payload:
+        return jsonify(limit_payload), 403
     # ─────────────────────────────────────────────────────────────────────────
 
     data = request.get_json() or {}

@@ -68,7 +68,7 @@ class TenantService:
         tid = tenant.tenant_id
 
         from services.subscription_service import SubscriptionService
-        SubscriptionService().create_trial_subscription(tid)
+        SubscriptionService().create_initial_subscription(tid)  # FREE by default
 
         db.session.commit()
         return tenant

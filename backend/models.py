@@ -143,6 +143,13 @@ class SubscriptionPlan(db.Model):
     max_users         = db.Column(db.Integer)
     max_customers    = db.Column(db.Integer)
     max_ai_messages  = db.Column(db.Integer)
+    # Subscription matrix limits (run plan_limits_columns.sql first). -1 = unlimited,
+    # NULL = not set yet (falls back to the defaults in services/plan_limits.py).
+    max_pipelines            = db.Column(db.Integer)
+    max_forms                = db.Column(db.Integer)
+    max_booking_pages        = db.Column(db.Integer)
+    max_active_automations   = db.Column(db.Integer)
+    max_email_campaign_sends = db.Column(db.Integer)
     currency             = db.relationship('CurrencyMaster', backref='subscription_plans')
     module_mappings      = db.relationship('SubscriptionModuleMapping', back_populates='subscription', lazy='dynamic')
     tenant_subscriptions = db.relationship('TenantSubscription', back_populates='subscription', lazy='dynamic')
@@ -179,6 +186,11 @@ class SubscriptionPlan(db.Model):
             'max_users':          self.max_users,
             'max_customers':      self.max_customers,
             'max_ai_messages':    self.max_ai_messages,
+            'max_pipelines':            self.max_pipelines,
+            'max_forms':                self.max_forms,
+            'max_booking_pages':        self.max_booking_pages,
+            'max_active_automations':   self.max_active_automations,
+            'max_email_campaign_sends': self.max_email_campaign_sends,
             'created_at':         self.created_at.isoformat() if self.created_at else None,
             'updated_at':         self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -704,6 +716,22 @@ class ClientMaster(db.Model):
     default_currency_id = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.Currency_Master.currency_id'))
     client_company_name = db.Column(db.String(255), nullable=False)
     address             = db.Column(db.String)
+    
+    stage_id = db.Column(
+        db.BigInteger,
+        db.ForeignKey(
+            f'{DB_SCHEMA}.Tenant_Pipeline_Stage_Mapping.'
+            f'Tenant_Pipeline_Stage_Mapping_id'
+        ),
+        nullable=True
+    )
+
+    is_converted = db.Column(
+        db.SmallInteger,
+        nullable=False,
+        default=0,
+        server_default='0'
+    )
     post_code           = db.Column(db.String(20))
     client_phone        = db.Column(db.String(50))
     client_email        = db.Column(db.String(255))
@@ -976,7 +1004,7 @@ class AIUsageLog(db.Model):
     id         = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     tenant_id  = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id',
                            ondelete='CASCADE'), nullable=False, index=True)
-    user_id    = db.Column(db.SmallInteger, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id',
+    user_id    = db.Column(db.Integer, db.ForeignKey(f'{DB_SCHEMA}.User_Master.user_id',
                            ondelete='SET NULL'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
  
@@ -1570,6 +1598,7 @@ class TenantPipelineStage(db.Model):
     tenant_pipeline_stage_mapping_id = db.Column('Tenant_Pipeline_Stage_Mapping_id', db.BigInteger, primary_key=True, autoincrement=True)
     pipeline_stage_id              = db.Column('Pipeline_Stage_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Pipeline_Stage_Master.stage_id'))
     tenant_id                      = db.Column('Tenant_ID', db.Integer, db.ForeignKey(f'{DB_SCHEMA}.Tenant_Master.tenant_id'))
+    pipeline_type = db.Column('Pipeline_Type', db.SmallInteger)
     stage_name                     = db.Column('Stage_Name', db.String)
     description                    = db.Column('Description', db.String)
     preceding_stage_id             = db.Column('Preceding_Stage_ID', db.BigInteger)

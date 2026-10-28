@@ -200,6 +200,7 @@ def role_required(*allowed_roles: str):
 
 # ── Role constants — import these in route files ───────────────────────────
 ADMIN       = "Platform Admin"
+TENANT_SUPER_ADMIN = "Tenant Super Admin"   # tenant owner: the only role that may invite members
 MANAGER     = "Manager"
 SALESPERSON = "Salesperson"
 VIEWER      = "Viewer"
@@ -209,5 +210,5 @@ CAN_VIEW_ALL_RECORDS = (ADMIN, MANAGER)
 CAN_CREATE_RECORDS   = (ADMIN, MANAGER, SALESPERSON)
 CAN_DELETE_RECORDS   = (ADMIN, MANAGER)
 CAN_VIEW_REPORTS     = (ADMIN, MANAGER)
-CAN_INVITE_TEAM      = (ADMIN,)
+CAN_INVITE_TEAM      = (TENANT_SUPER_ADMIN,)
 CAN_MANAGE_ROLES     = (ADMIN,)

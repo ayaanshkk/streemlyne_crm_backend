@@ -269,6 +269,15 @@ def register():
             password    = data['password'],
         )
 
+        # The person who creates the tenant is its owner: Tenant Super Admin
+        # (the only role allowed to invite members) plus Platform Admin (settings).
+        from models import RoleMaster, UserRoleMapping
+        for owner_role_name in ('Tenant Super Admin', 'Platform Admin'):
+            owner_role = RoleMaster.query.filter_by(role_name=owner_role_name).first()
+            if owner_role:
+                db.session.add(UserRoleMapping(user_id=user.user_id, role_id=owner_role.role_id))
+        db.session.commit()
+
         token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         return jsonify({
             'success':  True,
@@ -513,10 +522,20 @@ def accept_invite():
  
     if not raw_token:
         return jsonify({"error": "Token is required"}), 400
+
     if not username:
         return jsonify({"error": "Username is required"}), 400
-    if len(password) < 8:
-        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    is_valid, message = _validate_username(username)
+    if not is_valid:
+        return jsonify({"error": message}), 400
+
+    if not password:
+        return jsonify({"error": "Password is required"}), 400
+
+    is_valid, message = _validate_password(password)
+    if not is_valid:
+        return jsonify({"error": message}), 400
  
     # Look up by invite_token column directly — no extra table
     user = UserMaster.query.filter_by(invite_token=raw_token).first()
