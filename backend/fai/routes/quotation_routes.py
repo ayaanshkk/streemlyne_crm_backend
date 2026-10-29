@@ -27,7 +27,7 @@ How each thing is stored now
                       Quotation_Date, Valid_Until, Discount_percent,
                       Sub_Total, Tax_Amount, notes, terms, Created_by_user_ID,
                       Approved_By_User_ID, Approval_Date, Updated_At/By.
-  Line columns        Product_Variant_ID, Quantity, UOM_ID, Rate,
+  Line columns        Services_ID, Quantity, UOM_ID, Rate,
                       Price_List_ID, Discount_Amount, Tax_ID, Tax_Amount,
                       Item_Name, Description, Total_Amount.
 
@@ -42,10 +42,13 @@ Money rules (all rounded to 2 decimals)
   (Discount_percent is the global discount, applied before tax.)
 
 ⚠️ OPEN ASSUMPTIONS
-  1. Product_Variant_ID and UOM_ID are NOT NULL on the line table, so every
-     item MUST carry variant_id and uom_id (a missing one is a 400 error —
-     there is deliberately no default, a guessed unit would be wrong data).
-     The /pricelist endpoint needs to return a numeric uom_id per row.
+  1. Lines now point at Services_Master (Services_Master_ID) instead of
+     Product_Variant — there is no product / variant on a quotation line any
+     more (column Services_ID -> Services_Master). Every item MUST carry service_id (missing = 400). UOM_ID is
+     NOT NULL on the line table; if the item does not send uom_id it is
+     taken from Services_Master.Services_UOM_ID, and if the service has no
+     UOM either that is a 400 (no guessed unit). Services for the picker
+     come from GET /quotations/services.
   2. These fields still have NO column on Quotation_Master_new, so they
      keep riding in the notes column as JSON (same pattern as before, the
      typed note text lives under "user_notes"): customer_name/address/
@@ -67,6 +70,7 @@ from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import text
 from .auth_helpers import token_required
 from .notification_routes import create_notification
+from .pipeline_routes import _cfg as _pipeline_cfg, T as _pipeline_table
 from ..db import SessionLocal
 
 quotation_bp = Blueprint('quotation', __name__)
@@ -90,8 +94,7 @@ T_LEGACY_MASTER = '"streemLyne_mt_dev2"."Quotation_Master"'
 T_STATUS = '"streemLyne_mt_dev2"."Status_Master"'
 T_TAX = '"streemLyne_mt_dev2"."Tax_Master"'
 T_CLIENT = '"streemLyne_mt_dev2"."Client_Master"'
-T_VARIANT = '"streemLyne_mt_dev2"."Product_Variant"'
-T_PRODUCT = '"streemLyne_mt_dev2"."Product_Master"'
+T_SERVICE = '"streemLyne_mt_dev2"."Services_Master"'
 T_UOM = '"streemLyne_mt_dev2"."UOM_Master"'
 
 # Header columns aliased to lowercase so row.<name> works everywhere.
@@ -376,6 +379,26 @@ def _generate_quotation_number(session, tenant_id, on_date: date) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 # Line items
 # ═════════════════════════════════════════════════════════════════════════════
+def _get_service(session, service_id):
+    """One Services_Master row (tenant-scoped) or None."""
+    try:
+        sid = int(service_id)
+    except (TypeError, ValueError):
+        return None
+    return session.execute(
+        text(f"""
+            SELECT "Services_Master_ID" AS service_id,
+                   "Service_Code"       AS service_code,
+                   "Service_Name"       AS service_name,
+                   "Service_Rate"       AS service_rate,
+                   "Services_UOM_ID"    AS uom_id
+            FROM {T_SERVICE}
+            WHERE "Services_Master_ID" = :sid AND "Tenant_ID" = :tid
+        """),
+        {"sid": sid, "tid": TENANT_ID}
+    ).fetchone()
+
+
 def _compute_lines(session, items: list, default_tax_id, global_discount_percent: float):
     """Validate + price every item. Returns (lines, sub_total, tax_amount).
     Nothing is written here so the header can be inserted with real totals."""
@@ -389,13 +412,20 @@ def _compute_lines(session, items: list, default_tax_id, global_discount_percent
         return tax_rates[tid]
 
     for idx, item in enumerate(items or [], start=1):
-        variant_id = item.get("variant_id") or item.get("product_variant_id")
-        if not variant_id:
-            raise QuotationValidationError(f"Item {idx}: variant_id (Product_Variant) is required")
+        service_id = item.get("service_id") or item.get("services_master_id")
+        if not service_id:
+            raise QuotationValidationError(f"Item {idx}: service_id (Services_Master) is required")
 
-        uom_id = item.get("uom_id")
+        svc = _get_service(session, service_id)
+        if not svc:
+            raise QuotationValidationError(f"Item {idx}: service {service_id} not found")
+
+        # Unit comes from the item if sent, otherwise from the service itself.
+        uom_id = item.get("uom_id") or svc.uom_id
         if not uom_id:
-            raise QuotationValidationError(f"Item {idx}: uom_id is required")
+            raise QuotationValidationError(
+                f"Item {idx}: uom_id is required (service {svc.service_code or service_id} has no unit set)"
+            )
 
         item_name = (item.get("service_title") or item.get("item_name")
                      or item.get("description") or "Item").strip() or "Item"
@@ -420,7 +450,7 @@ def _compute_lines(session, items: list, default_tax_id, global_discount_percent
         line_tax = line_total * (1 - gd / 100) * tax_rate / 100
 
         lines.append({
-            "variant_id":      variant_id,
+            "service_id":      service_id,
             "quantity":        quantity,
             "uom_id":          uom_id,
             "rate":            _r2(rate),
@@ -447,11 +477,11 @@ def _insert_lines(session, quotation_id, lines: list):
         session.execute(
             text(f"""
                 INSERT INTO {T_DETAILS} (
-                    "Quotation_ID", "Product_Variant_ID", "Quantity", "UOM_ID", "Rate",
+                    "Quotation_ID", "Services_ID", "Quantity", "UOM_ID", "Rate",
                     "Price_List_ID", "Discount_Amount", "Tax_ID", "Tax_Amount",
                     "Item_Name", "Description", "Total_Amount"
                 ) VALUES (
-                    :quotation_id, :variant_id, :quantity, :uom_id, :rate,
+                    :quotation_id, :service_id, :quantity, :uom_id, :rate,
                     :price_list_id, :discount_amount, :tax_id, :tax_amount,
                     :item_name, :description, :total_amount
                 )
@@ -464,7 +494,7 @@ def _get_quotation_items(session, quotation_id) -> list:
     rows = session.execute(
         text(f"""
             SELECT d."Quotation_Details_ID" AS item_id,
-                   d."Product_Variant_ID"   AS variant_id,
+                   d."Services_ID"          AS service_id,
                    d."Quantity"             AS quantity,
                    d."UOM_ID"               AS uom_id,
                    d."Rate"                 AS rate,
@@ -475,11 +505,10 @@ def _get_quotation_items(session, quotation_id) -> list:
                    d."Item_Name"            AS item_name,
                    d."Description"          AS description,
                    d."Total_Amount"         AS total_amount,
-                   pm.item_code             AS item_code,
+                   sm."Service_Code"        AS service_code,
                    u.uom_code               AS uom_code
             FROM {T_DETAILS} d
-            LEFT JOIN {T_VARIANT} pv ON pv.variant_id = d."Product_Variant_ID"
-            LEFT JOIN {T_PRODUCT} pm ON pm.product_id = pv.product_id
+            LEFT JOIN {T_SERVICE} sm ON sm."Services_Master_ID" = d."Services_ID"
             LEFT JOIN {T_UOM}     u  ON u.uom_id = d."UOM_ID"
             WHERE d."Quotation_ID" = :qid
             ORDER BY d."Quotation_Details_ID"
@@ -495,11 +524,11 @@ def _get_quotation_items(session, quotation_id) -> list:
         disc = float(r.discount_amount or 0)
         items.append({
             "item_id":         r.item_id,
-            "variant_id":      r.variant_id,
+            "service_id":      r.service_id,
             "quantity":        _clean_qty(qty),
             "uom_id":          r.uom_id,
             "uom_code":        r.uom_code,
-            "service_code":    r.item_code or "",
+            "service_code":    r.service_code or "",
             "unit_rate":       rate,
             "service_rate":    rate,
             "service_title":   r.item_name or r.description or "-",
@@ -625,6 +654,53 @@ def list_quotation_statuses():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# GET /quotations/services  — drives the item picker (from Services_Master)
+# ═════════════════════════════════════════════════════════════════════════════
+@quotation_bp.route('/quotations/services', methods=['GET', 'OPTIONS'])
+@token_required
+def list_quotation_services():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            text(f"""
+                SELECT s."Services_Master_ID" AS service_id,
+                       s."Service_Code"       AS service_code,
+                       s."Service_Name"       AS service_name,
+                       s."Service_Description" AS service_description,
+                       s."Service_Rate"       AS service_rate,
+                       s."Currency_ID"        AS currency_id,
+                       s."Services_UOM_ID"    AS uom_id,
+                       u.uom_code             AS uom_code
+                FROM {T_SERVICE} s
+                LEFT JOIN {T_UOM} u ON u.uom_id = s."Services_UOM_ID"
+                WHERE s."Tenant_ID" = :tid
+                ORDER BY s."Service_Code"
+            """),
+            {"tid": TENANT_ID}
+        ).fetchall()
+        return jsonify([
+            {
+                "service_id":          r.service_id,
+                "service_code":        r.service_code or "",
+                "service_name":        r.service_name or "",
+                "service_description": r.service_description or "",
+                "service_rate":        float(r.service_rate or 0),
+                "currency_id":         r.currency_id,
+                "uom_id":              r.uom_id,
+                "uom_code":            r.uom_code,
+            }
+            for r in rows
+        ]), 200
+    except Exception as e:
+        current_app.logger.error(f"Quotation services error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # GET /quotations
 # ═════════════════════════════════════════════════════════════════════════════
 @quotation_bp.route('/quotations', methods=['GET', 'OPTIONS'])
@@ -691,6 +767,71 @@ def get_quotation(quotation_id):
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Sales pipeline: creating a quotation moves the lead Opportunity -> Proposal
+# ═════════════════════════════════════════════════════════════════════════════
+def _move_leads_to_proposal(session, client_id, lead_id=None):
+    """Move Sales lead(s) from Opportunity to Proposal when a quotation is
+    CREATED (not when it is approved).
+
+    - If the quotation carries a lead_id, only that lead is considered;
+      otherwise every lead of the client currently at Opportunity.
+    - Only leads at Opportunity move, so a lead already at Proposal or later
+      is never pushed backwards, and a lead pending qualification approval
+      (qualification status 2) is skipped.
+    - Runs inside a savepoint: if it fails, the quotation is still saved.
+    Returns the list of lead ids that were moved.
+    """
+    try:
+        with session.begin_nested():
+            stage_type = _pipeline_cfg("STAGE_TYPE_SALES", int)
+
+            def stage_by_name(name):
+                return session.execute(
+                    text(f'''SELECT stage_id FROM {_pipeline_table("Pipeline_Stage_Master")}
+                             WHERE stage_type = :stage_type
+                               AND LOWER(TRIM(stage_name)) = LOWER(TRIM(:name))
+                             LIMIT 1'''),
+                    {"stage_type": stage_type, "name": name},
+                ).fetchone()
+
+            opportunity = stage_by_name("Opportunity")
+            proposal = stage_by_name("Proposal")
+            if not opportunity or not proposal:
+                current_app.logger.warning(
+                    "Sales stages 'Opportunity' and 'Proposal' must both be configured; lead not moved"
+                )
+                return []
+
+            params = {
+                "proposal_id": int(proposal.stage_id),
+                "opportunity_id": int(opportunity.stage_id),
+                "tid": TENANT_ID,
+                "client_id": client_id,
+            }
+            lead_filter = ""
+            if lead_id not in (None, ""):
+                lead_filter = 'AND lead_id = :lead_id'
+                params["lead_id"] = int(lead_id)
+
+            rows = session.execute(
+                text(f'''UPDATE {_pipeline_table("Lead_Master")}
+                         SET stage_id = :proposal_id,
+                             modified_date = CURRENT_DATE
+                         WHERE tenant_id = :tid
+                           AND "client_ID" = :client_id
+                           AND stage_id = :opportunity_id
+                           AND "qualification status" IS DISTINCT FROM 2
+                           {lead_filter}
+                         RETURNING lead_id'''),
+                params,
+            ).fetchall()
+            return [int(r.lead_id) for r in rows]
+    except Exception as e:
+        current_app.logger.warning(f"Could not move lead to Proposal after quotation create: {e}")
+        return []
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -766,11 +907,15 @@ def create_quotation():
         quotation_id = result.fetchone()[0]
         _insert_lines(session, quotation_id, lines)
 
+        # Creating the quotation is what moves the lead to Proposal.
+        moved_lead_ids = _move_leads_to_proposal(session, client_id, d.get("lead_id"))
+
         session.commit()
         return jsonify({
             "quotation_id":     quotation_id,
             "id":               quotation_id,
             "quotation_number": quotation_number,
+            "moved_lead_ids":   moved_lead_ids,
         }), 201
 
     except QuotationValidationError as e:

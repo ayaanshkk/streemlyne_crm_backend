@@ -45,7 +45,6 @@ from ..db import DevSessionLocal
 
 invoice_bp = Blueprint('invoice', __name__)
 
-TENANT_ID = 3
 SCHEMA = 'streemLyne_mt_dev2'
 
 # ── PLACEHOLDER - CONFIRM WITH SUPERVISOR ──────────────────────────────────
@@ -56,6 +55,24 @@ DEFAULT_IGST_TAX_ID = 1
 
 def T(table_name):
     return f'"{SCHEMA}"."{table_name}"'
+
+
+def _tenant_id():
+    """Tenant of the logged-in user (comes from the auth token, never hardcoded)."""
+    return getattr(request.current_user, "tenant_id", None)
+
+
+NO_TENANT_MSG = "User account is not associated with a tenant"
+
+
+def _client_in_tenant(session, client_id, tenant_id):
+    """True if client_id is a Client_Master row belonging to this tenant."""
+    if not client_id:
+        return False
+    return session.execute(
+        text(f'SELECT 1 FROM {T("Client_Master")} WHERE client_id = :cid AND tenant_id = :tid'),
+        {"cid": client_id, "tid": tenant_id}
+    ).fetchone() is not None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -100,11 +117,14 @@ def _serialize_invoice(row, client_name, items, taxes) -> dict:
 def _fetch_items(session, invoice_id):
     rows = session.execute(
         text(f"""
-            SELECT invoice_details_id, "Product_Variant_ID", quantity, uom_id,
-                   "Product_name", unit_price, description, amount, section, is_sub_item
-            FROM {T("Invoice_Details")}
-            WHERE invoice_id = :iid
-            ORDER BY invoice_details_id
+            SELECT idt.invoice_details_id, idt."Product_Variant_ID", idt.quantity, idt.uom_id,
+                   idt."Product_name", idt.unit_price, idt.description, idt.amount,
+                   idt.section, idt.is_sub_item, pm.item_code
+            FROM {T("Invoice_Details")} idt
+            LEFT JOIN {T("Product_Variant")} pv ON pv.variant_id = idt."Product_Variant_ID"
+            LEFT JOIN {T("Product_Master")} pm ON pm.product_id = pv.product_id
+            WHERE idt.invoice_id = :iid
+            ORDER BY idt.invoice_details_id
         """),
         {"iid": invoice_id}
     ).fetchall()
@@ -113,6 +133,7 @@ def _fetch_items(session, invoice_id):
             "invoice_details_id": r.invoice_details_id,
             "product_variant_id": r.Product_Variant_ID,
             "product_name":       r.Product_name or "",
+            "item_code":          r.item_code or "",
             "quantity":           float(r.quantity or 0),
             "uom_id":             r.uom_id,
             "unit_price":         float(r.unit_price or 0),
@@ -249,6 +270,9 @@ def list_invoices():
         return jsonify({}), 200
     session = DevSessionLocal()
     try:
+        tid = _tenant_id()
+        if not tid:
+            return jsonify({"error": NO_TENANT_MSG}), 400
         rows = session.execute(
             text(f"""
                 SELECT im.invoice_id, im.invoice_number, im.invoice_date, im.client_id,
@@ -259,7 +283,7 @@ def list_invoices():
                 WHERE im.tenant_id = :tid
                 ORDER BY im.created_at DESC
             """),
-            {"tid": TENANT_ID}
+            {"tid": tid}
         ).fetchall()
         return jsonify([
             {
@@ -284,6 +308,52 @@ def list_invoices():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# GET /invoices/product-variants
+# Active catalog variants for the logged-in user's tenant (invoice item picker).
+# ═════════════════════════════════════════════════════════════════════════════
+@invoice_bp.route('/invoices/product-variants', methods=['GET', 'OPTIONS'])
+@token_required
+def list_product_variants():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    session = DevSessionLocal()
+    try:
+        tid = _tenant_id()
+        if not tid:
+            return jsonify({"error": NO_TENANT_MSG}), 400
+        rows = session.execute(
+            text(f"""
+                SELECT pv.variant_id, pv.product_id, pv.variant_label,
+                       pm.item_code, pm.item_name, pm.description, pm.base_price, pm.unit
+                FROM {T("Product_Variant")} pv
+                JOIN {T("Product_Master")} pm ON pm.product_id = pv.product_id
+                WHERE pv.tenant_id = :tid AND pm.tenant_id = :tid
+                  AND COALESCE(pv.active, TRUE) AND COALESCE(pm.active, TRUE)
+                ORDER BY pm.item_code, pv.variant_label
+            """),
+            {"tid": tid}
+        ).fetchall()
+        return jsonify([
+            {
+                "variant_id":    r.variant_id,
+                "product_id":    r.product_id,
+                "variant_label": r.variant_label or "",
+                "item_code":     r.item_code or "",
+                "item_name":     r.item_name or "",
+                "description":   r.description or "",
+                "base_price":    float(r.base_price or 0),
+                "unit":          r.unit or "",
+            }
+            for r in rows
+        ]), 200
+    except Exception as e:
+        current_app.logger.error(f"Product variants error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # GET /invoices/<id>
 # ═════════════════════════════════════════════════════════════════════════════
 @invoice_bp.route('/invoices/<int:invoice_id>', methods=['GET', 'OPTIONS'])
@@ -293,9 +363,12 @@ def get_invoice(invoice_id):
         return jsonify({}), 200
     session = DevSessionLocal()
     try:
+        tid = _tenant_id()
+        if not tid:
+            return jsonify({"error": NO_TENANT_MSG}), 400
         row = session.execute(
-            text(f'SELECT * FROM {T("Invoice_Master")} WHERE invoice_id = :iid'),
-            {"iid": invoice_id}
+            text(f'SELECT * FROM {T("Invoice_Master")} WHERE invoice_id = :iid AND tenant_id = :tid'),
+            {"iid": invoice_id, "tid": tid}
         ).fetchone()
         if not row:
             return jsonify({"error": "Invoice not found"}), 404
@@ -323,6 +396,12 @@ def create_invoice():
     try:
         d = request.get_json() or {}
 
+        tid = _tenant_id()
+        if not tid:
+            return jsonify({"error": NO_TENANT_MSG}), 400
+        if not _client_in_tenant(session, d.get("client_id"), tid):
+            return jsonify({"error": "Selected company does not belong to your organisation"}), 400
+
         sub_total = float(d.get("sub_total", 0))
         discount_amt = float(d.get("discount_amount", 0))
         discount_pct = float(d.get("discount_percentage", 0))
@@ -348,7 +427,7 @@ def create_invoice():
                 RETURNING invoice_id
             """),
             {
-                "tenant_id":         TENANT_ID,
+                "tenant_id":         tid,
                 "client_id":         d.get("client_id"),
                 "project_id":        d.get("project_id"),
                 "quotation_id":      d.get("quotation_id"),
@@ -372,7 +451,7 @@ def create_invoice():
         invoice_id = result.fetchone()[0]
 
         _replace_items(session, invoice_id, items)
-        _replace_taxes(session, invoice_id, taxes, TENANT_ID)
+        _replace_taxes(session, invoice_id, taxes, tid)
 
         session.commit()
         return jsonify({"invoice_id": invoice_id, "id": invoice_id}), 201
@@ -402,17 +481,23 @@ def update_invoice(invoice_id):
     try:
         d = request.get_json() or {}
 
+        tid = _tenant_id()
+        if not tid:
+            return jsonify({"error": NO_TENANT_MSG}), 400
+
         # Status-only update (from list page dropdown)
         if list(d.keys()) == ['status']:
             old_row = session.execute(
-                text(f'SELECT status, client_id, invoice_number FROM {T("Invoice_Master")} WHERE invoice_id=:iid'),
-                {"iid": invoice_id}
+                text(f'SELECT status, client_id, invoice_number FROM {T("Invoice_Master")} WHERE invoice_id=:iid AND tenant_id=:tid'),
+                {"iid": invoice_id, "tid": tid}
             ).fetchone()
+            if not old_row:
+                return jsonify({"error": "Invoice not found"}), 404
             new_status = d["status"]
 
             session.execute(
-                text(f'UPDATE {T("Invoice_Master")} SET status=:s, updated_at=NOW() WHERE invoice_id=:iid'),
-                {"s": new_status, "iid": invoice_id}
+                text(f'UPDATE {T("Invoice_Master")} SET status=:s, updated_at=NOW() WHERE invoice_id=:iid AND tenant_id=:tid'),
+                {"s": new_status, "iid": invoice_id, "tid": tid}
             )
             session.commit()
 
@@ -443,6 +528,15 @@ def update_invoice(invoice_id):
 
             return jsonify({"invoice_id": invoice_id}), 200
 
+        owned = session.execute(
+            text(f'SELECT 1 FROM {T("Invoice_Master")} WHERE invoice_id=:iid AND tenant_id=:tid'),
+            {"iid": invoice_id, "tid": tid}
+        ).fetchone()
+        if not owned:
+            return jsonify({"error": "Invoice not found"}), 404
+        if not _client_in_tenant(session, d.get("client_id"), tid):
+            return jsonify({"error": "Selected company does not belong to your organisation"}), 400
+
         sub_total = float(d.get("sub_total", 0))
         discount_amt = float(d.get("discount_amount", 0))
         discount_pct = float(d.get("discount_percentage", 0))
@@ -460,10 +554,11 @@ def update_invoice(invoice_id):
                     invoice_date=:invoice_date, due_date=:due_date, status=:status,
                     "Delivery_address"=:delivery_address, "Delivery_phone"=:delivery_phone,
                     "Delivery_email"=:delivery_email, updated_at=NOW()
-                WHERE invoice_id=:invoice_id
+                WHERE invoice_id=:invoice_id AND tenant_id=:tid
             """),
             {
                 "invoice_id":       invoice_id,
+                "tid":              tid,
                 "client_id":        d.get("client_id"),
                 "project_id":       d.get("project_id"),
                 "quotation_id":     d.get("quotation_id"),
@@ -483,7 +578,7 @@ def update_invoice(invoice_id):
         )
 
         _replace_items(session, invoice_id, items)
-        _replace_taxes(session, invoice_id, taxes, TENANT_ID)
+        _replace_taxes(session, invoice_id, taxes, tid)
 
         session.commit()
         return jsonify({"invoice_id": invoice_id}), 200
@@ -509,6 +604,16 @@ def delete_invoice(invoice_id):
         return jsonify({}), 200
     session = DevSessionLocal()
     try:
+        tid = _tenant_id()
+        if not tid:
+            return jsonify({"error": NO_TENANT_MSG}), 400
+        owned = session.execute(
+            text(f'SELECT 1 FROM {T("Invoice_Master")} WHERE invoice_id=:iid AND tenant_id=:tid'),
+            {"iid": invoice_id, "tid": tid}
+        ).fetchone()
+        if not owned:
+            return jsonify({"error": "Invoice not found"}), 404
+
         # Children first - no ON DELETE CASCADE assumed
         session.execute(
             text(f'DELETE FROM {T("Invoice_Tax_Details")} WHERE invoice_id = :iid'),

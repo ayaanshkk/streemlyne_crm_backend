@@ -2592,6 +2592,90 @@ def import_sales_leads():
 
 
 
+def _as_int(value):
+    """int(value) or None. Lead_Master."qualification status" can come back as
+    an int, a numeric string or a Decimal depending on the column type, and the
+    stage rules below compare it with plain integers (0/1/2)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _role_name(role):
+    """A role may be a plain string or an object/dict with role_name/name/role
+    (the frontend already accepts both)."""
+    if isinstance(role, dict):
+        return role.get("role_name") or role.get("name") or role.get("role") or ""
+    for attr in ("role_name", "name", "role"):
+        value = getattr(role, attr, None)
+        if value:
+            return value
+    return role
+
+
+_QUOTATION_SOURCE = {}
+def _qident(name):
+    return '"' + str(name).replace('"', '""') + '"'
+def _quotation_source(session):
+    """Locate the quotation table and its client/tenant columns (cached).
+    Order: QUOTATION_TABLE setting, the foreign key on
+    Training_Master_New.Quotation_ID, then common table names."""
+    if _QUOTATION_SOURCE:
+        return _QUOTATION_SOURCE
+    schema = _schema()
+    table = current_app.config.get("QUOTATION_TABLE", os.environ.get("QUOTATION_TABLE"))
+    if not table:
+        row = session.execute(
+            text("""SELECT c.relname AS tbl
+                    FROM pg_constraint k
+                    JOIN pg_class c ON c.oid = k.confrelid
+                    JOIN pg_attribute s ON s.attrelid = k.conrelid AND s.attnum = k.conkey[1]
+                    WHERE k.contype = 'f'
+                      AND k.conrelid = CAST(:src AS regclass)
+                      AND LOWER(s.attname) = 'quotation_id'
+                    LIMIT 1"""),
+            {"src": f'"{schema}"."Training_Master_New"'},
+        ).fetchone()
+        table = row.tbl if row else None
+    if not table:
+        for guess in ("Quotation_Master", "Quotations", "Quotation"):
+            found = session.execute(
+                text("SELECT to_regclass(:name) AS oid"),
+                {"name": f'"{schema}"."{guess}"'},
+            ).fetchone()
+            if found and found.oid:
+                table = guess
+                break
+    if not table:
+        raise RuntimeError(
+            "Quotation table not found. Set QUOTATION_TABLE in app.config or the environment."
+        )
+    cols = [r.column_name for r in session.execute(
+        text("""SELECT column_name FROM information_schema.columns
+                WHERE table_schema = :schema AND table_name = :table"""),
+        {"schema": schema, "table": table},
+    ).fetchall()]
+    lowered = {col.lower(): col for col in cols}
+    client_col = next((lowered[n] for n in ("client_id", "company_id", "customer_id") if n in lowered), None)
+    if not client_col:
+        raise RuntimeError(f"Quotation table {table} has no client_id/company_id column")
+    _QUOTATION_SOURCE.update({
+        "table": table,
+        "client_col": client_col,
+        "tenant_col": lowered.get("tenant_id"),
+    })
+    return _QUOTATION_SOURCE
+def _client_has_quotation(session, tenant_id, client_id):
+    if client_id is None:
+        return False
+    src = _quotation_source(session)
+    sql = f'SELECT 1 FROM {T(src["table"])} WHERE {_qident(src["client_col"])} = :client_id'
+    params = {"client_id": client_id}
+    if src["tenant_col"]:
+        sql += f' AND {_qident(src["tenant_col"])} = :tenant_id'
+        params["tenant_id"] = tenant_id
+    return session.execute(text(sql + " LIMIT 1"), params).fetchone() is not None
 @pipeline_bp.route("/pipeline/sales/<int:lead_id>/stage", methods=["PATCH", "OPTIONS"])
 @token_required
 def update_sales_pipeline_stage(lead_id):
@@ -2637,13 +2721,40 @@ def update_sales_pipeline_stage(lead_id):
             "platform admin", "tenant super admin",
         }
         is_admin = any(bool(value) for value in admin_values) or any(
-            str(role).strip().lower() in admin_role_names
+            str(_role_name(role)).strip().lower() in admin_role_names
             for role in role_values if role is not None
         )
+        # The authenticated user often carries only role ids (Role_Master:
+        # 1 = Tenant Super Admin, 2 = Platform Admin), not role names.
+        if not is_admin:
+            def _role_ids(value):
+                found = []
+                if value is None:
+                    return found
+                items = value if isinstance(value, (list, tuple, set)) else str(value).split(",")
+                for item in items:
+                    if isinstance(item, dict):
+                        item = item.get("role_id", item.get("id"))
+                    else:
+                        item = getattr(item, "role_id", item)
+                    try:
+                        found.append(int(str(item).strip()))
+                    except (TypeError, ValueError):
+                        pass
+                return found
+            candidate_ids = []
+            for value in (user_value("role_id", "roleId"), user_value("role_ids", "roleIds"), roles, *role_values):
+                candidate_ids.extend(_role_ids(value))
+            is_admin = any(rid in {1, 2} for rid in candidate_ids)
+        if action in {"approve", "reject"} and not is_admin:
+            current_app.logger.warning(
+                "Qualification %s denied: no admin role detected. role_values=%r roles=%r role_id=%r role_ids=%r",
+                action, role_values, roles, user_value("role_id", "roleId"), user_value("role_ids", "roleIds"),
+            )
 
         # Resolve the lead within the authenticated tenant first.
         lead = session.execute(
-            text(f'''SELECT lead_id, stage_id, "qualification status" AS qualification_status
+            text(f'''SELECT lead_id, stage_id, "client_ID" AS client_id, "qualification status" AS qualification_status
                      FROM {T("Lead_Master")}
                      WHERE lead_id = :lead_id AND tenant_id = :tenant_id
                      LIMIT 1'''),
@@ -2669,10 +2780,25 @@ def update_sales_pipeline_stage(lead_id):
         if action in {"approve", "reject"}:
             if not is_admin:
                 return jsonify({"error": "Only an Admin can approve or reject qualification"}), 403
-            if lead.qualification_status != 2:
+            qual_row = find_stage_id("Qualification")
+            in_qualification = bool(qual_row) and int(lead.stage_id or 0) == int(qual_row.stage_id)
+            qs = _as_int(lead.qualification_status)
+            # Pending (2), or a legacy lead sitting in Qualification with no status yet.
+            if not (qs == 2 or (qs is None and in_qualification)):
                 return jsonify({"error": "This lead is not pending qualification approval"}), 409
             target_name = "Opportunity" if action == "approve" else "Lost"
             target_row = find_stage_id(target_name)
+            if not target_row:
+                # Tolerate small naming differences (e.g. "Opportunities", "Lost Deals").
+                target_row = session.execute(
+                    text(f'''SELECT stage_id, stage_name
+                             FROM {T("Pipeline_Stage_Master")}
+                             WHERE stage_type = :stage_type
+                               AND LOWER(stage_name) LIKE :pattern
+                             ORDER BY stage_id LIMIT 1'''),
+                    {"stage_type": stage_type,
+                     "pattern": "%opportunit%" if action == "approve" else "%lost%"},
+                ).fetchone()
             if not target_row:
                 return jsonify({"error": f"Sales stage '{target_name}' is not configured"}), 500
             stage_id = int(target_row.stage_id)
@@ -2713,7 +2839,7 @@ def update_sales_pipeline_stage(lead_id):
             stage_id = int(target_row.stage_id)
             stage_name = target_row.stage_name
             target_lower = str(stage_name).strip().lower()
-            current_status = lead.qualification_status
+            current_status = _as_int(lead.qualification_status)
 
             # A pending lead cannot be moved around the pipeline to bypass review.
             if current_status == 2:
@@ -2722,6 +2848,19 @@ def update_sales_pipeline_stage(lead_id):
                     "qualification_status": 2,
                 }), 409
 
+            # A quotation is compulsory before Proposal and every later stage
+            # (Lost stays reachable at any time).
+            if not questionnaire_completed:
+                proposal_row = find_stage_id("Proposal")
+                lost_gate_row = find_stage_id("Lost")
+                is_lost_target = bool(lost_gate_row) and stage_id == int(lost_gate_row.stage_id)
+                if proposal_row and stage_id >= int(proposal_row.stage_id) and not is_lost_target:
+                    if not _client_has_quotation(session, tenant_id, lead.client_id):
+                        return jsonify({
+                            "error": f"A quotation is required before moving this company to {stage_name}. "
+                                     "Create a quotation for the company first.",
+                            "code": "QUOTATION_REQUIRED",
+                        }), 409
             if questionnaire_completed:
                 # The client may request Qualification or Lost; the server derives
                 # the final stage and status from the submitted score.
@@ -2804,6 +2943,93 @@ def update_sales_pipeline_stage(lead_id):
         session.rollback()
         current_app.logger.exception(f"Error updating Sales stage in Lead_Master: {e}")
         return jsonify({"error": "Failed to update sales stage", "details": str(e)}), 500
+    finally:
+        session.close()
+
+
+@pipeline_bp.route(
+    "/pipeline/sales/company/<int:client_id>/move-to-proposal",
+    methods=["POST", "OPTIONS"],
+)
+@token_required
+def move_company_to_proposal(client_id):
+    """
+    Called when a quotation for this company is Approved.
+
+    Moves the company's Sales leads that are currently at the Opportunity
+    stage to the Proposal stage. Leads at any other stage are left alone, so
+    a lead that is already at Proposal or later is never moved backwards, and
+    a lead pending qualification approval (qualification status 2) is skipped.
+    Stage ids are looked up by name from Pipeline_Stage_Master (nothing hardcoded).
+    """
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    session = SessionLocal()
+    try:
+        tenant_id = request.current_user.tenant_id
+        stage_type = _cfg("STAGE_TYPE_SALES", int)
+
+        def stage_by_name(name):
+            return session.execute(
+                text(f'''SELECT stage_id, stage_name
+                         FROM {T("Pipeline_Stage_Master")}
+                         WHERE stage_type = :stage_type
+                           AND LOWER(TRIM(stage_name)) = LOWER(TRIM(:name))
+                         LIMIT 1'''),
+                {"stage_type": stage_type, "name": name},
+            ).fetchone()
+
+        opportunity = stage_by_name("Opportunity")
+        proposal = stage_by_name("Proposal")
+        if not opportunity or not proposal:
+            return jsonify({
+                "error": "Sales stages 'Opportunity' and 'Proposal' must both be configured"
+            }), 500
+
+        # Make sure the company belongs to this tenant.
+        client = session.execute(
+            text(f'''SELECT client_id FROM {T("Client_Master")}
+                     WHERE client_id = :client_id AND tenant_id = :tenant_id
+                     LIMIT 1'''),
+            {"client_id": client_id, "tenant_id": tenant_id},
+        ).fetchone()
+        if not client:
+            return jsonify({"error": "Company was not found for this tenant"}), 404
+
+        moved = session.execute(
+            text(f'''UPDATE {T("Lead_Master")}
+                     SET stage_id = :proposal_id,
+                         modified_date = CURRENT_DATE
+                     WHERE tenant_id = :tenant_id
+                       AND "client_ID" = :client_id
+                       AND stage_id = :opportunity_id
+                       AND "qualification status" IS DISTINCT FROM 2
+                     RETURNING lead_id'''),
+            {
+                "proposal_id": int(proposal.stage_id),
+                "tenant_id": tenant_id,
+                "client_id": client_id,
+                "opportunity_id": int(opportunity.stage_id),
+            },
+        ).fetchall()
+        session.commit()
+
+        lead_ids = [int(r.lead_id) for r in moved]
+        return jsonify({
+            "message": (
+                f"Moved {len(lead_ids)} lead(s) to {proposal.stage_name}"
+                if lead_ids else "No leads at the Opportunity stage to move"
+            ),
+            "client_id": client_id,
+            "moved_lead_ids": lead_ids,
+            "stage_id": int(proposal.stage_id),
+            "stage_name": proposal.stage_name,
+        }), 200
+    except Exception as e:
+        session.rollback()
+        current_app.logger.exception(f"Error moving company {client_id} to Proposal: {e}")
+        return jsonify({"error": "Failed to move company to Proposal", "details": str(e)}), 500
     finally:
         session.close()
 
@@ -2992,11 +3218,11 @@ def get_training_pipeline():
 
 
 
-    Return existing training pipeline records from Services_Master_archive.
+    Return training batches from Training_Details_New (under Training_Master_New).
 
 
 
-    Services_Master_archive is the source of truth for existing training batches.
+    Training_Details_New is the source of truth for training batches; the training form writes it.
 
 
 
@@ -3008,7 +3234,7 @@ def get_training_pipeline():
 
 
 
-    stage comes directly from Services_Master_archive.stage.
+    stage is resolved from Training_Details_New.Stage_ID (Pipeline_Stage_Master).
 
 
 
@@ -3057,431 +3283,144 @@ def get_training_pipeline():
 
         training_stages = load_training_stage_context(session, tenant_id)
 
-
-
         stage_awaiting = training_stages.awaiting
-
-
 
         stage_default = training_stages.default
 
-
-
-        query = text(
-
-
-
-            f"""
-
-
-
-            SELECT
-
-
-
-                sm.service_id,
-
-
-
-                sm.tenant_id,
-
-
-
-                sm.service_code,
-
-
-
-                sm.service_title,
-
-
-
-                sm.service_description,
-
-
-
-                sm.service_rate,
-
-
-
-                sm.currency_id,
-
-
-
-                sm.supplier_id,
-
-
-
-                sm.date_from,
-
-
-
-                sm.date_to,
-
-
-
-                sm.created_at,
-
-
-
-                sm.client_id,
-
-
-
-                cm.client_company_name,
-
-
-
-                sm.event_number,
-
-
-
-                sm.trainer_name,
-
-
-
-                sm.client_address,
-
-
-
-                sm.city,
-
-
-
-                sm.state,
-
-
-
-                sm.pin_code,
-
-
-
-                sm.remarks,
-
-
-
-                sm.participants,
-
-
-
-                sm.stage,
-
-
-
-                sm.updated_at,
-
-
-
-                sm.duration,
-
-
-
-                sm.po_file_url,
-
-
-
-                sm.po_file_name,
-
-
-
-                sm.po_received_at
-
-
-
-            FROM {T("Services_Master_archive")} sm
-
-
-
-            LEFT JOIN {T("Client_Master")} cm
-
-
-
-                ON cm.client_id = sm.client_id
-
-
-
-               AND cm.tenant_id = sm.tenant_id
-
-
-
-            WHERE sm.tenant_id = :tenant_id
-
-
-
-            AND COALESCE(sm.stage, '') <> :stage_awaiting
-
-
-
-            ORDER BY sm.service_id DESC
-
-
-
-            """
-
-
-
-        )
-
-
+        # Training batches live in Training_Details_New (one row per batch) under
+        # Training_Master_New (one row per program); participants are in
+        # Training_Participant_Data. This is exactly what the training form
+        # (company_training_routes.py) writes, so a saved batch appears here.
+        stage_name_by_id = {s["stage_id"]: s["stage_name"] for s in training_stages.ordered}
 
         results = session.execute(
-
-
-
-            query,
-
-
-
-            {
-
-
-
-                "tenant_id": tenant_id,
-
-
-
-                "stage_awaiting": stage_awaiting,
-
-
-
-            },
-
-
-
+            text(
+                f"""
+                SELECT
+                    d."Training_Details_ID"       AS training_id,
+                    d."Training_ID"               AS master_id,
+                    d."Event_Number"              AS event_number,
+                    d."Batch_Start_Date"          AS date_from,
+                    d."Batch_End_Date"            AS date_to,
+                    d."No_Of_Participants"        AS participant_count,
+                    d."Trainer_ID"                AS trainer_id,
+                    d."Stage_ID"                  AS stage_id,
+                    d."Remarks"                   AS remarks,
+                    d."Training_Fees"             AS training_fees,
+                    d."Client_Address"            AS client_address,
+                    d."State"                     AS state,
+                    d."Pin_Code"                  AS pin_code,
+                    d.created_at                  AS created_at,
+                    d.po_file_url,
+                    d.po_file_name,
+                    d.po_received_at,
+                    m."Client_ID"                 AS client_id,
+                    m."Service_ID"                AS product_id,
+                    m."Quotation_ID"              AS quotation_id,
+                    m."Training_Location_City_ID" AS city_id,
+                    cm.client_company_name,
+                    pm.sku                        AS service_code,
+                    pm.item_name                  AS service_title,
+                    cy.city_name,
+                    e.employee_name               AS trainer_name
+                FROM {T("Training_Details_New")} d
+                JOIN {T("Training_Master_New")} m
+                  ON m."Training_ID" = d."Training_ID"
+                LEFT JOIN {T("Client_Master")} cm
+                  ON cm.client_id = m."Client_ID"
+                 AND cm.tenant_id = m."Tenant_ID"
+                LEFT JOIN {T("Product_Master")} pm
+                  ON pm.product_id = m."Service_ID"
+                 AND pm.tenant_id = m."Tenant_ID"
+                LEFT JOIN {T("City_Master")} cy
+                  ON cy.city_id = m."Training_Location_City_ID"
+                LEFT JOIN {T("Employee_Master")} e
+                  ON e.employee_id = d."Trainer_ID"
+                WHERE m."Tenant_ID" = :tenant_id
+                ORDER BY d."Training_Details_ID" DESC
+                """
+            ),
+            {"tenant_id": tenant_id},
         ).fetchall()
 
-
+        participants_by_batch = {}
+        batch_ids = [r.training_id for r in results]
+        if batch_ids:
+            participant_rows = session.execute(
+                text(
+                    f"""
+                    SELECT "Training_Participant_Data_ID" AS id,
+                           "Training_Details_ID"          AS training_id,
+                           "Participant_Name"             AS name
+                    FROM {T("Training_Participant_Data")}
+                    WHERE "Training_Details_ID" = ANY(:ids)
+                    ORDER BY "Training_Participant_Data_ID"
+                    """
+                ),
+                {"ids": batch_ids},
+            ).fetchall()
+            for p in participant_rows:
+                participants_by_batch.setdefault(p.training_id, []).append(
+                    {"id": str(p.id), "name": p.name}
+                )
 
         pipeline_items = []
 
-
-
         for row in results:
 
+            stage = stage_name_by_id.get(row.stage_id) or stage_default
 
-
-            participants = row.participants
-
-
-
-            if participants is None:
-
-
-
-                participants = []
-
-
-
-            elif isinstance(participants, str):
-
-
-
-                try:
-
-
-
-                    participants = json.loads(participants)
-
-
-
-                except Exception:
-
-
-
-                    participants = []
-
-
-
-            stage = row.stage or stage_default
-
-
+            # Awaiting Scheduling cards are derived below, never real batches.
+            if stage == stage_awaiting:
+                continue
 
             pipeline_items.append(
-
-
-
                 {
-
-
-
-                    "id": f"training-{row.service_id}",
-
-
-
+                    "id": f"training-{row.training_id}",
                     "type": "training",
-
-
-
                     "training": {
-
-
-
-                        "training_id": row.service_id,
-
-
-
-                        "service_id": row.service_id,
-
-
-
+                        "training_id": row.training_id,
+                        "service_id": row.training_id,
+                        "master_id": row.master_id,
                         # Company/client relationship
-
-
-
                         "company_id": row.client_id,
-
-
-
                         "client_id": row.client_id,
-
-
-
                         "company_name": row.client_company_name,
-
-
-
-                        # Service/course information
-
-
-
+                        "quotation_id": row.quotation_id,
+                        # Course information (Product_Master)
+                        "product_id": row.product_id,
                         "service_code": row.service_code,
-
-
-
                         "training_name": row.service_title,
-
-
-
                         "service_title": row.service_title,
-
-
-
-                        "service_description": row.service_description,
-
-
-
-                        "training_fees": row.service_rate,
-
-
-
-                        "service_rate": row.service_rate,
-
-
-
-                        "currency_id": row.currency_id,
-
-
-
-                        "supplier_id": row.supplier_id,
-
-
-
-                        # Training information
-
-
-
+                        "training_fees": float(row.training_fees) if row.training_fees is not None else None,
+                        # Batch information
                         "training_from": _iso(row.date_from),
-
-
-
                         "training_to": _iso(row.date_to),
-
-
-
                         "event_number": row.event_number,
-
-
-
+                        "trainer_id": row.trainer_id,
                         "trainer_name": row.trainer_name,
-
-
-
-                        "duration": row.duration,
-
-
-
+                        "participant_count": row.participant_count,
                         # Location
-
-
-
                         "client_address": row.client_address,
-
-
-
-                        "city": row.city,
-
-
-
+                        "city_id": row.city_id,
+                        "city": row.city_name,
                         "state": row.state,
-
-
-
                         "pin_code": row.pin_code,
-
-
-
                         # Other training data
-
-
-
                         "remarks": row.remarks,
-
-
-
-                        "participants": participants,
-
-
-
+                        "participants": participants_by_batch.get(row.training_id, []),
                         # Current pipeline stage
-
-
-
                         "stage": stage,
-
-
-
                         # PO copy (required before PO Received and later stages)
-
-
-
                         "po_file_url": row.po_file_url,
-
-
-
                         "po_file_name": row.po_file_name,
-
-
-
                         "po_received_at": _iso(row.po_received_at),
-
-
-
                         "created_at": _iso(row.created_at),
-
-
-
-                        "updated_at": _iso(row.updated_at),
-
-
-
                     },
-
-
-
                     "stage": stage,
-
-
-
                     "pipeline_type": "training",
-
-
-
                 }
-
-
-
             )
-
-
 
         # ── Awaiting Scheduling (derived cards, no batch row) ────────────
         # Every client with a Won lead must appear in Awaiting Scheduling.
@@ -3606,7 +3545,7 @@ def get_training_pipeline():
 
 
 
-            f"Error fetching training pipeline from Services_Master_archive: {e}"
+            f"Error fetching training pipeline from Training_Details_New: {e}"
 
 
 

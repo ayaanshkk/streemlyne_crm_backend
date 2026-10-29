@@ -50,7 +50,7 @@ def lookup_pricelist_item():
         row = session.execute(
             text(f"""
                 SELECT
-                    p.item_code,
+                    p.sku AS item_code,
                     p.item_name,
                     p.description,
                     p.unit,
@@ -69,7 +69,7 @@ def lookup_pricelist_item():
                 JOIN "{SCHEMA}"."Product_Master" p
                     ON p.product_id = pl.product_id
                 {UOM_JOIN}
-                WHERE UPPER(p.item_code) = :code
+                WHERE UPPER(p.sku) = :code
                   AND pl.tenant_id = :tid
                   AND p.tenant_id = :tid
                   AND (p.active IS NULL OR p.active = TRUE)
@@ -122,6 +122,7 @@ def lookup_pricelist_item():
         session.close()
 
 
+
 @pricelist_bp.route('/pricelist', methods=['GET', 'OPTIONS'])
 @token_required
 def list_pricelist():
@@ -132,7 +133,6 @@ def list_pricelist():
     tenant_id = get_tenant_id()
     search = request.args.get('q', '').strip()
 
-    # Default stays 100 for existing callers; pickers that need the whole list pass ?limit=
     try:
         limit = max(1, min(int(request.args.get('limit', 100)), 1000))
     except (TypeError, ValueError):
@@ -147,7 +147,7 @@ def list_pricelist():
         if search:
             search_condition = """
                 AND (
-                    p.item_code ILIKE :search
+                    p.sku ILIKE :search
                     OR p.item_name ILIKE :search
                     OR p.description ILIKE :search
                 )
@@ -167,7 +167,7 @@ def list_pricelist():
                     pl.min_qty,
                     pl.effective_from,
                     pl.effective_to,
-                    p.item_code,
+                    p.sku AS item_code,
                     p.item_name,
                     p.description,
                     p.unit,
@@ -181,7 +181,7 @@ def list_pricelist():
                   AND p.tenant_id = :tid
                   AND (p.active IS NULL OR p.active = TRUE)
                   {search_condition}
-                ORDER BY p.item_code, pl.pricelist_id
+                ORDER BY p.sku, pl.pricelist_id
                 LIMIT :limit
             """),
             params
@@ -219,10 +219,11 @@ def list_pricelist():
             f"Pricelist list error: {e}",
             exc_info=True
         )
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
     finally:
         session.close()
+
 
 
 @pricelist_bp.route('/pricelist', methods=['POST', 'OPTIONS'])

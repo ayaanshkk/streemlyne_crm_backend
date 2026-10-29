@@ -283,6 +283,13 @@ def create_app(test_config=None):
     from routes.project_pipeline_routes import project_pipeline_bp
     from routes.usage_routes import usage_bp
     from routes.module_routes import module_bp
+    from routes.company_routes import company_bp
+    from routes.contact_routes import contact_bp
+    from routes.company_enquiry_routes import company_enquiry_bp
+    from routes.company_interactions_routes import company_interactions_bp
+    from routes.contact_interactions_routes import contact_interactions_bp
+    from routes.client_files_routes import client_files_bp
+    from routes.contact_files_routes import contact_files_bp
 
     blueprints = [
         auth_bp,
@@ -310,6 +317,13 @@ def create_app(test_config=None):
         project_pipeline_bp,
         usage_bp,
         module_bp,
+        company_bp,
+        contact_bp,
+        company_enquiry_bp,
+        company_interactions_bp,
+        contact_interactions_bp,
+        client_files_bp,
+        contact_files_bp,
     ]
 
     for bp in blueprints:

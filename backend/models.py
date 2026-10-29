@@ -1424,8 +1424,13 @@ class ProposalDetails(db.Model):
     service_name        = db.Column('Item_Name', db.String, nullable=False, default='Item')
     description         = db.Column('Description', db.String)
 
+    service_id = db.Column('Services_ID', db.BigInteger,
+    db.ForeignKey(f'{DB_SCHEMA}.Services_Master.Services_Master_ID'))
+
     # not stored in Quotation_Details_new
-    service_id = service = created_at = updated_at = None
+    created_at = updated_at = None
+
+    service = db.relationship('ServicesMaster', backref='quote_lines')
 
     proposal = db.relationship('ProposalMaster', back_populates='proposal_details')
     uom      = db.relationship('UOMMaster', backref='proposal_details')

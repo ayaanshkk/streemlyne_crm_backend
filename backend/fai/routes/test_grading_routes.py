@@ -468,17 +468,23 @@ Return ONLY valid JSON starting with { and ending with }:
 # GRADING ENGINE
 # ─────────────────────────────────────────────
 
+def normalize_mhe_type(value) -> str:
+    """Map any MHE name (MHE_Master: 'Towtruck', 'Reach Truck', 'VNA' ...) to an
+    ANSWER_KEYS key. Unknown or empty values fall back to BOPT."""
+    key = re.sub(r"[^A-Z]", "", str(value or "").upper())
+    if "REACH" in key:
+        return "REACH_TRUCK"
+    if "FORK" in key:
+        return "FORKLIFT"
+    if "STACKER" in key:
+        return "STACKER"
+    if "TOW" in key:
+        return "TOW TRUCK"
+    if "VNA" in key or "NARROW" in key:
+        return "VNA"
+    return "BOPT"
 def grade_test_internal(extracted_data: Dict) -> Dict:
-    mhe_type = extracted_data.get("mhe_type", "BOPT").upper().strip()
-
-    if "REACH" in mhe_type:
-        mhe_type = "REACH_TRUCK"
-    elif "FORKLIFT" in mhe_type or "FORK" in mhe_type:
-        mhe_type = "FORKLIFT"
-    elif "STACKER" in mhe_type:
-        mhe_type = "STACKER"
-    else:
-        mhe_type = "BOPT"
+    mhe_type = normalize_mhe_type(extracted_data.get("mhe_type", "BOPT"))
 
     if mhe_type not in ANSWER_KEYS:
         raise Exception(f"Unknown MHE type: {mhe_type}")
@@ -667,10 +673,10 @@ def grade_training_paper():
         # is authoritative — trust it over whatever Claude Vision guesses
         # from the scanned image, since a guess is only a fallback for
         # when no hint was supplied at all.
-        mhe_type_hint    = (request.form.get("mhe_type_hint") or "").strip().upper()
+        mhe_type_hint    = (request.form.get("mhe_type_hint") or "").strip()
         detected_mhe_type = extracted.get("mhe_type", "")
-
-        if mhe_type_hint and mhe_type_hint in ANSWER_KEYS:
+        if mhe_type_hint:
+            mhe_type_hint = normalize_mhe_type(mhe_type_hint)
             extracted["mhe_type"] = mhe_type_hint
 
         result = grade_test_internal(extracted)
@@ -710,9 +716,8 @@ def grade_training_paper():
 def regrade_training_paper():
     try:
         data      = request.get_json(silent=True) or {}
-        mhe_type  = (data.get("mhe_type") or "").strip().upper()
+        mhe_type  = normalize_mhe_type(data.get("mhe_type"))
         answers   = data.get("answers") or {}
-
         if mhe_type not in ANSWER_KEYS:
             return jsonify({"error": f"Invalid mhe_type. Must be one of {list(ANSWER_KEYS.keys())}"}), 400
 

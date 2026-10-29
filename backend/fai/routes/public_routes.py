@@ -61,124 +61,90 @@ def _record_passed(record, fallback):
 @public_bp.route("/participant/<string:token>", methods=["GET"])
 def get_public_participant(token):
     """
-    Looks up a participant by qr_token OR participant_unique_id (fallback for
-    manual entry if the QR doesn't scan). Returns ONLY what is safe to show on
-    an unauthenticated page: name and training history (company, dates, MHE
-    type, test scores). One entry per training record. No papers, certificates,
-    phone/email/internal ids or other participants are ever exposed.
+    Looks up a participant by QR_Token OR Participant_Unique_ID (fallback for
+    manual entry if the QR doesn't scan) in Training_Participant_Data, the
+    table the training form writes. Returns ONLY what is safe to show on an
+    unauthenticated page: name, unique id and the training (company, dates,
+    program, trainer, MHE type, test scores). Participants are no longer linked
+    to Contacts, so the history is this participant's own training record(s).
+    No papers, certificates, phone/email/internal ids or other participants
+    are exposed.
     """
     session = SessionLocal()
     try:
-        # 1. Find the batch + participant entry holding this token
-        row = None
-        for key in ("qr_token", "participant_unique_id"):
-            row = session.execute(
-                text(f"""
-                    SELECT service_id, client_id, participants
-                    FROM {T("Services_Master_archive")}
-                    WHERE participants @> CAST(:match AS jsonb)
-                    LIMIT 1
-                """),
-                {"match": json.dumps([{key: token}])},
-            ).fetchone()
-            if row is not None:
-                break
+        h = session.execute(
+            text(f"""
+                SELECT p."Participant_Name"        AS name,
+                       p."Participant_Unique_ID"   AS participant_unique_id,
+                       p."Is_Pass"                 AS is_pass,
+                       p."Pre_Test"                AS pre_test,
+                       p."Post_Test"               AS post_test,
+                       p."Training_Records"        AS records,
+                       mhe."MHE_Name"              AS mhe_name,
+                       d."Event_Number"            AS event_number,
+                       d."Batch_Start_Date"        AS date_from,
+                       d."Batch_End_Date"          AS date_to,
+                       pm.item_name                AS program,
+                       cm.client_company_name      AS company_name,
+                       e.employee_name             AS trainer_name
+                FROM {T("Training_Participant_Data")} p
+                JOIN {T("Training_Details_New")} d
+                  ON d."Training_Details_ID" = p."Training_Details_ID"
+                JOIN {T("Training_Master_New")} m
+                  ON m."Training_ID" = d."Training_ID"
+                LEFT JOIN {T("Client_Master")} cm
+                  ON cm.client_id = m."Client_ID" AND cm.tenant_id = m."Tenant_ID"
+                LEFT JOIN {T("Product_Master")} pm
+                  ON pm.product_id = m."Service_ID" AND pm.tenant_id = m."Tenant_ID"
+                LEFT JOIN {T("Employee_Master")} e
+                  ON e.employee_id = d."Trainer_ID"
+                LEFT JOIN {T("MHE_Master")} mhe
+                  ON mhe."MHE_ID" = p."MHE_ID"
+                WHERE CAST(p."QR_Token" AS text) = :token
+                   OR p."Participant_Unique_ID" = :token
+                LIMIT 1
+            """),
+            {"token": token},
+        ).fetchone()
 
-        if row is None:
+        if h is None:
             return jsonify({"error": "Not found"}), 404
 
-        matched = next(
-            (
-                p for p in _as_list(row.participants)
-                if p.get("qr_token") == token or p.get("participant_unique_id") == token
-            ),
-            None,
-        )
-        if matched is None:
-            return jsonify({"error": "Not found"}), 404
+        base = {
+            "event_number": h.event_number,
+            "company_name": h.company_name,
+            "program": h.program,
+            "training_from": h.date_from.isoformat() if h.date_from else None,
+            "training_to": h.date_to.isoformat() if h.date_to else None,
+            "trainer_name": h.trainer_name,
+        }
 
-        # Participants picked from Contacts carry a contact_id; ones added by
-        # name only don't. Both must verify.
-        contact_id = matched.get("contact_id")
-        participant_name = matched.get("name") or "Unknown"
-
-        # 2. Display name (from Contacts when linked)
-        if contact_id is not None:
-            contact_row = session.execute(
-                text(f"SELECT full_name FROM {T('Contacts')} WHERE contact_id = :cid"),
-                {"cid": contact_id},
-            ).fetchone()
-            if contact_row and contact_row.full_name:
-                participant_name = contact_row.full_name
-
-        # 3. Training history: every batch containing this contact, or just
-        #    this batch when the participant has no contact link.
-        history_sql = f"""
-            SELECT sm.service_id, sm.event_number, sm.service_title,
-                   sm.date_from, sm.date_to, sm.trainer_name, sm.participants,
-                   cm.client_company_name AS company_name
-            FROM {T("Services_Master_archive")} sm
-            LEFT JOIN {T("Client_Master")} cm ON cm.client_id = sm.client_id
-        """
-        if contact_id is not None:
-            history_rows = session.execute(
-                text(history_sql + """
-                    WHERE sm.participants @> CAST(:match AS jsonb)
-                    ORDER BY sm.date_from DESC NULLS LAST
-                """),
-                {"match": json.dumps([{"contact_id": contact_id}])},
-            ).fetchall()
-        else:
-            history_rows = session.execute(
-                text(history_sql + " WHERE sm.service_id = :sid"),
-                {"sid": row.service_id},
-            ).fetchall()
-
-        def same_person(p):
-            if contact_id is not None:
-                return p.get("contact_id") == contact_id
-            return p.get("id") == matched.get("id")
-
-        # 4. One training per training record (a participant can have several
-        #    records, e.g. two Forklift trainings, inside the same batch).
         trainings = []
-        for h in history_rows:
-            entry = next((p for p in _as_list(h.participants) if same_person(p)), None)
-            if not entry:
-                continue
-
-            base = {
-                "event_number": h.event_number,
-                "company_name": h.company_name,
-                "program": h.service_title,
-                "training_from": h.date_from.isoformat() if h.date_from else None,
-                "training_to": h.date_to.isoformat() if h.date_to else None,
-                "trainer_name": h.trainer_name,
-            }
-
-            records = entry.get("trainingRecords") or []
-            if not records:
-                trainings.append({
-                    **base,
-                    "mhe_type": None,
-                    "pretest_score": None,
-                    "posttest_score": None,
-                    "pass": bool(entry.get("pass")),
-                })
-                continue
-
+        records = _as_list(h.records)
+        if records:
+            # A participant can have several records (e.g. two Forklift trainings).
             for r in records:
                 trainings.append({
                     **base,
-                    "mhe_type": r.get("mheType") or None,
+                    "mhe_type": r.get("mheType") or h.mhe_name or None,
                     "pretest_score": _score(r, "pre"),
                     "posttest_score": _score(r, "post"),
-                    "pass": _record_passed(r, entry.get("pass")),
+                    "pass": _record_passed(r, h.is_pass),
                 })
+        else:
+            # No graded paper yet: show the marks saved on the participant row.
+            total = 20 if "bopt" in str(h.mhe_name or "").lower() else 24
+            trainings.append({
+                **base,
+                "mhe_type": h.mhe_name or None,
+                "pretest_score": f"{h.pre_test}/{total}" if h.pre_test else None,
+                "posttest_score": f"{h.post_test}/{total}" if h.post_test else None,
+                "pass": bool(h.is_pass),
+            })
 
         return jsonify({
-            "participant_name": participant_name,
-            "participant_unique_id": matched.get("participant_unique_id"),
+            "participant_name": h.name or "Unknown",
+            "participant_unique_id": h.participant_unique_id,
             "trainings": trainings,
         })
 
