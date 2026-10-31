@@ -106,6 +106,33 @@ def derive_sales_stage(opportunity):
     return sales_stage
 
 
+def resolve_pipeline_stage_map(session, tenant_id, company_ids):
+    """{company_id: stage name} taken from the company's newest lead on the Sales
+    pipeline board (Lead_Master), so the Companies list shows the same stage as the
+    Kanban board (Lead, Qualification, Opportunity, Proposal, ..., Won, Lost).
+    Returns {} when the pipeline module is unavailable, and callers then fall back
+    to the legacy Opportunity_Details stage."""
+    if not company_ids:
+        return {}
+    try:
+        from routes.pipeline_routes import get_sales_stages
+        stage_names = {s["id"]: s["stage_name"] for s in get_sales_stages(tenant_id)}
+        rows = session.execute(
+            text(f"""
+                SELECT DISTINCT ON (lm."client_ID") lm."client_ID" AS client_id, lm.stage_id
+                FROM {T("Lead_Master")} lm
+                WHERE lm.tenant_id = :tid AND lm."client_ID" = ANY(:ids)
+                ORDER BY lm."client_ID", lm.created_date DESC NULLS LAST, lm.lead_id DESC
+            """),
+            {"tid": tenant_id, "ids": list(company_ids)},
+        ).fetchall()
+        return {r.client_id: stage_names[r.stage_id] for r in rows if r.stage_id in stage_names}
+    except Exception:
+        session.rollback()
+        current_app.logger.exception("Could not resolve pipeline stages for companies")
+        return {}
+
+
 def resolve_company_contacts_map(session, tenant_id, company_ids):
     """Batch-resolves {company_id: [{contact_id, full_name, email, phone,
     roles: [...]}, ...]} for a set of companies in a single query, using
@@ -384,11 +411,12 @@ def unlink_company_contact(company_id, contact_id):
         session.close()
 
 
-def serialize_company(row, contacts_map=None, last_activity_map=None, opportunity=None):
+def serialize_company(row, contacts_map=None, last_activity_map=None, opportunity=None, pipeline_stage=None):
     contacts_map = contacts_map or {}
     metadata = row.metadata or {}   # jsonb column — SQLAlchemy auto-deserializes to dict
 
-    sales_stage = derive_sales_stage(opportunity)
+    # The pipeline board (Lead_Master) is the source of truth; Opportunity_Details is the fallback.
+    sales_stage = pipeline_stage or derive_sales_stage(opportunity)
 
     return {
         "id":                        row.client_id,
@@ -460,6 +488,7 @@ def list_companies():
         company_ids = [row.client_id for row in rows]
         contacts_map = resolve_company_contacts_map(session, tenant_id, company_ids)
         last_activity_map = resolve_last_activity_map(session, company_ids)
+        stage_map = resolve_pipeline_stage_map(session, tenant_id, company_ids)
 
         companies = []
         for row in rows:
@@ -468,6 +497,7 @@ def list_companies():
                 contacts_map,
                 last_activity_map,
                 get_latest_sales_opportunity(session, row.client_id),
+                stage_map.get(row.client_id),
             )
             companies.append(company)
 
@@ -494,8 +524,13 @@ def get_company(company_id):
 
         contacts_map = resolve_company_contacts_map(session, tenant_id, [company_id])
         last_activity_map = resolve_last_activity_map(session, [company_id])
+        stage_map = resolve_pipeline_stage_map(session, tenant_id, [company_id])
 
-        return jsonify(serialize_company(row, contacts_map, last_activity_map, get_latest_sales_opportunity(session, company_id))), 200
+        return jsonify(serialize_company(
+            row, contacts_map, last_activity_map,
+            get_latest_sales_opportunity(session, company_id),
+            stage_map.get(company_id),
+        )), 200
 
     except Exception as e:
         current_app.logger.exception(f"Error in GET /companies/{company_id}: {e}")
@@ -1083,16 +1118,13 @@ COMPANY_EXPORT_FIELDS = [
 @company_bp.route('/companies/export', methods=['GET'])
 @token_required
 def export_companies():
-    """Exports every active company of the tenant. Optional ?stage=Enquiry|Proposal|
-    Converted|Lost narrows it to one sales stage. ?format=csv|xlsx (default csv)."""
+    """Exports every active company of the tenant. Optional ?stage=<stage name, e.g. Won>
+    narrows it to one sales stage. ?format=csv|xlsx (default csv)."""
     session = SessionLocal()
     try:
         tenant_id = request.current_user.tenant_id
         fmt = request.args.get('format', 'csv').lower()
         stage_filter = (request.args.get('stage') or '').strip()
-        if stage_filter and stage_filter not in SALES_STAGES:
-            return jsonify({'error': f'stage must be one of {sorted(SALES_STAGES)}'}), 400
-
         rows = session.execute(
             text(f"""
                 SELECT cm.client_id,
@@ -1110,9 +1142,12 @@ def export_companies():
             {"tenant_id": tenant_id, "cat_id": COMMERCIAL_CATEGORY_ID, "active_id": ACTIVE_STATUS_ID}
         ).fetchall()
 
+        stage_map = resolve_pipeline_stage_map(session, tenant_id, [r.client_id for r in rows])
+
         dict_rows = []
         for row in rows:
-            if stage_filter and derive_sales_stage(get_latest_sales_opportunity(session, row.client_id)) != stage_filter:
+            row_stage = stage_map.get(row.client_id) or derive_sales_stage(get_latest_sales_opportunity(session, row.client_id))
+            if stage_filter and row_stage.casefold() != stage_filter.casefold():
                 continue
             d = dict(row._mapping)
             meta = d.pop("metadata", None) or {}

@@ -1,5 +1,5 @@
 #C:\streemlyne_crm_backend\backend\routes\proposal_routes.py
-from flask import Blueprint, request, jsonify, g, abort, send_file
+from flask import Blueprint, request, jsonify, g, abort, send_file, current_app
 from sqlalchemy.exc import IntegrityError
 from database import db
 from models import (ProposalMaster, ProposalDetails, ClientMaster,
@@ -192,6 +192,16 @@ def create_proposal():
 
         for item in data.get('details', []):
             db.session.add(_new_line(proposal.proposal_id, item))
+
+        # A new quotation moves the company's Opportunity leads to Proposal. This runs in
+        # a savepoint so a pipeline problem can never stop the quotation from saving.
+        if proposal.client_id:
+            try:
+                from routes.pipeline_routes import move_client_leads_to_proposal
+                with db.session.begin_nested():
+                    move_client_leads_to_proposal(g.tenant_id, proposal.client_id)
+            except Exception:
+                current_app.logger.exception('Could not move leads to Proposal after quotation create')
 
         db.session.commit()
 
